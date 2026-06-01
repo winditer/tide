@@ -1,3 +1,4 @@
+import atexit
 import hashlib
 import json
 import logging
@@ -77,6 +78,9 @@ DAILY_REPORT_TIME = os.getenv("DAILY_REPORT_TIME", "19:00")
 STATE_FILE = Path(os.getenv("LARK_CODEX_STATE_FILE", ".lark_codex_state.json"))
 SYNC_DESKTOP_SESSIONS = os.getenv("SYNC_DESKTOP_SESSIONS", "1") == "1"
 SESSION_WATCH_INTERVAL_SECONDS = int(os.getenv("SESSION_WATCH_INTERVAL_SECONDS", "3"))
+KEEP_AWAKE_ON_AC_POWER = os.getenv("KEEP_AWAKE_ON_AC_POWER", "1") == "1"
+KEEP_AWAKE_CHECK_INTERVAL_SECONDS = int(os.getenv("KEEP_AWAKE_CHECK_INTERVAL_SECONDS", "60"))
+KEEP_AWAKE_DISABLE_SLEEP = os.getenv("KEEP_AWAKE_DISABLE_SLEEP", "0") == "1"
 # =================================================
 
 logging.basicConfig(
@@ -154,6 +158,9 @@ STOP_SCHEDULER = threading.Event()
 EVENT_QUEUE: queue.Queue[tuple[str, tuple[Any, ...]]] = queue.Queue()
 SESSION_WATCH_OFFSETS: dict[tuple[str, str], int] = {}
 SESSION_SYNC_SEEN: set[str] = set()
+KEEP_AWAKE_PROCESS: Optional[subprocess.Popen] = None
+KEEP_AWAKE_LOCK = threading.RLock()
+DISABLE_SLEEP_APPLIED = False
 
 
 def get_client():
@@ -275,6 +282,122 @@ def get_event_handler():
             .build()
         )
     return EVENT_HANDLER
+
+
+def is_macos() -> bool:
+    return os.uname().sysname == "Darwin"
+
+
+def is_ac_power_connected() -> bool:
+    if not is_macos():
+        return False
+    try:
+        result = subprocess.run(
+            ["pmset", "-g", "batt"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except Exception:
+        logger.exception("failed to inspect macOS power source")
+        return False
+    output = f"{result.stdout}\n{result.stderr}".lower()
+    return "ac power" in output
+
+
+def start_caffeinate():
+    global KEEP_AWAKE_PROCESS
+    if not is_macos():
+        return
+    with KEEP_AWAKE_LOCK:
+        if KEEP_AWAKE_PROCESS and KEEP_AWAKE_PROCESS.poll() is None:
+            return
+        try:
+            KEEP_AWAKE_PROCESS = subprocess.Popen(
+                ["caffeinate", "-dimsu", "-w", str(os.getpid())],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            logger.info("caffeinate started: pid=%s", KEEP_AWAKE_PROCESS.pid)
+        except FileNotFoundError:
+            logger.warning("caffeinate not found; keep-awake is disabled")
+        except Exception:
+            logger.exception("failed to start caffeinate")
+
+
+def stop_caffeinate():
+    global KEEP_AWAKE_PROCESS
+    with KEEP_AWAKE_LOCK:
+        proc = KEEP_AWAKE_PROCESS
+        KEEP_AWAKE_PROCESS = None
+    if not proc or proc.poll() is not None:
+        return
+    try:
+        proc.terminate()
+        proc.wait(timeout=5)
+        logger.info("caffeinate stopped")
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=5)
+        logger.info("caffeinate killed")
+    except Exception:
+        logger.exception("failed to stop caffeinate")
+
+
+def set_disable_sleep(enabled: bool):
+    global DISABLE_SLEEP_APPLIED
+    if not is_macos() or not KEEP_AWAKE_DISABLE_SLEEP:
+        return
+    if enabled == DISABLE_SLEEP_APPLIED:
+        return
+    try:
+        result = subprocess.run(
+            ["pmset", "-a", "disablesleep", "1" if enabled else "0"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except Exception:
+        logger.exception("failed to set macOS disablesleep=%s", enabled)
+        return
+    if result.returncode == 0:
+        DISABLE_SLEEP_APPLIED = enabled
+        logger.info("macOS disablesleep set to %s", int(enabled))
+    else:
+        logger.warning(
+            "pmset disablesleep %s failed: %s",
+            int(enabled),
+            short_text((result.stderr or result.stdout).strip(), 300),
+        )
+
+
+def stop_power_management():
+    set_disable_sleep(False)
+    stop_caffeinate()
+
+
+def keep_awake_loop():
+    if not KEEP_AWAKE_ON_AC_POWER:
+        logger.info("keep-awake disabled by KEEP_AWAKE_ON_AC_POWER=0")
+        return
+    if not is_macos():
+        logger.info("keep-awake is only supported on macOS")
+        return
+
+    while not STOP_SCHEDULER.is_set():
+        ac_power = is_ac_power_connected()
+        if ac_power:
+            start_caffeinate()
+            set_disable_sleep(True)
+        else:
+            set_disable_sleep(False)
+            stop_caffeinate()
+        STOP_SCHEDULER.wait(max(5, KEEP_AWAKE_CHECK_INTERVAL_SECONDS))
+
+    stop_power_management()
 
 
 def extract_text_from_lark_payload(value: Any) -> str:
@@ -1131,7 +1254,11 @@ def build_task_card(chat_id: str, status: str = "", output: str = "", detail: st
                         compact_button("拒绝", "reject", {"chat_id": chat_id, "approval_id": approval.approval_id}, "danger"),
                     ]
                 ),
-                note(f"按钮不可用时，发送 /approve {approval.approval_id} 或 /reject {approval.approval_id}。"),
+                note(
+                    f"批准后会用 `{APPROVED_CODEX_SANDBOX_MODE}` / `{APPROVED_CODEX_APPROVAL_POLICY}` 单次重试；"
+                    f"{format_duration(PENDING_APPROVAL_WAIT_SECONDS)} 内未处理会按 Codex 默认配置继续。"
+                    f"按钮不可用时，发送 /approve {approval.approval_id} 或 /reject {approval.approval_id}。"
+                ),
             ]
         )
     if shown_output:
@@ -1636,51 +1763,8 @@ def create_pending_approval(chat_id: str, runtime: ChatRuntime, text: str) -> Pe
         force=True,
     )
     if not updated:
-        logger.warning("task card approval update failed; sending standalone approval card: chat_id=%s", chat_id)
-    send_approval_card(chat_id, approval)
+        logger.warning("task card approval update failed: chat_id=%s", chat_id)
     return approval
-
-
-def send_approval_card(chat_id: str, approval: PendingApproval):
-    card = base_card(
-        "Codex 待审批",
-        [
-            md(
-                f"**审批 ID**：`{approval.approval_id}`\n"
-                f"**状态**：{approval.status}\n"
-                f"**目录**：`{approval.cwd}`\n"
-                f"**原因**：{approval.reason}"
-            ),
-            md(f"**待审批内容**\n{short_text(approval.command, 1200)}"),
-            note(
-                f"批准后会用 `{APPROVED_CODEX_SANDBOX_MODE}` / `{APPROVED_CODEX_APPROVAL_POLICY}` 单次重试；"
-                f"{format_duration(PENDING_APPROVAL_WAIT_SECONDS)} 内未处理会按 Codex 默认配置继续。"
-            ),
-            action_row(
-                [
-                    button("批准", "approve", {"chat_id": chat_id, "approval_id": approval.approval_id}, "primary"),
-                    button("拒绝", "reject", {"chat_id": chat_id, "approval_id": approval.approval_id}, "danger"),
-                ]
-            ),
-        ],
-        "orange",
-    )
-    message_id = send_card(chat_id, card)
-    if message_id:
-        logger.info(
-            "approval card sent: chat_id=%s approval_id=%s message_id=%s",
-            chat_id,
-            approval.approval_id,
-            message_id,
-        )
-    else:
-        logger.error("approval card send failed: chat_id=%s approval_id=%s", chat_id, approval.approval_id)
-    send_msg(
-        chat_id,
-        f"有 Codex 待审批：{approval.approval_id}\n"
-        f"批准：/approve {approval.approval_id}\n"
-        f"拒绝：/reject {approval.approval_id}",
-    )
 
 
 def send_stream_update(chat_id: str, buffer: list[str], force: bool = False):
@@ -1908,7 +1992,31 @@ def approve_pending(chat_id: str, approval_id: str, approved: bool, notify: bool
 
     approval.status = "approved" if approved else "rejected"
     status_text = f"审批 {approval_id} 已{'批准' if approved else '拒绝'}。"
-    if not update_task_card(chat_id, status="已批准" if approved else "已拒绝", detail=status_text, force=True) and notify:
+    result_text = "\n".join(
+        [
+            f"**审批结果**：{'已批准' if approved else '已拒绝'}",
+            f"**审批 ID**：`{approval_id}`",
+            f"**目录**：`{approval.cwd}`",
+            f"**处理时间**：{format_time(time.time())}",
+            "",
+            short_text(approval.command, 1200),
+        ]
+    )
+    if approved:
+        result_text += (
+            "\n\n"
+            f"将使用 `{APPROVED_CODEX_SANDBOX_MODE}` / `{APPROVED_CODEX_APPROVAL_POLICY}` 单次重试原始任务。"
+        )
+    else:
+        result_text += "\n\n用户已拒绝，本次任务不会继续执行待审批操作。"
+
+    if not update_task_card(
+        chat_id,
+        status="已批准" if approved else "已拒绝",
+        output=result_text,
+        detail=status_text,
+        force=True,
+    ) and notify:
         send_msg(chat_id, status_text)
 
     if not approved:
@@ -1927,7 +2035,7 @@ def approve_pending(chat_id: str, approval_id: str, approved: bool, notify: bool
     runtime.task_status = "已批准，继续执行"
     runtime.next_approval_policy = APPROVED_CODEX_APPROVAL_POLICY
     runtime.next_sandbox_mode = APPROVED_CODEX_SANDBOX_MODE
-    update_task_card(chat_id, status="已批准，继续执行", force=True)
+    update_task_card(chat_id, status="已批准，继续执行", output=result_text, force=True)
     threading.Thread(target=run_codex, args=(chat_id, prompt), daemon=True).start()
 
 
@@ -2501,6 +2609,8 @@ def validate_config():
 def main():
     validate_config()
     load_known_chats()
+    atexit.register(stop_power_management)
+    threading.Thread(target=keep_awake_loop, name="keep-awake", daemon=True).start()
     threading.Thread(target=event_worker_loop, name="event-worker", daemon=True).start()
     threading.Thread(target=session_watcher_loop, name="session-watcher", daemon=True).start()
     threading.Thread(target=scheduler_loop, name="scheduler", daemon=True).start()
