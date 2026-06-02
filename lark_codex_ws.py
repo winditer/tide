@@ -1129,6 +1129,25 @@ def conversation_source_label(conv: ConversationInfo) -> str:
     return str(originator_raw or source_raw or "未知来源")
 
 
+def is_desktop_conversation(conv: Optional[ConversationInfo]) -> bool:
+    if not conv or is_resumable_conversation(conv):
+        return False
+    originator = str(conv.originator or "").lower()
+    source = str(conv.source or "").lower()
+    return "desktop" in originator or source in ("vscode", "desktop")
+
+
+def latest_desktop_conversation_for_cwd(cwd: Path) -> Optional[ConversationInfo]:
+    _, conversations = build_index()
+    candidates = [
+        conv for conv in conversations.values()
+        if is_desktop_conversation(conv) and same_path(conv.cwd, cwd)
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda conv: conv.updated_at)
+
+
 def project_for_runtime(chat_id: str) -> ProjectInfo:
     runtime = get_runtime(chat_id)
     projects, _ = build_index()
@@ -3879,43 +3898,56 @@ def session_watcher_loop():
                     for chat_id, runtime in RUNTIMES.items()
                 ]
             for chat_id, session_id, runtime_cwd in items:
-                if not is_valid_chat_id(chat_id) or not session_id:
+                if not is_valid_chat_id(chat_id):
                     continue
-                conv = get_active_conversation(session_id)
-                if not conv or is_resumable_conversation(conv):
-                    continue
-                key = (chat_id, session_id)
-                try:
-                    size = conv.file.stat().st_size
-                except OSError:
-                    continue
-                if key not in SESSION_WATCH_OFFSETS:
-                    SESSION_WATCH_OFFSETS[key] = size
-                    continue
-                offset = SESSION_WATCH_OFFSETS[key]
-                if size <= offset:
-                    continue
-                with conv.file.open("r", encoding="utf-8", errors="ignore") as f:
-                    f.seek(offset)
-                    lines = f.readlines()
-                    SESSION_WATCH_OFFSETS[key] = f.tell()
-                for line in lines:
-                    kind, text = parse_session_sync_event(line)
-                    text = short_text(text, 1200)
-                    if not text or kind == "skip":
+                watch_convs: dict[str, ConversationInfo] = {}
+                active_conv = get_active_conversation(session_id) if session_id else None
+                if is_desktop_conversation(active_conv):
+                    watch_convs[active_conv.session_id] = active_conv
+                latest_desktop = latest_desktop_conversation_for_cwd(runtime_cwd)
+                if latest_desktop:
+                    watch_convs[latest_desktop.session_id] = latest_desktop
+
+                for conv in watch_convs.values():
+                    key = (chat_id, conv.session_id)
+                    try:
+                        size = conv.file.stat().st_size
+                    except OSError:
                         continue
-                    fingerprint = hashlib.sha1(f"{chat_id}:{session_id}:{kind}:{text}".encode("utf-8")).hexdigest()
-                    if fingerprint in SESSION_SYNC_SEEN:
+                    if key not in SESSION_WATCH_OFFSETS:
+                        SESSION_WATCH_OFFSETS[key] = size
+                        logger.info(
+                            "watch desktop session: chat_id=%s session_id=%s cwd=%s file=%s",
+                            chat_id,
+                            conv.session_id,
+                            conv.cwd or runtime_cwd,
+                            conv.file,
+                        )
                         continue
-                    SESSION_SYNC_SEEN.add(fingerprint)
-                    if len(SESSION_SYNC_SEEN) > 2000:
-                        SESSION_SYNC_SEEN.clear()
-                    if kind == "user":
-                        send_msg(chat_id, f"Codex 新消息：\n{text}")
-                    elif kind == "agent":
-                        send_msg(chat_id, f"Codex 进展：\n{text}")
-                    elif kind == "complete":
-                        send_msg(chat_id, synced_task_complete_text(conv, conv.cwd or runtime_cwd, text))
+                    offset = SESSION_WATCH_OFFSETS[key]
+                    if size <= offset:
+                        continue
+                    with conv.file.open("r", encoding="utf-8", errors="ignore") as f:
+                        f.seek(offset)
+                        lines = f.readlines()
+                        SESSION_WATCH_OFFSETS[key] = f.tell()
+                    for line in lines:
+                        kind, text = parse_session_sync_event(line)
+                        text = short_text(text, 1200)
+                        if not text or kind == "skip":
+                            continue
+                        fingerprint = hashlib.sha1(f"{chat_id}:{conv.session_id}:{kind}:{text}".encode("utf-8")).hexdigest()
+                        if fingerprint in SESSION_SYNC_SEEN:
+                            continue
+                        SESSION_SYNC_SEEN.add(fingerprint)
+                        if len(SESSION_SYNC_SEEN) > 2000:
+                            SESSION_SYNC_SEEN.clear()
+                        if kind == "user":
+                            send_msg(chat_id, f"Codex Desktop 新消息：\n{text}")
+                        elif kind == "agent":
+                            send_msg(chat_id, f"Codex Desktop 进展：\n{text}")
+                        elif kind == "complete":
+                            send_msg(chat_id, synced_task_complete_text(conv, conv.cwd or runtime_cwd, text))
         except Exception:
             logger.exception("session watcher failed")
         STOP_SCHEDULER.wait(SESSION_WATCH_INTERVAL_SECONDS)
