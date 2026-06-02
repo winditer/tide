@@ -6,6 +6,7 @@ import os
 import queue
 import re
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -58,11 +59,13 @@ CODEX_SESSIONS_DIR = Path(
 DEFAULT_CWD = Path(os.getenv("CODEX_DEFAULT_CWD", os.getcwd())).expanduser().resolve()
 CODEX_BIN = os.getenv("CODEX_BIN", "codex")
 CODEX_TIMEOUT_SECONDS = int(os.getenv("CODEX_TIMEOUT_SECONDS", "1800"))
+CODEX_MODEL = os.getenv("CODEX_MODEL", "")
+CODEX_PROJECTS_ROOT_VALUE = os.getenv("CODEX_PROJECTS_ROOT", "")
+CODEX_PROJECTS_ROOT = Path(CODEX_PROJECTS_ROOT_VALUE).expanduser() if CODEX_PROJECTS_ROOT_VALUE else DEFAULT_CWD.parent
 CODEX_APPROVAL_POLICY = os.getenv("CODEX_APPROVAL_POLICY", "on-request")
 CODEX_SANDBOX_MODE = os.getenv("CODEX_SANDBOX_MODE", "workspace-write")
 APPROVED_CODEX_APPROVAL_POLICY = os.getenv("APPROVED_CODEX_APPROVAL_POLICY", "never")
 APPROVED_CODEX_SANDBOX_MODE = os.getenv("APPROVED_CODEX_SANDBOX_MODE", "danger-full-access")
-CODEX_SEND_STATUS_AFTER_TASK = os.getenv("CODEX_SEND_STATUS_AFTER_TASK", "0") == "1"
 
 MESSAGE_CHUNK_SIZE = int(os.getenv("LARK_MESSAGE_CHUNK_SIZE", "1800"))
 FINAL_REPLY_MAX_CHARS = int(os.getenv("LARK_FINAL_REPLY_MAX_CHARS", "4000"))
@@ -70,12 +73,23 @@ FINAL_QUESTION_MAX_CHARS = int(os.getenv("LARK_FINAL_QUESTION_MAX_CHARS", "1200"
 MAX_PROJECTS_IN_PANEL = int(os.getenv("MAX_PROJECTS_IN_PANEL", "8"))
 MAX_CONVERSATIONS_IN_PANEL = int(os.getenv("MAX_CONVERSATIONS_IN_PANEL", "8"))
 MAX_SESSION_FILES = int(os.getenv("MAX_SESSION_FILES", "300"))
-STATUS_INTERVAL_SECONDS = int(os.getenv("STATUS_INTERVAL_SECONDS", "1800"))
+STATUS_INTERVAL_SECONDS = int(os.getenv("STATUS_INTERVAL_SECONDS", "0"))
 TASK_CARD_REFRESH_INTERVAL_SECONDS = int(os.getenv("TASK_CARD_REFRESH_INTERVAL_SECONDS", "15"))
 PENDING_APPROVAL_WAIT_SECONDS = int(os.getenv("PENDING_APPROVAL_WAIT_SECONDS", "300"))
 PENDING_APPROVAL_POLL_SECONDS = int(os.getenv("PENDING_APPROVAL_POLL_SECONDS", "2"))
+PLAN_MAX_PARALLEL = int(os.getenv("PLAN_MAX_PARALLEL", "3"))
+PLAN_TASK_OUTPUT_MAX_CHARS = int(os.getenv("PLAN_TASK_OUTPUT_MAX_CHARS", "1200"))
+PLAN_USE_WORKTREES = os.getenv("PLAN_USE_WORKTREES", "1") == "1"
+PLAN_WORKTREE_ROOT = os.getenv("PLAN_WORKTREE_ROOT", "")
+PLAN_TEST_COMMAND = os.getenv("PLAN_TEST_COMMAND", "git diff --check")
+PLAN_TEST_TIMEOUT_SECONDS = int(os.getenv("PLAN_TEST_TIMEOUT_SECONDS", "120"))
 DAILY_REPORT_TIME = os.getenv("DAILY_REPORT_TIME", "19:00")
 STATE_FILE = Path(os.getenv("LARK_CODEX_STATE_FILE", ".lark_codex_state.json"))
+LARK_CODEX_SHOW_ARCHIVED = os.getenv("LARK_CODEX_SHOW_ARCHIVED", "0") == "1"
+LARK_CODEX_WELCOME_MESSAGE = os.getenv(
+    "LARK_CODEX_WELCOME_MESSAGE",
+    "I'm Lark Codex, a lightweight agent that helps you use lark to work perfectly with Codex!",
+)
 SYNC_DESKTOP_SESSIONS = os.getenv("SYNC_DESKTOP_SESSIONS", "1") == "1"
 SESSION_WATCH_INTERVAL_SECONDS = int(os.getenv("SESSION_WATCH_INTERVAL_SECONDS", "3"))
 KEEP_AWAKE_ON_AC_POWER = os.getenv("KEEP_AWAKE_ON_AC_POWER", "1") == "1"
@@ -102,6 +116,11 @@ class ConversationInfo:
     last_assistant: str = ""
     status: str = "未知"
     turns: int = 0
+    duration_seconds: float = 0
+    today_turns: int = 0
+    today_duration_seconds: float = 0
+    today_failed_count: int = 0
+    today_assistant_messages: list[str] = field(default_factory=list)
     originator: str = ""
     source: str = ""
 
@@ -111,6 +130,7 @@ class ProjectInfo:
     key: str
     name: str
     cwd: Optional[Path]
+    is_project: bool = True
     conversations: list[ConversationInfo] = field(default_factory=list)
 
 
@@ -124,6 +144,9 @@ class ChatRuntime:
     task_prompt: str = ""
     task_status: str = ""
     task_output: str = ""
+    task_model: str = ""
+    task_session_id: str = ""
+    task_cwd: str = ""
     task_started_at: float = 0
     last_task_card_update_at: float = 0
     last_status_sent_at: float = 0
@@ -132,6 +155,9 @@ class ChatRuntime:
     last_approval_fingerprint: str = ""
     next_approval_policy: str = ""
     next_sandbox_mode: str = ""
+    next_model: str = ""
+    plan_input_mode: bool = False
+    active_plan_id: str = ""
 
 
 @dataclass
@@ -142,16 +168,56 @@ class PendingApproval:
     cwd: str
     command: str
     reason: str
+    model: str = ""
     original_prompt: str = ""
     resume_prompt: str = ""
     status: str = "pending"
     created_at: float = field(default_factory=time.time)
 
 
+@dataclass
+class PlanTask:
+    task_id: str
+    title: str
+    prompt: str
+    model: str = ""
+    status: str = "pending"
+    process: Optional[subprocess.Popen] = None
+    session_id: str = ""
+    output: str = ""
+    started_at: float = 0
+    finished_at: float = 0
+    approved_retry: bool = False
+    approval_required: bool = False
+    worktree_path: str = ""
+    branch_name: str = ""
+    base_head: str = ""
+    diff_summary: str = ""
+    test_summary: str = ""
+    commit_message: str = ""
+    commit_hash: str = ""
+
+
+@dataclass
+class PlanRuntime:
+    plan_id: str
+    chat_id: str
+    cwd: Path
+    tasks: list[PlanTask]
+    max_parallel: int = PLAN_MAX_PARALLEL
+    message_id: str = ""
+    status: str = "pending"
+    created_at: float = field(default_factory=time.time)
+    last_card_update_at: float = 0
+    stop_requested: bool = False
+
+
 RUNTIMES: dict[str, ChatRuntime] = {}
 PENDING_APPROVALS: dict[str, PendingApproval] = {}
+PLANS: dict[str, PlanRuntime] = {}
 LOCK = threading.RLock()
 SEND_LOCK = threading.RLock()
+PLAN_LOCK = threading.RLock()
 CLIENT = None
 EVENT_HANDLER = None
 STOP_SCHEDULER = threading.Event()
@@ -211,16 +277,21 @@ def save_runtime(chat_id: str):
             "task_prompt": runtime.task_prompt,
             "task_status": runtime.task_status,
             "task_output": runtime.task_output,
+            "task_model": runtime.task_model,
+            "task_session_id": runtime.task_session_id,
+            "task_cwd": runtime.task_cwd,
             "task_started_at": runtime.task_started_at,
             "last_daily_sent_date": runtime.last_daily_sent_date,
             "send_disabled": runtime.send_disabled,
             "last_approval_fingerprint": runtime.last_approval_fingerprint,
+            "active_plan_id": runtime.active_plan_id,
         }
         write_state(state)
 
 
 def load_known_chats():
     state = read_state()
+    now = time.time()
     for chat_id, data in state.get("chats", {}).items():
         cwd = Path(data.get("cwd") or DEFAULT_CWD).expanduser()
         RUNTIMES[chat_id] = ChatRuntime(
@@ -231,21 +302,40 @@ def load_known_chats():
             task_prompt=data.get("task_prompt", ""),
             task_status=data.get("task_status", ""),
             task_output=data.get("task_output", ""),
+            task_model=data.get("task_model", ""),
+            task_session_id=data.get("task_session_id", ""),
+            task_cwd=data.get("task_cwd", ""),
             task_started_at=float(data.get("task_started_at", 0) or 0),
             last_daily_sent_date=data.get("last_daily_sent_date", ""),
             send_disabled=bool(data.get("send_disabled", False)),
             last_approval_fingerprint=data.get("last_approval_fingerprint", ""),
+            active_plan_id=data.get("active_plan_id", ""),
         )
+        RUNTIMES[chat_id].last_status_sent_at = now
 
 
 def get_runtime(chat_id: str) -> ChatRuntime:
     with LOCK:
         runtime = RUNTIMES.get(chat_id)
         if runtime is None:
-            runtime = ChatRuntime(cwd=DEFAULT_CWD)
+            runtime = ChatRuntime(cwd=DEFAULT_CWD, last_status_sent_at=time.time())
             RUNTIMES[chat_id] = runtime
             save_runtime(chat_id)
         return runtime
+
+
+def send_startup_welcome():
+    message = LARK_CODEX_WELCOME_MESSAGE.strip()
+    if not message:
+        return
+    with LOCK:
+        chat_ids = [
+            chat_id
+            for chat_id, runtime in RUNTIMES.items()
+            if is_valid_chat_id(chat_id) and not runtime.send_disabled
+        ]
+    for chat_id in chat_ids:
+        send_msg(chat_id, message)
 
 
 def is_valid_chat_id(chat_id: str) -> bool:
@@ -461,6 +551,8 @@ def normalize_text_command(content: str) -> str:
         "项目": "/projects",
         "convos": "/convos",
         "对话": "/convos",
+        "chats": "/chats",
+        "普通对话": "/chats",
         "status": "/status",
         "状态": "/status",
         "daily": "/daily",
@@ -469,7 +561,7 @@ def normalize_text_command(content: str) -> str:
     }
     if normalized in aliases:
         return aliases[normalized]
-    for name in ("latest", "project", "conv", "cd", "approve", "reject"):
+    for name in ("latest", "project", "conv", "cd", "approve", "reject", "mark-project", "mark-chat"):
         prefix = f"{name} "
         if normalized.startswith(prefix):
             return f"/{normalized}"
@@ -508,6 +600,148 @@ def project_name(cwd: Optional[Path]) -> str:
     return cwd.name or str(cwd)
 
 
+PROJECT_MARKERS = (
+    ".git",
+    "package.json",
+    "pyproject.toml",
+    "go.mod",
+    "Cargo.toml",
+    "pom.xml",
+    "composer.json",
+    "requirements.txt",
+    "README.md",
+)
+
+
+def classification_state() -> dict[str, Any]:
+    state = read_state()
+    return state.setdefault("classification", {})
+
+
+def marked_project_paths() -> dict[str, str]:
+    data = classification_state().get("project_paths", {})
+    return data if isinstance(data, dict) else {}
+
+
+def marked_ordinary_sessions() -> set[str]:
+    data = classification_state().get("ordinary_sessions", [])
+    return {str(item) for item in data if item}
+
+
+def archived_project_paths() -> set[str]:
+    data = classification_state().get("archived_project_paths", [])
+    return {str(item) for item in data if item}
+
+
+def archived_sessions() -> set[str]:
+    data = classification_state().get("archived_sessions", [])
+    return {str(item) for item in data if item}
+
+
+def update_classification(mutator):
+    state = read_state()
+    config = state.setdefault("classification", {})
+    mutator(config)
+    write_state(state)
+
+
+def normalize_path(path: Path) -> Path:
+    try:
+        return path.expanduser().resolve()
+    except OSError:
+        return path.expanduser()
+
+
+def is_generic_conversation_dir(cwd: Optional[Path]) -> bool:
+    if not cwd:
+        return True
+    path = normalize_path(cwd)
+    generic = {
+        normalize_path(Path.home()),
+        normalize_path(Path.home() / "Documents"),
+        normalize_path(Path("/tmp")),
+        normalize_path(Path("/private/tmp")),
+    }
+    return path in generic
+
+
+def has_project_marker(path: Path) -> bool:
+    return any((path / marker).exists() for marker in PROJECT_MARKERS)
+
+
+def is_project_archived(root: Optional[Path]) -> bool:
+    return bool(root) and str(normalize_path(root)) in archived_project_paths()
+
+
+def is_session_archived(session_id: str) -> bool:
+    return session_id in archived_sessions()
+
+
+def archive_project_path(path: Path):
+    path = normalize_path(path)
+
+    def mutate(config: dict[str, Any]):
+        archived = set(str(item) for item in config.get("archived_project_paths", []) if item)
+        archived.add(str(path))
+        config["archived_project_paths"] = sorted(archived)
+
+    update_classification(mutate)
+
+
+def archive_session_id(session_id: str):
+    if not session_id:
+        return
+
+    def mutate(config: dict[str, Any]):
+        archived = set(str(item) for item in config.get("archived_sessions", []) if item)
+        archived.add(session_id)
+        config["archived_sessions"] = sorted(archived)
+
+    update_classification(mutate)
+
+
+def slugify_name(text: str) -> str:
+    value = re.sub(r"[^A-Za-z0-9._-]+", "-", str(text or "").strip()).strip("-")
+    return value[:80] or f"project-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+
+
+def find_project_root(cwd: Optional[Path]) -> Optional[Path]:
+    if not cwd:
+        return None
+    path = normalize_path(cwd)
+    marked = marked_project_paths()
+    for raw_path in marked:
+        marked_path = normalize_path(Path(raw_path))
+        if path == marked_path or marked_path in path.parents:
+            return marked_path
+    if is_generic_conversation_dir(path):
+        return None
+    current = path
+    stop_at = normalize_path(Path.home())
+    while True:
+        if is_generic_conversation_dir(current):
+            break
+        if has_project_marker(current):
+            return current
+        if current == stop_at or current.parent == current:
+            break
+        current = current.parent
+    return None
+
+
+def conversation_is_project(conv: ConversationInfo) -> bool:
+    if conv.session_id in marked_ordinary_sessions():
+        return False
+    return find_project_root(conv.cwd) is not None
+
+
+def project_display_name(root: Optional[Path]) -> str:
+    if not root:
+        return "普通对话"
+    name = marked_project_paths().get(str(normalize_path(root)))
+    return name or project_name(root)
+
+
 def extract_text_content(content: Any) -> str:
     if isinstance(content, str):
         return content
@@ -523,19 +757,88 @@ def extract_text_content(content: Any) -> str:
     return "\n".join(parts).strip()
 
 
-def iter_session_files() -> list[Path]:
+def parse_event_timestamp(value: Any) -> float:
+    if value in (None, ""):
+        return 0
+    if isinstance(value, (int, float)):
+        timestamp = float(value)
+        return timestamp / 1000 if timestamp > 10_000_000_000 else timestamp
+    text = str(value).strip()
+    if not text:
+        return 0
+    try:
+        return parse_event_timestamp(float(text))
+    except ValueError:
+        pass
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0
+
+
+def event_date(ts: float):
+    return datetime.fromtimestamp(ts).date() if ts else None
+
+
+def event_timestamp(obj: dict[str, Any], payload: dict[str, Any]) -> float:
+    for key in ("timestamp", "completed_at", "started_at", "created_at"):
+        ts = parse_event_timestamp(payload.get(key))
+        if ts:
+            return ts
+    return parse_event_timestamp(obj.get("timestamp"))
+
+
+def looks_failed(text: str) -> bool:
+    haystack = str(text or "").lower()
+    signals = (
+        "**结果**：失败",
+        "**结果**：未完成",
+        "执行异常：",
+        "任务失败，退出码",
+        "进程已终止",
+        "traceback",
+        "error:",
+        "退出码 1",
+    )
+    return any(signal.lower() in haystack for signal in signals)
+
+
+def iter_session_files(report_date=None) -> list[Path]:
     if not CODEX_SESSIONS_DIR.exists():
         return []
-    files = list(CODEX_SESSIONS_DIR.glob("**/*.jsonl"))
+    if report_date:
+        date_dir = CODEX_SESSIONS_DIR / report_date.strftime("%Y") / report_date.strftime("%m") / report_date.strftime("%d")
+        files = list(date_dir.glob("*.jsonl")) if date_dir.exists() else []
+    else:
+        files = list(CODEX_SESSIONS_DIR.glob("**/*.jsonl"))
     files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return files[:MAX_SESSION_FILES]
 
 
-def parse_conversation(path: Path) -> Optional[ConversationInfo]:
+def parse_report_date(value: str = ""):
+    text = str(value or "").strip()
+    if not text:
+        return datetime.now().date()
+    try:
+        return datetime.strptime(text, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def parse_daily_command(content: str):
+    match = re.match(r"^/(?:daily|日报)(?:$|\s*=\s*(\S+)\s*$|\s+(\S+)\s*$)", content.strip(), flags=re.IGNORECASE)
+    if not match:
+        return None, False
+    value = (match.group(1) or match.group(2) or "").strip()
+    return parse_report_date(value), True
+
+
+def parse_conversation(path: Path, report_date=None) -> Optional[ConversationInfo]:
     info = ConversationInfo(session_id="", file=path, updated_at=path.stat().st_mtime)
     fallback_id = path.stem.split("-")[-1]
     meaningful_users: list[str] = []
     assistant_messages: list[str] = []
+    report_date = report_date or datetime.now().date()
 
     try:
         with path.open("r", encoding="utf-8", errors="ignore") as f:
@@ -547,6 +850,8 @@ def parse_conversation(path: Path) -> Optional[ConversationInfo]:
 
                 typ = obj.get("type")
                 payload = obj.get("payload") or {}
+                ts = event_timestamp(obj, payload)
+                is_report_date = event_date(ts) == report_date
                 if typ == "session_meta":
                     info.session_id = payload.get("id") or info.session_id
                     info.created_at = payload.get("timestamp") or obj.get("timestamp") or ""
@@ -567,6 +872,17 @@ def parse_conversation(path: Path) -> Optional[ConversationInfo]:
                     event_type = payload.get("type")
                     if event_type == "task_complete":
                         info.status = "完成"
+                        duration_ms = payload.get("duration_ms")
+                        if isinstance(duration_ms, (int, float)):
+                            duration = max(0, float(duration_ms) / 1000)
+                            info.duration_seconds += duration
+                            if is_report_date:
+                                info.today_duration_seconds += duration
+                        last_message = payload.get("last_agent_message", "")
+                        if is_report_date and last_message:
+                            info.today_assistant_messages.append(last_message)
+                            if looks_failed(last_message):
+                                info.today_failed_count += 1
                     elif event_type == "task_started":
                         info.status = "运行过"
                     elif event_type == "user_message":
@@ -574,11 +890,15 @@ def parse_conversation(path: Path) -> Optional[ConversationInfo]:
                         if text and not text.startswith("<"):
                             meaningful_users.append(text)
                             info.last_user = text
+                            if is_report_date:
+                                info.today_turns += 1
                     elif event_type == "agent_message":
                         text = payload.get("message", "")
                         if text:
                             assistant_messages.append(text)
                             info.last_assistant = text
+                            if is_report_date and payload.get("phase") != "commentary":
+                                info.today_assistant_messages.append(text)
                     continue
 
                 if typ != "response_item" or not isinstance(payload, dict):
@@ -596,6 +916,8 @@ def parse_conversation(path: Path) -> Optional[ConversationInfo]:
                 elif role == "assistant":
                     assistant_messages.append(text)
                     info.last_assistant = text
+                    if is_report_date and obj.get("phase") != "commentary":
+                        info.today_assistant_messages.append(text)
     except OSError:
         return None
 
@@ -611,19 +933,36 @@ def parse_conversation(path: Path) -> Optional[ConversationInfo]:
     return info
 
 
-def build_index() -> tuple[list[ProjectInfo], dict[str, ConversationInfo]]:
+def build_index(report_date=None) -> tuple[list[ProjectInfo], dict[str, ConversationInfo]]:
     projects: dict[str, ProjectInfo] = {}
     conversations: dict[str, ConversationInfo] = {}
+    metric_date = report_date or datetime.now().date()
 
-    for path in iter_session_files():
-        conv = parse_conversation(path)
+    for path in iter_session_files(report_date=report_date):
+        conv = parse_conversation(path, report_date=metric_date)
         if not conv:
             continue
+        if not LARK_CODEX_SHOW_ARCHIVED and is_session_archived(conv.session_id):
+            continue
         conversations[conv.session_id] = conv
-        key = project_key(conv.cwd)
+        root = find_project_root(conv.cwd)
+        if conv.session_id in marked_ordinary_sessions():
+            root = None
+        if not LARK_CODEX_SHOW_ARCHIVED and root and is_project_archived(root):
+            continue
+        if root:
+            key = project_key(root)
+            name = project_display_name(root)
+            cwd = root
+            is_project = True
+        else:
+            key = f"chat:{conv.session_id}"
+            name = conv.title or "普通对话"
+            cwd = conv.cwd
+            is_project = False
         project = projects.get(key)
         if project is None:
-            project = ProjectInfo(key=key, name=project_name(conv.cwd), cwd=conv.cwd)
+            project = ProjectInfo(key=key, name=name, cwd=cwd, is_project=is_project)
             projects[key] = project
         project.conversations.append(conv)
 
@@ -638,6 +977,14 @@ def build_index() -> tuple[list[ProjectInfo], dict[str, ConversationInfo]]:
     return ordered, conversations
 
 
+def project_groups(projects: list[ProjectInfo]) -> list[ProjectInfo]:
+    return [project for project in projects if project.is_project]
+
+
+def ordinary_chat_groups(projects: list[ProjectInfo]) -> list[ProjectInfo]:
+    return [project for project in projects if not project.is_project]
+
+
 def find_project(projects: list[ProjectInfo], key: str) -> Optional[ProjectInfo]:
     for project in projects:
         if project.key == key:
@@ -648,10 +995,11 @@ def find_project(projects: list[ProjectInfo], key: str) -> Optional[ProjectInfo]
 def current_or_latest_project(chat_id: str) -> Optional[ProjectInfo]:
     runtime = get_runtime(chat_id)
     projects, _ = build_index()
-    project = find_project(projects, runtime.active_project_key)
+    project_list = project_groups(projects)
+    project = find_project(project_list, runtime.active_project_key)
     if project:
         return project
-    return projects[0] if projects else None
+    return project_list[0] if project_list else None
 
 
 def is_resumable_conversation(conv: Optional[ConversationInfo]) -> bool:
@@ -683,19 +1031,21 @@ def project_for_runtime(chat_id: str) -> ProjectInfo:
     runtime = get_runtime(chat_id)
     projects, _ = build_index()
 
-    project = find_project(projects, runtime.active_project_key)
+    project = find_project(project_groups(projects), runtime.active_project_key)
     if project:
         return project
 
-    runtime_key = project_key(runtime.cwd)
-    project = find_project(projects, runtime_key)
+    root = find_project_root(runtime.cwd)
+    runtime_key = project_key(root or runtime.cwd)
+    project = find_project(project_groups(projects), runtime_key)
     if project:
         return project
 
     return ProjectInfo(
         key=runtime_key,
-        name=project_name(runtime.cwd),
-        cwd=runtime.cwd,
+        name=project_display_name(root or runtime.cwd),
+        cwd=root or runtime.cwd,
+        is_project=bool(root),
         conversations=[],
     )
 
@@ -738,6 +1088,189 @@ def git_status_entries(cwd: Optional[Path]) -> tuple[bool, list[str], str]:
     return True, entries, ""
 
 
+def git_command(cwd: Path, args: list[str], timeout: int = 20) -> tuple[int, str]:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(cwd), *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except Exception as e:
+        return 1, f"{type(e).__name__}: {e}"
+    return result.returncode, (result.stdout + result.stderr).strip()
+
+
+def git_repo_root(cwd: Path) -> Optional[Path]:
+    code, output = git_command(cwd, ["rev-parse", "--show-toplevel"], timeout=5)
+    if code != 0 or not output:
+        return None
+    return Path(output.splitlines()[0]).expanduser().resolve()
+
+
+def git_head(cwd: Path) -> str:
+    code, output = git_command(cwd, ["rev-parse", "HEAD"], timeout=5)
+    return output.splitlines()[0] if code == 0 and output else ""
+
+
+def safe_git_ref_part(text: str) -> str:
+    value = re.sub(r"[^A-Za-z0-9._-]+", "-", text).strip("-")
+    return value[:80] or "task"
+
+
+def strip_command_separator(text: str) -> str:
+    return re.sub(r"^\s*(?:\+|[:：]|[-–—])\s*", "", text).strip()
+
+
+def parse_model_prefix(content: str) -> tuple[str, str]:
+    match = re.match(r"^/model\s*=\s*(\S+)\s*(.*)$", content, flags=re.IGNORECASE | re.DOTALL)
+    if not match:
+        match = re.match(r"^/model\s+(\S+)\s*(.*)$", content, flags=re.IGNORECASE | re.DOTALL)
+    if not match:
+        return "", content
+    model = match.group(1).strip()
+    rest = strip_command_separator(match.group(2) or "")
+    return model, rest
+
+
+def model_label(model: str = "") -> str:
+    return model or CODEX_MODEL or "默认"
+
+
+def runtime_task_cwd(runtime: ChatRuntime) -> Path:
+    return Path(runtime.task_cwd).expanduser() if runtime.task_cwd else runtime.cwd
+
+
+def plan_task_cwd(plan: PlanRuntime, task: PlanTask) -> Path:
+    return Path(task.worktree_path).expanduser() if task.worktree_path else plan.cwd
+
+
+def plan_worktree_root(repo_root: Path) -> Path:
+    if PLAN_WORKTREE_ROOT:
+        return Path(PLAN_WORKTREE_ROOT).expanduser().resolve()
+    return repo_root / ".lark-codex" / "worktrees"
+
+
+def prepare_plan_worktree(plan: PlanRuntime, task: PlanTask) -> Path:
+    if not PLAN_USE_WORKTREES:
+        return plan.cwd
+
+    repo_root = git_repo_root(plan.cwd)
+    if not repo_root:
+        task.output = "当前目录不是 Git 仓库，已退回到原目录执行；无法启用 worktree 隔离。"
+        return plan.cwd
+
+    task.base_head = git_head(repo_root)
+    task.branch_name = f"lark-codex/{safe_git_ref_part(plan.plan_id)}-{safe_git_ref_part(task.task_id)}"
+    root = plan_worktree_root(repo_root)
+    worktree = root / f"{safe_git_ref_part(plan.plan_id)}-{safe_git_ref_part(task.task_id)}"
+    if (worktree / ".git").exists():
+        task.worktree_path = str(worktree)
+        return worktree
+
+    root.mkdir(parents=True, exist_ok=True)
+    code, output = git_command(
+        repo_root,
+        ["worktree", "add", "-b", task.branch_name, str(worktree), "HEAD"],
+        timeout=60,
+    )
+    if code != 0:
+        task.output = "创建 Git worktree 失败，子任务未启动。\n" f"{short_text(output, 900)}"
+        logger.warning("plan worktree create failed: plan_id=%s task_id=%s output=%s", plan.plan_id, task.task_id, output)
+        raise RuntimeError(task.output)
+
+    task.worktree_path = str(worktree)
+    return worktree
+
+
+def has_git_changes(cwd: Path) -> bool:
+    is_repo, entries, _ = git_status_entries(cwd)
+    return is_repo and bool(entries)
+
+
+def git_diff_summary(cwd: Path) -> str:
+    is_repo, entries, error = git_status_entries(cwd)
+    if not is_repo:
+        return f"Git：{error}"
+    if not entries:
+        return "Git：工作区干净"
+
+    code, stat = git_command(cwd, ["diff", "--stat", "HEAD"], timeout=10)
+    if code != 0:
+        stat = short_text(stat, 1200)
+    status_lines = ["**文件状态**", *[f"`{line[:2].strip() or '?'}` {line[3:] if len(line) > 3 else line}" for line in entries[:20]]]
+    if len(entries) > 20:
+        status_lines.append(f"还有 {len(entries) - 20} 个变更未显示")
+    if stat:
+        status_lines.extend(["", "**Diff 统计**", stat])
+    return "\n".join(status_lines)
+
+
+def run_plan_test_command(cwd: Path) -> tuple[bool, str]:
+    command = PLAN_TEST_COMMAND.strip()
+    if not command:
+        return True, "未配置测试命令。"
+    try:
+        result = subprocess.run(
+            command,
+            cwd=str(cwd),
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=PLAN_TEST_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"测试命令超时：`{command}`"
+    except Exception as e:
+        return False, f"测试命令执行异常：{type(e).__name__}: {e}"
+    output = (result.stdout + result.stderr).strip()
+    status = "通过" if result.returncode == 0 else f"失败（退出码 {result.returncode}）"
+    return result.returncode == 0, f"`{command}`：{status}" + (f"\n{short_text(output, 1200)}" if output else "")
+
+
+def plan_commit_message(plan: PlanRuntime, task: PlanTask) -> str:
+    title = re.sub(r"\s+", " ", task.title).strip()
+    return short_text(f"Plan {plan.plan_id} task {task.task_id}: {title}", 120)
+
+
+def finalize_plan_task_review(plan: PlanRuntime, task: PlanTask, code: int, fallback_output: str):
+    cwd = plan_task_cwd(plan, task)
+    test_ok, test_summary = run_plan_test_command(cwd)
+    task.test_summary = test_summary
+    changed = has_git_changes(cwd)
+    if changed:
+        task.diff_summary = git_diff_summary(cwd)
+        task.commit_message = plan_commit_message(plan, task)
+
+    parts = []
+    if fallback_output:
+        parts.append(final_reply_text(fallback_output, PLAN_TASK_OUTPUT_MAX_CHARS))
+    parts.append(f"**测试**\n{test_summary}")
+    if changed:
+        parts.append(f"**改动摘要**\n{final_reply_text(task.diff_summary, 1600)}")
+    if task.worktree_path:
+        parts.append(f"**Worktree**\n`{task.worktree_path}`\n**分支**\n`{task.branch_name}`")
+
+    if code != 0:
+        task.status = "failed"
+        if not fallback_output:
+            parts.insert(0, f"任务失败，退出码 {code}。")
+    elif not test_ok:
+        task.status = "failed"
+        parts.insert(0, "任务已结束，但测试未通过，暂不进入提交审批。")
+    elif changed:
+        task.status = "review"
+        parts.append(f"**待提交审批**\n提交信息：`{task.commit_message}`")
+    else:
+        task.status = "done"
+        if not fallback_output:
+            parts.insert(0, "任务完成，未检测到代码改动。")
+
+    task.output = "\n\n".join(part for part in parts if part)
+
+
 def format_git_summary(cwd: Optional[Path], limit: int = 8) -> list[str]:
     is_repo, entries, error = git_status_entries(cwd)
     if not is_repo:
@@ -773,9 +1306,10 @@ def task_end_text(
         f"**完成时间**：{datetime.now().strftime('%m-%d %H:%M')}",
         f"**耗时**：{format_duration(time.time() - started_at)}",
         f"**目录**：`{cwd}`",
+        f"**模型**：`{model_label(runtime.task_model)}`",
     ]
-    if runtime.active_session_id:
-        lines.append(f"**Session**：`{runtime.active_session_id}`")
+    if runtime.task_session_id or runtime.active_session_id:
+        lines.append(f"**Session**：`{runtime.task_session_id or runtime.active_session_id}`")
     if detail:
         lines.append(f"**说明**：{detail}")
     if user_question:
@@ -1222,19 +1756,22 @@ def build_task_card(chat_id: str, status: str = "", output: str = "", detail: st
     template = "green" if current_status in ("完成", "成功") else "orange" if "审批" in current_status else "blue"
     pending = pending_approvals_for_chat(chat_id)
     shown_output = output if output else runtime.task_output
+    task_session_id = runtime.task_session_id
+    task_cwd = runtime_task_cwd(runtime)
 
     elements: list[dict[str, Any]] = [
         fields(
             [
                 ("状态", current_status),
-                ("目录", short_text(str(runtime.cwd), 42)),
+                ("目录", short_text(str(task_cwd), 42)),
+                ("模型", model_label(runtime.task_model)),
                 ("耗时", format_duration(time.time() - runtime.task_started_at) if runtime.task_started_at else "-"),
             ]
         ),
         md(f"**指令**\n{short_text(runtime.task_prompt, 900) or '无'}"),
     ]
-    if runtime.active_session_id:
-        elements.append(md(f"**Session**\n`{runtime.active_session_id}`"))
+    if task_session_id:
+        elements.append(md(f"**Session**\n`{task_session_id}`"))
     if detail:
         elements.append(md(f"**说明**\n{detail}"))
     if pending:
@@ -1274,10 +1811,13 @@ def build_task_card(chat_id: str, status: str = "", output: str = "", detail: st
     return base_card("Codex 指令", elements, template)
 
 
-def send_task_card(chat_id: str, prompt: str, status: str):
+def send_task_card(chat_id: str, prompt: str, status: str, model: str = ""):
     runtime = get_runtime(chat_id)
     runtime.task_message_id = ""
     runtime.task_prompt = prompt
+    runtime.task_model = model
+    runtime.task_session_id = runtime.active_session_id
+    runtime.task_cwd = str(runtime.cwd)
     runtime.task_status = status
     runtime.task_output = ""
     runtime.task_started_at = time.time()
@@ -1318,9 +1858,151 @@ def update_task_card(chat_id: str, status: str = "", output: str = "", detail: s
     return updated
 
 
+def parse_plan_tasks(content: str) -> list[str]:
+    tasks: list[str] = []
+    text = re.sub(r"^/plan\b", "", content.strip(), flags=re.IGNORECASE).strip()
+    for line in text.splitlines():
+        item = line.strip()
+        if not item:
+            continue
+        item = re.sub(r"^[-*]\s+\[[ xX]\]\s+", "", item)
+        item = re.sub(r"^[-*]\s+", "", item)
+        item = re.sub(r"^\d+[\.)、]\s+", "", item)
+        item = item.strip()
+        if item:
+            tasks.append(item)
+    if not tasks and text:
+        tasks.append(text)
+    return tasks
+
+
+def plan_task_from_text(index: int, task: str, default_model: str = "") -> PlanTask:
+    model, prompt = parse_model_prefix(task)
+    prompt = prompt or task
+    return PlanTask(
+        task_id=str(index),
+        title=prompt,
+        prompt=prompt,
+        model=model or default_model,
+    )
+
+
+def plan_summary(plan: PlanRuntime) -> tuple[int, int, int, int, int, int]:
+    pending = sum(1 for task in plan.tasks if task.status == "pending")
+    running = sum(1 for task in plan.tasks if task.status == "running")
+    done = sum(1 for task in plan.tasks if task.status in ("done", "committed"))
+    failed = sum(1 for task in plan.tasks if task.status == "failed")
+    waiting = sum(1 for task in plan.tasks if task.status == "approval")
+    review = sum(1 for task in plan.tasks if task.status == "review")
+    return pending, running, done, failed, waiting, review
+
+
+def plan_status_text(plan: PlanRuntime) -> str:
+    if plan.stop_requested:
+        return "停止中"
+    pending, running, done, failed, waiting, review = plan_summary(plan)
+    if running:
+        return "运行中"
+    if waiting:
+        return "等待审批"
+    if review:
+        return "等待提交"
+    if pending:
+        return "排队中"
+    if failed:
+        return "部分失败" if done else "失败"
+    return "完成"
+
+
+def build_plan_card(plan: PlanRuntime) -> dict[str, Any]:
+    pending, running, done, failed, waiting, review = plan_summary(plan)
+    plan.status = plan_status_text(plan)
+    template = "green" if plan.status == "完成" else "orange" if waiting or review or failed else "blue"
+    elements: list[dict[str, Any]] = [
+        fields(
+            [
+                ("状态", plan.status),
+                ("并发", f"{running}/{plan.max_parallel}"),
+                ("进度", f"{done}/{len(plan.tasks)}"),
+            ]
+        ),
+        md(
+            f"**目录**\n`{plan.cwd}`\n"
+            f"**Plan**：`{plan.plan_id}`\n"
+            f"**排队/失败/审批/待提交**：{pending} / {failed} / {waiting} / {review}"
+        ),
+    ]
+    for task in plan.tasks[:12]:
+        elapsed = format_duration((task.finished_at or time.time()) - task.started_at) if task.started_at else "-"
+        line = (
+            f"**{task.task_id}. {short_text(task.title, 80)}**\n"
+            f"状态：{task.status} · 耗时：{elapsed}"
+        )
+        if task.session_id:
+            line += f" · Session：`{task.session_id}`"
+        if task.model or CODEX_MODEL:
+            line += f"\n模型：`{model_label(task.model)}`"
+        if task.worktree_path:
+            line += f"\nWorktree：`{short_text(task.worktree_path, 120)}`"
+        if task.commit_hash:
+            line += f"\nCommit：`{task.commit_hash}`"
+        if task.output:
+            line += f"\n{final_reply_text(task.output, PLAN_TASK_OUTPUT_MAX_CHARS)}"
+        elements.append(divider())
+        elements.append(md(line))
+        if task.status == "approval":
+            elements.append(
+                action_row(
+                    [
+                        compact_button("批准", "plan_approve", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "task_id": task.task_id}, "primary"),
+                        compact_button("拒绝", "plan_reject", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "task_id": task.task_id}, "danger"),
+                    ]
+                )
+            )
+        if task.status == "review":
+            elements.append(
+                action_row(
+                    [
+                        compact_button("查看 Diff", "plan_diff", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "task_id": task.task_id}),
+                        compact_button("批准提交", "plan_commit", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "task_id": task.task_id}, "primary"),
+                        compact_button("跳过提交", "plan_skip_commit", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "task_id": task.task_id}, "danger"),
+                    ]
+                )
+            )
+    if len(plan.tasks) > 12:
+        elements.append(note(f"还有 {len(plan.tasks) - 12} 个子任务未显示。"))
+    actions = [
+        compact_button("刷新", "plan_refresh", {"chat_id": plan.chat_id, "plan_id": plan.plan_id}, "primary"),
+    ]
+    if plan.status in ("运行中", "排队中", "等待审批", "停止中"):
+        actions.append(compact_button("停止全部", "plan_stop", {"chat_id": plan.chat_id, "plan_id": plan.plan_id}, "danger"))
+    elements.append(action_row(actions))
+    return base_card("Codex Plan", elements, template)
+
+
+def send_plan_card(plan: PlanRuntime):
+    message_id = send_card(plan.chat_id, build_plan_card(plan))
+    if message_id:
+        plan.message_id = message_id
+        logger.info("plan card sent: chat_id=%s plan_id=%s message_id=%s", plan.chat_id, plan.plan_id, message_id)
+
+
+def update_plan_card(plan: PlanRuntime, force: bool = False) -> bool:
+    now = time.time()
+    if not force and now - plan.last_card_update_at < 2:
+        return bool(plan.message_id)
+    plan.last_card_update_at = now
+    if not plan.message_id:
+        send_plan_card(plan)
+        return bool(plan.message_id)
+    return update_card(plan.message_id, build_plan_card(plan))
+
+
 def build_dashboard_card(chat_id: str, expanded: bool = False):
     runtime = get_runtime(chat_id)
-    projects, _ = build_index()
+    all_groups, _ = build_index()
+    projects = project_groups(all_groups)
+    chats = ordinary_chat_groups(all_groups)
     total_convs = sum(len(p.conversations) for p in projects)
     running = runtime.process is not None and runtime.process.poll() is None
     latest_project = projects[0] if projects else None
@@ -1329,7 +2011,7 @@ def build_dashboard_card(chat_id: str, expanded: bool = False):
         fields(
             [
                 ("项目", str(len(projects))),
-                ("对话", str(total_convs)),
+                ("普通对话", str(len(chats))),
                 ("状态", "运行中" if running else "空闲"),
             ]
         ),
@@ -1353,6 +2035,7 @@ def build_dashboard_card(chat_id: str, expanded: bool = False):
                 ),
                 compact_button("状态", "status", {"chat_id": chat_id}),
                 compact_button("日报", "daily", {"chat_id": chat_id}),
+                compact_button("普通对话", "chats", {"chat_id": chat_id}),
                 compact_button("停止", "stop", {"chat_id": chat_id}, "danger"),
             ]
         ),
@@ -1372,7 +2055,7 @@ def build_dashboard_card(chat_id: str, expanded: bool = False):
 
     elements.extend([divider(), md("**项目看板**")])
     if not projects:
-        elements.append(md("还没有找到 Codex 历史会话。"))
+        elements.append(md("还没有识别到项目会话。普通对话可发送 /chats 查看。"))
     for idx, project in enumerate(projects[:MAX_PROJECTS_IN_PANEL], 1):
         active = "（当前）" if project.key == runtime.active_project_key else ""
         latest = format_time(project.conversations[0].updated_at) if project.conversations else "-"
@@ -1405,6 +2088,7 @@ def build_dashboard_card(chat_id: str, expanded: bool = False):
 def build_project_card(chat_id: str, project_key_value: str, expanded: bool = False):
     runtime = get_runtime(chat_id)
     projects, _ = build_index()
+    projects = project_groups(projects)
     project = find_project(projects, project_key_value)
     if not project:
         return base_card(
@@ -1473,6 +2157,54 @@ def build_project_card(chat_id: str, project_key_value: str, expanded: bool = Fa
     return base_card(f"{project.name} / 对话", elements, "turquoise")
 
 
+def build_chats_card(chat_id: str, expanded: bool = True):
+    runtime = get_runtime(chat_id)
+    groups, _ = build_index()
+    chats = ordinary_chat_groups(groups)
+    elements: list[dict[str, Any]] = [
+        fields([("普通对话", str(len(chats))), ("状态", "已展开" if expanded else "已收起"), ("当前", runtime.active_session_id or "-")]),
+        action_row(
+            [
+                compact_button("返回看板", "dashboard", {"chat_id": chat_id}, "primary"),
+                compact_button("刷新", "chats", {"chat_id": chat_id, "expanded": expanded}, "primary"),
+                compact_button("展开" if not expanded else "收起", "chats", {"chat_id": chat_id, "expanded": not expanded}),
+            ]
+        ),
+    ]
+    if not expanded:
+        elements.append(note("普通对话列表已收起。发送 /chats 展开。"))
+        return base_card("普通对话", elements, "grey")
+
+    if not chats:
+        elements.append(md("暂未识别到普通对话。"))
+        return base_card("普通对话", elements, "grey")
+
+    for idx, group in enumerate(chats[:MAX_CONVERSATIONS_IN_PANEL], 1):
+        conv = group.conversations[0]
+        active = "（当前）" if conv.session_id == runtime.active_session_id else ""
+        cwd = str(conv.cwd) if conv.cwd else "无目录"
+        elements.append(divider())
+        elements.append(
+            md(
+                f"**{idx}. {conv.title}** {active}\n"
+                f"{conversation_source_label(conv)} · {conv.status} · {conv.turns} 轮 · {format_time(conv.updated_at)}\n"
+                f"`{short_text(cwd, 100)}`\n"
+                f"`{conv.session_id}`"
+            )
+        )
+        elements.append(
+            action_row(
+                [
+                    compact_button("打开", "conversation", {"chat_id": chat_id, "session_id": conv.session_id}, "primary"),
+                    compact_button("标为项目", "mark_project_from_chat", {"chat_id": chat_id, "session_id": conv.session_id}),
+                ]
+            )
+        )
+    if len(chats) > MAX_CONVERSATIONS_IN_PANEL:
+        elements.append(note(f"仅显示最近 {MAX_CONVERSATIONS_IN_PANEL} 个普通对话。"))
+    return base_card("普通对话", elements, "grey")
+
+
 def build_conversation_card(chat_id: str, session_id: str):
     runtime = get_runtime(chat_id)
     _, conversations = build_index()
@@ -1488,13 +2220,19 @@ def build_conversation_card(chat_id: str, session_id: str):
         )
 
     runtime.active_session_id = conv.session_id
-    runtime.active_project_key = project_key(conv.cwd)
+    root = find_project_root(conv.cwd)
+    runtime.active_project_key = project_key(root) if root else ""
     if conv.cwd:
         runtime.cwd = conv.cwd
     save_runtime(chat_id)
 
     running = runtime.process is not None and runtime.process.poll() is None
     mode = "可续写" if is_resumable_conversation(conv) else "只读展示"
+    back_button = (
+        compact_button("返回项目", "project", {"chat_id": chat_id, "project_key": project_key(root)})
+        if root
+        else compact_button("返回普通对话", "chats", {"chat_id": chat_id, "expanded": True})
+    )
     elements = [
         fields([("状态", "运行中" if running else conv.status), ("来源", conversation_source_label(conv)), ("模式", mode)]),
         md(f"**标题**\n{conv.title}"),
@@ -1505,7 +2243,7 @@ def build_conversation_card(chat_id: str, session_id: str):
         ),
         action_row(
             [
-                compact_button("返回项目", "project", {"chat_id": chat_id, "project_key": project_key(conv.cwd)}),
+                back_button,
                 compact_button("刷新", "conversation_status", {"chat_id": chat_id, "session_id": conv.session_id}, "primary"),
                 compact_button("停止", "stop", {"chat_id": chat_id}, "danger"),
             ]
@@ -1527,6 +2265,9 @@ def codex_command(runtime: ChatRuntime, prompt: str, last_message_file: Optional
     common = [CODEX_BIN]
     approval_policy = runtime.next_approval_policy or CODEX_APPROVAL_POLICY
     sandbox_mode = runtime.next_sandbox_mode or CODEX_SANDBOX_MODE
+    model = runtime.next_model or runtime.task_model or CODEX_MODEL
+    if model:
+        common.extend(["-m", model])
     if approval_policy:
         common.extend(["-a", approval_policy])
     if sandbox_mode:
@@ -1534,10 +2275,11 @@ def codex_command(runtime: ChatRuntime, prompt: str, last_message_file: Optional
     common.extend(["exec"])
     if last_message_file:
         common.extend(["--output-last-message", str(last_message_file)])
-    conv = get_active_conversation(runtime.active_session_id)
+    task_session_id = runtime.task_session_id or runtime.active_session_id
+    conv = get_active_conversation(task_session_id)
     if is_resumable_conversation(conv):
-        return common + ["resume", "--json", "--skip-git-repo-check", runtime.active_session_id, prompt]
-    return common + ["--json", "--skip-git-repo-check", "-C", str(runtime.cwd), prompt]
+        return common + ["resume", "--json", "--skip-git-repo-check", task_session_id, prompt]
+    return common + ["--json", "--skip-git-repo-check", "-C", str(runtime_task_cwd(runtime)), prompt]
 
 
 def read_last_message_file(path: Optional[Path]) -> str:
@@ -1561,7 +2303,7 @@ def same_path(left: Optional[Path], right: Optional[Path]) -> bool:
 
 def find_conversation_for_run(runtime: ChatRuntime, cwd: Path, started_at: float, prompt: str) -> Optional[ConversationInfo]:
     cutoff = started_at - 10
-    conv = get_active_conversation(runtime.active_session_id)
+    conv = get_active_conversation(runtime.task_session_id or runtime.active_session_id)
     if conv and conv.updated_at >= cutoff:
         return conv
 
@@ -1585,6 +2327,7 @@ def find_conversation_for_run(runtime: ChatRuntime, cwd: Path, started_at: float
 
 def latest_panel_conversation(index: int = 0) -> Optional[ConversationInfo]:
     projects, _ = build_index()
+    projects = project_groups(projects)
     if index < 0 or index >= min(len(projects), MAX_PROJECTS_IN_PANEL):
         return None
     project = projects[index]
@@ -1613,8 +2356,10 @@ def resolve_task_result(
     for _ in range(5):
         conv = find_conversation_for_run(runtime, cwd, started_at, prompt)
         if conv:
-            if conv.session_id and runtime.active_session_id != conv.session_id:
-                runtime.active_session_id = conv.session_id
+            if conv.session_id and runtime.task_session_id != conv.session_id:
+                runtime.task_session_id = conv.session_id
+                if runtime.active_session_id != conv.session_id:
+                    runtime.active_session_id = conv.session_id
                 save_runtime(chat_id)
             user_question = user_question or conv.last_user
             last_agent_message = last_agent_message or conv.last_assistant
@@ -1623,7 +2368,7 @@ def resolve_task_result(
         time.sleep(0.2)
 
     if not last_agent_message:
-        conv = latest_panel_conversation(0)
+        conv = find_conversation_for_run(runtime, cwd, started_at, prompt)
         if conv:
             last_agent_message = conv.last_assistant or last_agent_message
             user_question = user_question or conv.last_user
@@ -1743,10 +2488,11 @@ def create_pending_approval(chat_id: str, runtime: ChatRuntime, text: str) -> Pe
     approval = PendingApproval(
         approval_id=approval_id,
         chat_id=chat_id,
-        session_id=runtime.active_session_id,
-        cwd=str(runtime.cwd),
+        session_id=runtime.task_session_id or runtime.active_session_id,
+        cwd=str(runtime_task_cwd(runtime)),
         command=short_text(text, 1000),
         reason="Codex 输出中检测到需要人工批准的内容",
+        model=runtime.task_model,
         original_prompt=runtime.task_prompt,
         resume_prompt=(
             "用户已在 Lark 审批通过。请继续执行刚才等待审批的操作；"
@@ -1790,7 +2536,351 @@ def update_existing_task_card(chat_id: str, status: str = "", output: str = "", 
     return updated
 
 
-def run_codex(chat_id: str, prompt: str):
+def find_plan(plan_id: str) -> Optional[PlanRuntime]:
+    with PLAN_LOCK:
+        return PLANS.get(plan_id)
+
+
+def find_plan_task(plan: PlanRuntime, task_id: str) -> Optional[PlanTask]:
+    for task in plan.tasks:
+        if task.task_id == task_id:
+            return task
+    return None
+
+
+def plan_task_command(plan: PlanRuntime, task: PlanTask, last_message_file: Optional[Path]) -> list[str]:
+    runtime = ChatRuntime(cwd=plan_task_cwd(plan, task))
+    runtime.task_model = task.model
+    if task.approved_retry:
+        runtime.next_approval_policy = APPROVED_CODEX_APPROVAL_POLICY
+        runtime.next_sandbox_mode = APPROVED_CODEX_SANDBOX_MODE
+    return codex_command(runtime, task.prompt, last_message_file)
+
+
+def run_plan_task(plan_id: str, task_id: str):
+    plan = find_plan(plan_id)
+    if not plan:
+        return
+    task = find_plan_task(plan, task_id)
+    if not task:
+        return
+
+    last_message_path: Optional[Path] = None
+    try:
+        fd, name = tempfile.mkstemp(prefix="lark-codex-plan-", suffix=".txt", dir="/tmp")
+        os.close(fd)
+        last_message_path = Path(name)
+    except OSError:
+        logger.exception("failed to create plan last message file")
+
+    task.status = "running"
+    task.started_at = time.time()
+    task.finished_at = 0
+    task.output = task.output or "已启动。"
+    task.approval_required = False
+    update_plan_card(plan, force=True)
+    try:
+        task_cwd = prepare_plan_worktree(plan, task)
+        argv = plan_task_command(plan, task, last_message_path)
+    except Exception as e:
+        task.status = "failed"
+        task.output = f"准备 Plan 子任务失败：{type(e).__name__}: {e}"
+        task.finished_at = time.time()
+        if last_message_path:
+            last_message_path.unlink(missing_ok=True)
+        update_plan_card(plan, force=True)
+        return
+    logger.info(
+        "starting plan task: plan_id=%s task_id=%s cwd=%s model=%s prompt=%r",
+        plan_id,
+        task_id,
+        task_cwd,
+        model_label(task.model),
+        short_text(task.prompt, 120),
+    )
+
+    try:
+        proc = subprocess.Popen(
+            argv,
+            cwd=str(task_cwd),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+    except FileNotFoundError:
+        task.status = "failed"
+        task.output = f"找不到 Codex 命令：{CODEX_BIN}"
+        task.finished_at = time.time()
+        update_plan_card(plan, force=True)
+        return
+    except Exception as e:
+        task.status = "failed"
+        task.output = f"启动 Codex 失败：{type(e).__name__}: {e}"
+        task.finished_at = time.time()
+        update_plan_card(plan, force=True)
+        return
+
+    task.process = proc
+    buffer: list[str] = []
+    last_flush = time.time()
+    try:
+        assert proc.stdout is not None
+        while True:
+            if plan.stop_requested:
+                proc.terminate()
+                task.status = "cancelled"
+                task.output = "计划已停止。"
+                break
+            line = proc.stdout.readline()
+            if not line:
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.1)
+                continue
+            kind, text = parse_codex_json_event(line)
+            if kind == "session_id" and text:
+                task.session_id = text
+                continue
+            if kind == "skip" or not text:
+                continue
+            if should_create_approval(text) and not task.approved_retry:
+                task.approval_required = True
+                task.status = "approval"
+                task.output = text
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                update_plan_card(plan, force=True)
+                break
+            buffer.append(text)
+            if kind in ("message", "complete"):
+                task.output = text
+            elif time.time() - last_flush >= 2 or len("\n".join(buffer)) >= 500:
+                task.output = "\n".join(buffer[-4:]).strip()
+                update_plan_card(plan)
+                last_flush = time.time()
+
+        if task.status == "running":
+            code = proc.wait(timeout=5)
+            file_message = read_last_message_file(last_message_path)
+            if file_message:
+                task.output = file_message
+            elif buffer and not task.output:
+                task.output = "\n".join(buffer[-6:]).strip()
+            if should_create_approval(task.output) and not task.approved_retry:
+                task.status = "approval"
+                task.approval_required = True
+            else:
+                finalize_plan_task_review(plan, task, code, task.output)
+    except Exception as e:
+        logger.exception("plan task failed: plan_id=%s task_id=%s", plan_id, task_id)
+        task.status = "failed"
+        task.output = f"执行异常：{type(e).__name__}: {e}"
+    finally:
+        if task.process is proc:
+            task.process = None
+        task.finished_at = time.time()
+        if last_message_path:
+            last_message_path.unlink(missing_ok=True)
+        update_plan_card(plan, force=True)
+
+
+def plan_runner_loop(plan_id: str):
+    while not STOP_SCHEDULER.is_set():
+        plan = find_plan(plan_id)
+        if not plan:
+            return
+        if plan.stop_requested:
+            for task in plan.tasks:
+                if task.process and task.process.poll() is None:
+                    task.process.terminate()
+                if task.status in ("pending", "running", "approval"):
+                    task.status = "cancelled"
+                    task.finished_at = time.time()
+            plan.status = "已停止"
+            update_plan_card(plan, force=True)
+            return
+
+        running = [task for task in plan.tasks if task.status == "running"]
+        pending = [task for task in plan.tasks if task.status == "pending"]
+        slots = max(0, plan.max_parallel - len(running))
+        for task in pending[:slots]:
+            task.status = "running"
+            task.started_at = time.time()
+            threading.Thread(target=run_plan_task, args=(plan_id, task.task_id), name=f"plan-{plan_id}-{task.task_id}", daemon=True).start()
+
+        active_statuses = {"pending", "running", "approval"}
+        if not any(task.status in active_statuses for task in plan.tasks):
+            plan.status = plan_status_text(plan)
+            update_plan_card(plan, force=True)
+            return
+
+        update_plan_card(plan)
+        time.sleep(1)
+
+
+def start_plan(chat_id: str, content: str, model: str = ""):
+    runtime = get_runtime(chat_id)
+    tasks = parse_plan_tasks(content)
+    if not tasks:
+        send_msg(chat_id, "请发送任务清单，例如：\n/plan\n- 任务一\n- 任务二")
+        return
+    plan_id = hashlib.sha1(f"{chat_id}:{time.time()}:{content}".encode("utf-8")).hexdigest()[:10]
+    plan = PlanRuntime(
+        plan_id=plan_id,
+        chat_id=chat_id,
+        cwd=runtime.cwd,
+        tasks=[
+            plan_task_from_text(index, task, model)
+            for index, task in enumerate(tasks, 1)
+        ],
+        max_parallel=max(1, PLAN_MAX_PARALLEL),
+    )
+    with PLAN_LOCK:
+        PLANS[plan_id] = plan
+    runtime.active_plan_id = plan_id
+    runtime.plan_input_mode = False
+    save_runtime(chat_id)
+    send_plan_card(plan)
+    threading.Thread(target=plan_runner_loop, args=(plan_id,), name=f"plan-runner-{plan_id}", daemon=True).start()
+
+
+def latest_plan_for_chat(chat_id: str) -> Optional[PlanRuntime]:
+    with PLAN_LOCK:
+        plans = [plan for plan in PLANS.values() if plan.chat_id == chat_id]
+    if not plans:
+        return None
+    return max(plans, key=lambda p: p.created_at)
+
+
+def stop_plan(chat_id: str, plan_id: str = ""):
+    plan = find_plan(plan_id) if plan_id else latest_plan_for_chat(chat_id)
+    if not plan:
+        send_msg(chat_id, "当前没有可停止的 Plan。")
+        return
+    plan.stop_requested = True
+    update_plan_card(plan, force=True)
+
+
+def restart_bridge(chat_id: str):
+    logger.info("restart requested: chat_id=%s argv=%s", chat_id, sys.argv)
+    send_msg(chat_id, "正在重启 Lark-Codex WebSocket；请稍后发送 /status 确认。")
+    save_runtime(chat_id)
+    STOP_SCHEDULER.set()
+    stop_power_management()
+    time.sleep(0.5)
+    os.execv(sys.executable, [sys.executable, *sys.argv])
+
+
+def approve_plan_task(chat_id: str, plan_id: str, task_id: str, approved: bool) -> bool:
+    plan = find_plan(plan_id)
+    if not plan or plan.chat_id != chat_id:
+        return False
+    task = find_plan_task(plan, task_id)
+    if not task:
+        return False
+    if task.status != "approval":
+        task.output = f"子任务 {task_id} 当前不是等待审批状态。"
+        update_plan_card(plan, force=True)
+        return True
+    if approved:
+        task.status = "pending"
+        task.approved_retry = True
+        task.approval_required = False
+        task.output = (
+            f"审批已批准，将使用 `{APPROVED_CODEX_SANDBOX_MODE}` / "
+            f"`{APPROVED_CODEX_APPROVAL_POLICY}` 单次重试。"
+        )
+    else:
+        task.status = "cancelled"
+        task.output = "审批已拒绝，子任务已跳过。"
+        task.finished_at = time.time()
+    update_plan_card(plan, force=True)
+    return True
+
+
+def build_plan_diff_card(plan: PlanRuntime, task: PlanTask) -> dict[str, Any]:
+    cwd = plan_task_cwd(plan, task)
+    content = [
+        f"**Plan**：`{plan.plan_id}`",
+        f"**任务**：{task.task_id}. {task.title}",
+        f"**状态**：{task.status}",
+        f"**目录**：`{cwd}`",
+    ]
+    if task.branch_name:
+        content.append(f"**分支**：`{task.branch_name}`")
+    if task.test_summary:
+        content.extend(["", "**测试**", task.test_summary])
+    content.extend(["", "**Diff 摘要**", task.diff_summary or git_diff_summary(cwd)])
+    actions = [
+        compact_button("返回 Plan", "plan_refresh", {"chat_id": plan.chat_id, "plan_id": plan.plan_id}, "primary"),
+    ]
+    if task.status == "review":
+        actions.extend(
+            [
+                compact_button("批准提交", "plan_commit", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "task_id": task.task_id}, "primary"),
+                compact_button("跳过提交", "plan_skip_commit", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "task_id": task.task_id}, "danger"),
+            ]
+        )
+    return base_card("Plan Diff 审批", [md("\n".join(content)), action_row(actions)], "orange")
+
+
+def commit_plan_task(chat_id: str, plan_id: str, task_id: str, commit: bool) -> bool:
+    plan = find_plan(plan_id)
+    if not plan or plan.chat_id != chat_id:
+        return False
+    task = find_plan_task(plan, task_id)
+    if not task:
+        return False
+    if task.status != "review":
+        task.output = f"子任务 {task_id} 当前不是等待提交状态。"
+        update_plan_card(plan, force=True)
+        return True
+
+    cwd = plan_task_cwd(plan, task)
+    if not commit:
+        task.status = "done"
+        task.output = (
+            "已跳过提交；改动仍保留在子任务 worktree 中，可稍后手动处理。\n"
+            f"`{cwd}`"
+        )
+        update_plan_card(plan, force=True)
+        return True
+
+    code, output = git_command(cwd, ["add", "-A"], timeout=30)
+    if code != 0:
+        task.output = f"git add 失败，仍等待提交。\n{short_text(output, 1200)}"
+        update_plan_card(plan, force=True)
+        return True
+
+    message = task.commit_message or plan_commit_message(plan, task)
+    code, output = git_command(cwd, ["commit", "-m", message], timeout=60)
+    if code != 0:
+        if not has_git_changes(cwd):
+            task.status = "done"
+            task.output = "没有可提交的改动，已标记完成。"
+        else:
+            task.output = f"git commit 失败，仍等待提交。\n{short_text(output, 1600)}"
+        update_plan_card(plan, force=True)
+        return True
+
+    task.commit_hash = git_head(cwd)[:12]
+    task.status = "committed"
+    task.output = (
+        f"已提交到子任务分支 `{task.branch_name or '-'}`。\n"
+        f"Commit：`{task.commit_hash}`\n"
+        f"提交信息：`{message}`"
+    )
+    update_plan_card(plan, force=True)
+    return True
+
+
+def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False):
     runtime = get_runtime(chat_id)
     with LOCK:
         if runtime.process is not None and runtime.process.poll() is None:
@@ -1798,7 +2888,7 @@ def run_codex(chat_id: str, prompt: str):
             if not update_task_card(chat_id, status="运行中", detail=text, force=True):
                 send_msg(chat_id, text)
             return
-        cwd = runtime.cwd
+        cwd = runtime_task_cwd(runtime)
 
     if not cwd.is_dir():
         text = f"当前目录不存在：{cwd}\n请先用 /cd 切换到有效目录。"
@@ -1806,14 +2896,17 @@ def run_codex(chat_id: str, prompt: str):
             send_msg(chat_id, text)
         return
 
-    selected_conv = get_active_conversation(runtime.active_session_id)
-    if runtime.active_session_id and not is_resumable_conversation(selected_conv):
+    task_session_id = runtime.task_session_id or runtime.active_session_id
+    selected_conv = get_active_conversation(task_session_id)
+    if task_session_id and not is_resumable_conversation(selected_conv):
         notice = (
             "当前选中的是 Codex Desktop 会话，`codex exec` 不能可靠续写它。\n"
             "我会在同一目录启动一个新的 Lark bridge 会话，并把结果同步到这里。"
         )
         update_task_card(chat_id, status="准备中", detail=notice, force=True)
-        runtime.active_session_id = ""
+        runtime.task_session_id = ""
+        if runtime.active_session_id == task_session_id:
+            runtime.active_session_id = ""
         save_runtime(chat_id)
 
     last_message_path: Optional[Path] = None
@@ -1825,10 +2918,19 @@ def run_codex(chat_id: str, prompt: str):
         logger.exception("failed to create codex last message file")
 
     argv = codex_command(runtime, prompt, last_message_path)
+    selected_model = runtime.next_model or runtime.task_model or CODEX_MODEL
     runtime.next_approval_policy = ""
     runtime.next_sandbox_mode = ""
+    runtime.next_model = ""
     save_runtime(chat_id)
-    logger.info("starting codex: chat_id=%s cwd=%s resume=%s prompt=%r", chat_id, cwd, bool(runtime.active_session_id), short_text(prompt, 120))
+    logger.info(
+        "starting codex: chat_id=%s cwd=%s model=%s resume=%s prompt=%r",
+        chat_id,
+        cwd,
+        selected_model or "default",
+        bool(runtime.task_session_id),
+        short_text(prompt, 120),
+    )
     try:
         proc = subprocess.Popen(
             argv,
@@ -1859,7 +2961,12 @@ def run_codex(chat_id: str, prompt: str):
         runtime.process = proc
 
     logger.info("codex started: chat_id=%s pid=%s", chat_id, proc.pid)
-    update_task_card(chat_id, status="运行中", detail=f"Codex 已开始处理。\n目录：`{cwd}`", force=True)
+    update_task_card(
+        chat_id,
+        status="运行中",
+        detail=f"Codex 已开始处理。\n目录：`{cwd}`\n模型：`{model_label(selected_model)}`",
+        force=True,
+    )
     buffer: list[str] = []
     last_flush = time.time()
     start = time.time()
@@ -1898,7 +3005,14 @@ def run_codex(chat_id: str, prompt: str):
             kind, text = parse_codex_json_event(line)
             logger.debug("codex event: kind=%s text=%r", kind, short_text(text, 160))
             if kind == "session_id" and text:
+                runtime.task_session_id = text
                 runtime.active_session_id = text
+                if force_ordinary:
+                    def mutate(config: dict[str, Any]):
+                        sessions = set(str(item) for item in config.get("ordinary_sessions", []) if item)
+                        sessions.add(text)
+                        config["ordinary_sessions"] = sorted(sessions)
+                    update_classification(mutate)
                 save_runtime(chat_id)
                 continue
             if kind == "skip" or not text:
@@ -1938,12 +3052,7 @@ def run_codex(chat_id: str, prompt: str):
             logger.info("Lark approval wait finished: chat_id=%s decision=%s", chat_id, decision)
             if decision in ("approved", "rejected"):
                 return
-        if code == 0:
-            update_existing_task_card(chat_id, status=result_status, output=result_text)
-            if CODEX_SEND_STATUS_AFTER_TASK:
-                send_msg(chat_id, current_status_text(chat_id))
-        else:
-            update_existing_task_card(chat_id, status=result_status, output=result_text)
+        update_existing_task_card(chat_id, status=result_status, output=result_text)
     except Exception as e:
         logger.exception("run_codex exception")
         text = f"执行异常：{type(e).__name__}: {e}"
@@ -2024,17 +3133,22 @@ def approve_pending(chat_id: str, approval_id: str, approved: bool, notify: bool
 
     runtime = get_runtime(chat_id)
     if approval.session_id:
+        runtime.task_session_id = approval.session_id
         runtime.active_session_id = approval.session_id
     prompt = approval.original_prompt.strip() or runtime.task_prompt.strip() or approval.resume_prompt
+    model = approval.model or runtime.task_model
     prompt = (
         f"{prompt}\n\n"
         f"审批结果：用户已在 Lark 批准审批 {approval_id}。"
         "请继续执行原始任务，必要时重试刚才因权限、审批或 sandbox 限制失败的操作。"
     )
     runtime.task_prompt = prompt
+    runtime.task_model = model
+    runtime.task_cwd = approval.cwd or runtime.task_cwd
     runtime.task_status = "已批准，继续执行"
     runtime.next_approval_policy = APPROVED_CODEX_APPROVAL_POLICY
     runtime.next_sandbox_mode = APPROVED_CODEX_SANDBOX_MODE
+    runtime.next_model = model
     update_task_card(chat_id, status="已批准，继续执行", output=result_text, force=True)
     threading.Thread(target=run_codex, args=(chat_id, prompt), daemon=True).start()
 
@@ -2085,39 +3199,180 @@ def current_status_text(chat_id: str) -> str:
     return "\n".join(lines)
 
 
-def project_progress_text(project_key_value: str = "", chat_id: str = "") -> str:
-    projects, _ = build_index()
+def same_project_cwd(project: ProjectInfo, cwd_value: Any) -> bool:
+    if not project.cwd or not cwd_value:
+        return False
+    try:
+        return same_path(project.cwd, Path(str(cwd_value)))
+    except Exception:
+        return str(project.cwd) == str(cwd_value)
+
+
+def today_project_approvals(project: ProjectInfo, chat_id: str, today) -> list[PendingApproval]:
+    with LOCK:
+        approvals = list(PENDING_APPROVALS.values())
+    result = []
+    for approval in approvals:
+        if chat_id and approval.chat_id != chat_id:
+            continue
+        if datetime.fromtimestamp(approval.created_at).date() != today:
+            continue
+        if project.cwd and approval.cwd and not same_project_cwd(project, approval.cwd):
+            continue
+        result.append(approval)
+    return result
+
+
+def today_project_plans(project: ProjectInfo, chat_id: str, today) -> list[PlanRuntime]:
+    with PLAN_LOCK:
+        plans = list(PLANS.values())
+    result = []
+    for plan in plans:
+        if chat_id and plan.chat_id != chat_id:
+            continue
+        if datetime.fromtimestamp(plan.created_at).date() != today:
+            continue
+        if project.cwd and not same_path(project.cwd, plan.cwd):
+            continue
+        result.append(plan)
+    return result
+
+
+def clean_daily_item(line: str) -> str:
+    line = re.sub(r"^\s*[-*]\s+", "", line)
+    line = re.sub(r"^\s*\d+[\.)、]\s+", "", line)
+    line = re.sub(r"^#+\s+", "", line)
+    line = line.strip(" `")
+    line = re.sub(r"\s+", " ", line).strip()
+    return line
+
+
+def extract_daily_items(texts: list[str], keywords: tuple[str, ...], limit: int = 8) -> list[str]:
+    items: list[str] = []
+    seen: set[str] = set()
+    skip_prefixes = (
+        "我会",
+        "我把",
+        "我先",
+        "接下来",
+        "试跑",
+        "已验证",
+        "验证过",
+        "测试",
+        "当前",
+        "用法",
+        "例如",
+        "```",
+        "可发送",
+    )
+    for text in texts:
+        for raw_line in str(text or "").splitlines():
+            line = clean_daily_item(raw_line)
+            if len(line) < 6 or line.startswith(skip_prefixes):
+                continue
+            haystack = line.lower()
+            if not any(keyword.lower() in haystack for keyword in keywords):
+                continue
+            key = re.sub(r"\W+", "", haystack)
+            if key in seen:
+                continue
+            seen.add(key)
+            items.append(short_text(line, 120))
+            if len(items) >= limit:
+                return items
+    return items
+
+
+def daily_update_items(texts: list[str]) -> list[str]:
+    return extract_daily_items(
+        texts,
+        (
+            "新增",
+            "增加",
+            "添加",
+            "支持",
+            "实现",
+            "接入",
+            "升级",
+            "优化",
+            "更新",
+            "改进",
+            "完成",
+        ),
+    )
+
+
+def daily_bugfix_items(texts: list[str]) -> list[str]:
+    return extract_daily_items(
+        texts,
+        (
+            "修复",
+            "bug",
+            "错误",
+            "异常",
+            "失败",
+            "报错",
+            "权限",
+            "审批",
+            "无法",
+            "不对",
+            "问题",
+        ),
+    )
+
+
+def project_progress_text(project_key_value: str = "", chat_id: str = "", report_date=None) -> str:
+    report_date = report_date or datetime.now().date()
+    all_groups, _ = build_index(report_date=report_date)
+    projects = project_groups(all_groups)
     selected = [p for p in projects if not project_key_value or p.key == project_key_value]
     if not selected and chat_id:
         selected = [project_for_runtime(chat_id)]
     if not selected:
         return "没有找到项目进展。"
 
-    lines = ["**项目进展日报**"]
+    lines = [f"**项目进展日报（{report_date.strftime('%Y-%m-%d')}）**"]
     for project in selected[:10]:
-        stage, next_step = project_stage_text(project, chat_id)
-        desktop_count, bridge_count, other_count = project_source_counts(project)
-        today = datetime.now().date()
-        today_convs = [
+        report_convs = [
             c for c in project.conversations
-            if datetime.fromtimestamp(c.updated_at).date() == today
+            if datetime.fromtimestamp(c.updated_at).date() == report_date
         ]
-        source = today_convs or project.conversations[:3]
+        approvals = today_project_approvals(project, chat_id, report_date)
+        plans = today_project_plans(project, chat_id, report_date)
+        plan_failed_count = sum(1 for plan in plans for task in plan.tasks if task.status == "failed")
+        report_turns = sum(c.today_turns or c.turns for c in report_convs)
+        report_duration = sum(c.today_duration_seconds for c in report_convs)
+        if not report_duration:
+            report_duration = sum(
+                max(0, c.updated_at - parse_event_timestamp(c.created_at))
+                for c in report_convs
+                if parse_event_timestamp(c.created_at)
+            )
+        failed_count = sum(c.today_failed_count for c in report_convs) + plan_failed_count
+        summary_texts = []
+        for conv in report_convs:
+            summary_texts.extend(conv.today_assistant_messages[-4:] or [conv.last_assistant])
+        for plan in plans:
+            summary_texts.extend(task.output for task in plan.tasks if task.output)
+        update_items = daily_update_items(summary_texts)
+        bugfix_items = daily_bugfix_items(summary_texts)
+
         lines.append("")
         lines.append(f"### {project.name}")
         lines.append(f"**目录**：`{project.cwd or '无项目目录'}`")
-        lines.append(f"**阶段**：{stage}")
-        lines.append(
-            f"**今日活跃对话**：{len(today_convs)} / **总对话**：{len(project.conversations)} "
-            f"（Desktop {desktop_count} / Lark bridge {bridge_count} / 其他 {other_count}）"
-        )
-        for conv in source[:3]:
-            lines.append(
-                f"[{conversation_source_label(conv)}] {conv.title}："
-                f"{short_text(conv.last_assistant or conv.last_user, 140)}"
-            )
+        lines.append("**统计**")
+        lines.append(f"- 当日活跃对话数量：{len(report_convs)}")
+        lines.append(f"- 总会话次数：{report_turns}")
+        lines.append(f"- 总耗时：{format_duration(report_duration)}")
+        lines.append(f"- 审批总数：{len(approvals)}")
+        lines.append(f"- 失败总数：{failed_count}")
+        lines.append("")
+        lines.append(f"**当日更新或新增功能（{len(update_items)}）**")
+        lines.extend([f"- {item}" for item in update_items] or ["- 暂未识别到明确的功能更新。"])
+        lines.append("")
+        lines.append(f"**当日修复 Bug（{len(bugfix_items)}）**")
+        lines.extend([f"- {item}" for item in bugfix_items] or ["- 暂未识别到明确的 Bug 修复。"])
         lines.extend(format_git_summary(project.cwd, limit=5))
-        lines.append(f"**下一步**：{next_step}")
     return "\n".join(lines)
 
 
@@ -2274,9 +3529,210 @@ def handle_cd(chat_id: str, path_text: str):
         return
 
     runtime.cwd = path
-    runtime.active_project_key = project_key(path)
+    root = find_project_root(path)
+    runtime.active_project_key = project_key(root or path)
     save_runtime(chat_id)
     send_msg(chat_id, f"已切换目录：{path}")
+
+
+def mark_project_path(chat_id: str, path_text: str = ""):
+    runtime = get_runtime(chat_id)
+    path = Path(path_text).expanduser() if path_text else runtime.cwd
+    if not path.is_absolute():
+        path = runtime.cwd / path
+    path = normalize_path(path)
+    if not path.exists() or not path.is_dir():
+        send_msg(chat_id, f"不是有效目录：{path}")
+        return
+
+    def mutate(config: dict[str, Any]):
+        project_paths = config.setdefault("project_paths", {})
+        project_paths[str(path)] = project_name(path)
+
+    update_classification(mutate)
+    runtime.active_project_key = project_key(path)
+    save_runtime(chat_id)
+    send_msg(chat_id, f"已标记为项目：{path}")
+
+
+def mark_chat_session(chat_id: str, session_id: str = ""):
+    runtime = get_runtime(chat_id)
+    session_id = session_id.strip() or runtime.active_session_id
+    if not session_id:
+        send_msg(chat_id, "用法：/mark-chat <session_id>，或先打开一个对话后发送 /mark-chat")
+        return
+
+    def mutate(config: dict[str, Any]):
+        sessions = set(str(item) for item in config.get("ordinary_sessions", []) if item)
+        sessions.add(session_id)
+        config["ordinary_sessions"] = sorted(sessions)
+
+    update_classification(mutate)
+    send_msg(chat_id, f"已标记为普通对话：{session_id}")
+
+
+def mark_project_from_session(chat_id: str, session_id: str) -> bool:
+    _, conversations = build_index()
+    conv = conversations.get(session_id)
+    if not conv or not conv.cwd:
+        return False
+    path = find_project_root(conv.cwd) or normalize_path(conv.cwd)
+    if is_generic_conversation_dir(path):
+        return False
+
+    def mutate(config: dict[str, Any]):
+        project_paths = config.setdefault("project_paths", {})
+        project_paths[str(path)] = project_name(path)
+        sessions = [item for item in config.get("ordinary_sessions", []) if item != session_id]
+        config["ordinary_sessions"] = sessions
+
+    update_classification(mutate)
+    runtime = get_runtime(chat_id)
+    runtime.active_project_key = project_key(path)
+    save_runtime(chat_id)
+    return True
+
+
+def create_project(chat_id: str, name: str):
+    name = name.strip()
+    if not name:
+        send_msg(chat_id, "用法：/project=new <项目名称>")
+        return
+    root = normalize_path(CODEX_PROJECTS_ROOT)
+    path = root / slugify_name(name)
+    suffix = 2
+    while path.exists():
+        path = root / f"{slugify_name(name)}-{suffix}"
+        suffix += 1
+    path.mkdir(parents=True, exist_ok=False)
+    readme = path / "README.md"
+    readme.write_text(f"# {name}\n\nCreated by Lark-Codex.\n", encoding="utf-8")
+
+    def mutate(config: dict[str, Any]):
+        project_paths = config.setdefault("project_paths", {})
+        project_paths[str(path)] = name
+
+    update_classification(mutate)
+    runtime = get_runtime(chat_id)
+    runtime.cwd = path
+    runtime.active_project_key = project_key(path)
+    runtime.active_session_id = ""
+    save_runtime(chat_id)
+    send_msg(chat_id, f"已新建项目：{name}\n目录：`{path}`\n后续指令会在该项目目录中执行。")
+
+
+def start_new_chat(chat_id: str, prompt: str):
+    prompt = prompt.strip()
+    if not prompt:
+        send_msg(chat_id, "用法：/chat=new <主题或指令>")
+        return
+    runtime = get_runtime(chat_id)
+    runtime.active_session_id = ""
+    runtime.task_session_id = ""
+    save_runtime(chat_id)
+    send_task_card(chat_id, prompt, "等待启动")
+    threading.Thread(target=run_codex, args=(chat_id, prompt, True), daemon=True).start()
+
+
+def start_new_conversation(chat_id: str, prompt: str):
+    prompt = prompt.strip()
+    if not prompt:
+        send_msg(chat_id, "用法：/convos=new <指令>")
+        return
+    runtime = get_runtime(chat_id)
+    runtime.active_session_id = ""
+    runtime.task_session_id = ""
+    save_runtime(chat_id)
+    send_task_card(chat_id, prompt, "等待启动")
+    threading.Thread(target=run_codex, args=(chat_id, prompt, False), daemon=True).start()
+
+
+def archive_current_project(chat_id: str, target: str = ""):
+    runtime = get_runtime(chat_id)
+    project: Optional[ProjectInfo] = None
+    if target.strip():
+        try:
+            index = int(target.strip()) - 1
+            projects, _ = build_index()
+            project_list = project_groups(projects)
+            if 0 <= index < len(project_list):
+                project = project_list[index]
+        except ValueError:
+            path = Path(target).expanduser()
+            if not path.is_absolute():
+                path = runtime.cwd / path
+            root = find_project_root(path) or normalize_path(path)
+            project = ProjectInfo(key=project_key(root), name=project_display_name(root), cwd=root)
+    if not project:
+        project = project_for_runtime(chat_id)
+    if not project.cwd or not project.is_project:
+        send_msg(chat_id, "当前没有可归档的项目。")
+        return
+    archive_project_path(project.cwd)
+    if runtime.active_project_key == project.key:
+        runtime.active_project_key = ""
+    save_runtime(chat_id)
+    send_msg(chat_id, f"已归档项目：{project.name}\n目录：`{project.cwd}`")
+
+
+def archive_current_session(chat_id: str, target: str = "", label: str = "会话"):
+    runtime = get_runtime(chat_id)
+    session_id = target.strip() or runtime.active_session_id or runtime.task_session_id
+    if not session_id:
+        send_msg(chat_id, f"当前没有可归档的{label}。")
+        return
+    if session_id.isdigit():
+        index = int(session_id) - 1
+        groups, _ = build_index()
+        chats = ordinary_chat_groups(groups)
+        if 0 <= index < len(chats):
+            session_id = chats[index].conversations[0].session_id
+    archive_session_id(session_id)
+    if runtime.active_session_id == session_id:
+        runtime.active_session_id = ""
+    if runtime.task_session_id == session_id:
+        runtime.task_session_id = ""
+    save_runtime(chat_id)
+    send_msg(chat_id, f"已归档{label}：`{session_id}`")
+
+
+def parse_entity_command(content: str):
+    match = re.match(r"^/(project|chat|convos?|对话|项目)\s*=\s*(new|archive|achive)\b(.*)$", content.strip(), flags=re.IGNORECASE | re.DOTALL)
+    if not match:
+        return "", "", ""
+    entity = match.group(1).lower()
+    action = match.group(2).lower()
+    rest = strip_command_separator(match.group(3) or "")
+    if entity == "项目":
+        entity = "project"
+    if entity == "对话":
+        entity = "convos"
+    if entity == "convo":
+        entity = "convos"
+    if action == "achive":
+        action = "archive"
+    return entity, action, rest
+
+
+def handle_entity_command(chat_id: str, content: str) -> bool:
+    entity, action, rest = parse_entity_command(content)
+    if not entity:
+        return False
+    if entity == "project" and action == "new":
+        create_project(chat_id, rest)
+    elif entity == "project" and action == "archive":
+        archive_current_project(chat_id, rest)
+    elif entity == "chat" and action == "new":
+        start_new_chat(chat_id, rest)
+    elif entity == "chat" and action == "archive":
+        archive_current_session(chat_id, rest, label="普通对话")
+    elif entity == "convos" and action == "new":
+        start_new_conversation(chat_id, rest)
+    elif entity == "convos" and action == "archive":
+        archive_current_session(chat_id, rest, label="会话")
+    else:
+        send_msg(chat_id, "不支持的操作。")
+    return True
 
 
 def send_help(chat_id: str):
@@ -2288,17 +3744,26 @@ def send_help(chat_id: str):
                 "/panel 打开 Codex 看板（默认收起项目列表）",
                 "/projects 打开项目面板（默认收起列表）",
                 "/projects 展开 展开项目列表",
+                "/chats 打开普通对话列表",
                 "/convos 打开当前项目对话面板（默认收起列表）",
                 "/convos 展开 展开当前项目对话列表",
                 "/status 查看当前项目状态",
                 "/daily 输出项目进展日报",
+                "/daily=YYYY-MM-DD 输出指定日期项目进展日报",
+                "/model=<模型名> +<指令> 使用指定模型执行一次，例如 /model=gpt-5.5 +修复 README",
+                "/plan 进入并行计划模式；也可发送 /plan 后跟任务清单直接执行",
+                "/plan status 刷新最近的计划面板",
+                "/plan stop 停止最近的计划",
                 "/cd <目录> 切换工作目录",
                 "/project <编号> 打开面板中的项目",
                 "/latest <编号> 打开面板中项目的最新对话",
                 "/conv <session_id> 切换对话",
+                "/mark-project [目录] 手动标记项目目录",
+                "/mark-chat [session_id] 手动标记普通对话",
                 "/approve <id> 批准待审批",
                 "/reject <id> 拒绝待审批",
                 "/stop 停止当前任务",
+                "/restart 重启 Lark-Codex WebSocket 脚本",
                 "其他文本会继续当前对话；未选对话时会在当前项目中新建对话。",
             ]
         ),
@@ -2317,6 +3782,7 @@ def open_project_by_number(chat_id: str, number_text: str):
         return
 
     projects, _ = build_index()
+    projects = project_groups(projects)
     if index < 0 or index >= min(len(projects), MAX_PROJECTS_IN_PANEL):
         send_msg(chat_id, f"项目编号超出范围。当前面板显示 1-{min(len(projects), MAX_PROJECTS_IN_PANEL)}。")
         return
@@ -2331,6 +3797,7 @@ def open_latest_by_number(chat_id: str, number_text: str):
         return
 
     projects, _ = build_index()
+    projects = project_groups(projects)
     if index < 0 or index >= min(len(projects), MAX_PROJECTS_IN_PANEL):
         send_msg(chat_id, f"项目编号超出范围。当前面板显示 1-{min(len(projects), MAX_PROJECTS_IN_PANEL)}。")
         return
@@ -2345,6 +3812,18 @@ def on_text(chat_id: str, content: str):
     content = normalize_text_command(content)
     content = content.strip()
     if not content:
+        return
+    selected_model, content = parse_model_prefix(content)
+    if selected_model and not content:
+        send_msg(chat_id, "用法：`/model=<模型名> +具体指令`，例如 `/model=gpt-5.5 +修复 README`。")
+        return
+    runtime = get_runtime(chat_id)
+
+    if runtime.plan_input_mode and not content.startswith("/"):
+        start_plan(chat_id, content, selected_model)
+        return
+
+    if handle_entity_command(chat_id, content):
         return
 
     pending = [
@@ -2376,6 +3855,12 @@ def on_text(chat_id: str, content: str):
     if content in ("/projects 展开", "/项目 展开"):
         send_panel(chat_id, expanded=True)
         return
+    if content in ("/chats", "/普通对话"):
+        send_card(chat_id, build_chats_card(chat_id, expanded=True))
+        return
+    if content in ("/chats 收起", "/普通对话 收起"):
+        send_card(chat_id, build_chats_card(chat_id, expanded=False))
+        return
     if content in ("/convos", "/对话"):
         project = current_or_latest_project(chat_id)
         if not project:
@@ -2393,15 +3878,54 @@ def on_text(chat_id: str, content: str):
     if content in ("/status", "/状态"):
         send_msg(chat_id, current_status_text(chat_id))
         return
-    if content in ("/daily", "/日报"):
-        runtime = get_runtime(chat_id)
-        send_msg(chat_id, project_progress_text(runtime.active_project_key, chat_id))
+    report_date, is_daily_command = parse_daily_command(content)
+    if is_daily_command:
+        if report_date is None:
+            send_msg(chat_id, "日期格式不正确。用法：`/daily=2026-06-01`")
+            return
+        send_msg(chat_id, project_progress_text(runtime.active_project_key, chat_id, report_date=report_date))
+        return
+    if content == "/plan":
+        runtime.plan_input_mode = True
+        save_runtime(chat_id)
+        send_msg(
+            chat_id,
+            "已进入 Plan 模式。请发送任务清单，例如：\n"
+            "- 检查 README\n"
+            "- 修复审批流程\n"
+            "- 运行测试\n\n"
+            f"当前并发上限：{PLAN_MAX_PARALLEL}。也可以直接发送 `/plan` 后跟任务清单。",
+        )
+        return
+    if content.startswith("/plan ") or content.startswith("/plan\n"):
+        plan_content = content[5:].strip()
+        normalized_plan_command = re.sub(r"\s+", " ", plan_content).strip().lower()
+        if normalized_plan_command in ("status", "refresh", "状态", "刷新"):
+            plan = latest_plan_for_chat(chat_id)
+            if plan:
+                send_plan_card(plan)
+            else:
+                send_msg(chat_id, "当前还没有 Plan。")
+            return
+        if normalized_plan_command in ("stop", "停止"):
+            stop_plan(chat_id)
+            return
+        start_plan(chat_id, plan_content, selected_model)
         return
     if content == "/stop":
         stop_codex(chat_id)
         return
+    if content == "/restart":
+        restart_bridge(chat_id)
+        return
     if content.startswith("/cd "):
         handle_cd(chat_id, content[4:].strip())
+        return
+    if content == "/mark-project" or content.startswith("/mark-project "):
+        mark_project_path(chat_id, content[len("/mark-project"):].strip())
+        return
+    if content == "/mark-chat" or content.startswith("/mark-chat "):
+        mark_chat_session(chat_id, content[len("/mark-chat"):].strip())
         return
     if content.startswith("/conv "):
         select_conversation(chat_id, content[6:].strip())
@@ -2422,7 +3946,7 @@ def on_text(chat_id: str, content: str):
         send_msg(chat_id, "未知指令。发送 /help 查看可用指令。")
         return
 
-    send_task_card(chat_id, content, "等待启动")
+    send_task_card(chat_id, content, "等待启动", selected_model)
     threading.Thread(target=run_codex, args=(chat_id, content), daemon=True).start()
 
 
@@ -2468,6 +3992,8 @@ def handle_card_action(action: dict[str, Any]):
     try:
         if name == "dashboard":
             return action_card(build_dashboard_card(chat_id, expanded=bool(action.get("expanded"))))
+        elif name == "chats":
+            return action_card(build_chats_card(chat_id, expanded=bool(action.get("expanded", True))))
         elif name == "project":
             return action_card(
                 build_project_card(
@@ -2484,6 +4010,10 @@ def handle_card_action(action: dict[str, Any]):
             return action_toast("这个项目没有对话。", "error")
         elif name in ("conversation", "conversation_status"):
             return action_card(build_conversation_card(chat_id, action.get("session_id", "")))
+        elif name == "mark_project_from_chat":
+            if not mark_project_from_session(chat_id, action.get("session_id", "")):
+                return action_toast("无法标记项目。", "error")
+            return action_card(build_chats_card(chat_id, expanded=True), "已标为项目")
         elif name == "status":
             return action_card(
                 build_report_card(
@@ -2510,6 +4040,46 @@ def handle_card_action(action: dict[str, Any]):
         elif name == "stop":
             stop_codex(chat_id)
             return action_card(build_task_card(chat_id), "已停止")
+        elif name == "restart":
+            threading.Thread(target=restart_bridge, args=(chat_id,), name="restart-bridge", daemon=True).start()
+            return action_toast("正在重启")
+        elif name == "plan_refresh":
+            plan = find_plan(action.get("plan_id", "")) or latest_plan_for_chat(chat_id)
+            if not plan:
+                return action_toast("找不到 Plan。", "error")
+            return action_card(build_plan_card(plan), "已刷新")
+        elif name == "plan_stop":
+            plan = find_plan(action.get("plan_id", "")) or latest_plan_for_chat(chat_id)
+            if not plan:
+                return action_toast("找不到 Plan。", "error")
+            plan.stop_requested = True
+            return action_card(build_plan_card(plan), "已停止")
+        elif name == "plan_approve":
+            if not approve_plan_task(chat_id, action.get("plan_id", ""), action.get("task_id", ""), True):
+                return action_toast("找不到 Plan 子任务。", "error")
+            plan = find_plan(action.get("plan_id", ""))
+            return action_card(build_plan_card(plan), "已批准") if plan else action_toast("已批准")
+        elif name == "plan_reject":
+            if not approve_plan_task(chat_id, action.get("plan_id", ""), action.get("task_id", ""), False):
+                return action_toast("找不到 Plan 子任务。", "error")
+            plan = find_plan(action.get("plan_id", ""))
+            return action_card(build_plan_card(plan), "已拒绝") if plan else action_toast("已拒绝")
+        elif name == "plan_diff":
+            plan = find_plan(action.get("plan_id", "")) or latest_plan_for_chat(chat_id)
+            task = find_plan_task(plan, action.get("task_id", "")) if plan else None
+            if not plan or not task:
+                return action_toast("找不到 Plan 子任务。", "error")
+            return action_card(build_plan_diff_card(plan, task), "已打开 Diff")
+        elif name == "plan_commit":
+            if not commit_plan_task(chat_id, action.get("plan_id", ""), action.get("task_id", ""), True):
+                return action_toast("找不到 Plan 子任务。", "error")
+            plan = find_plan(action.get("plan_id", ""))
+            return action_card(build_plan_card(plan), "已提交") if plan else action_toast("已提交")
+        elif name == "plan_skip_commit":
+            if not commit_plan_task(chat_id, action.get("plan_id", ""), action.get("task_id", ""), False):
+                return action_toast("找不到 Plan 子任务。", "error")
+            plan = find_plan(action.get("plan_id", ""))
+            return action_card(build_plan_card(plan), "已跳过提交") if plan else action_toast("已跳过提交")
         elif name == "approve":
             approve_pending(chat_id, action.get("approval_id", ""), True, notify=False)
             return action_card(build_task_card(chat_id), "已批准")
@@ -2627,6 +4197,7 @@ def main():
     print(f"默认目录：{DEFAULT_CWD}")
     print(f"Codex 会话目录：{CODEX_SESSIONS_DIR}")
     print("Lark 卡片回调：使用 WebSocket 长连接事件 card.action.trigger")
+    send_startup_welcome()
     cli.start()
 
 
