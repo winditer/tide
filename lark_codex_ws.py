@@ -186,6 +186,20 @@ class CodexTaskRuntime:
 
 
 @dataclass
+class DesktopSyncRuntime:
+    chat_id: str
+    session_id: str
+    cwd: str
+    title: str = ""
+    message_id: str = ""
+    prompt: str = ""
+    status: str = "监听中"
+    output: str = ""
+    updated_at: float = field(default_factory=time.time)
+    last_card_update_at: float = 0
+
+
+@dataclass
 class PendingApproval:
     approval_id: str
     chat_id: str
@@ -252,6 +266,7 @@ class PlanRuntime:
 
 RUNTIMES: dict[str, ChatRuntime] = {}
 TASKS: dict[str, CodexTaskRuntime] = {}
+DESKTOP_SYNCS: dict[tuple[str, str], DesktopSyncRuntime] = {}
 PENDING_APPROVALS: dict[str, PendingApproval] = {}
 PENDING_RESTARTS: dict[str, PendingRestart] = {}
 PLANS: dict[str, PlanRuntime] = {}
@@ -2111,6 +2126,112 @@ def update_task_card(chat_id: str, status: str = "", output: str = "", detail: s
     return updated
 
 
+def desktop_sync_key(chat_id: str, session_id: str) -> tuple[str, str]:
+    return (chat_id, session_id)
+
+
+def get_desktop_sync(chat_id: str, conv: ConversationInfo, runtime_cwd: Path) -> DesktopSyncRuntime:
+    key = desktop_sync_key(chat_id, conv.session_id)
+    with LOCK:
+        sync = DESKTOP_SYNCS.get(key)
+        if sync is None:
+            sync = DesktopSyncRuntime(
+                chat_id=chat_id,
+                session_id=conv.session_id,
+                cwd=str(conv.cwd or runtime_cwd),
+                title=conv.title,
+                prompt=conv.last_user,
+                output=conv.last_assistant,
+                updated_at=conv.updated_at or time.time(),
+            )
+            DESKTOP_SYNCS[key] = sync
+        else:
+            sync.cwd = str(conv.cwd or runtime_cwd)
+            sync.title = conv.title or sync.title
+            if conv.last_user:
+                sync.prompt = conv.last_user
+            if conv.last_assistant and not sync.output:
+                sync.output = conv.last_assistant
+            sync.updated_at = max(sync.updated_at, conv.updated_at or time.time())
+    return sync
+
+
+def build_desktop_sync_card(sync: DesktopSyncRuntime) -> dict[str, Any]:
+    template = "green" if sync.status == "完成" else "blue"
+    elements: list[dict[str, Any]] = [
+        fields(
+            [
+                ("状态", sync.status),
+                ("来源", "Codex Desktop"),
+                ("目录", short_text(sync.cwd, 42)),
+                ("更新时间", format_time(sync.updated_at)),
+            ]
+        ),
+        md(f"**标题**\n{short_text(sync.title, 160) or 'Codex Desktop 会话'}"),
+        md(f"**Session**\n`{sync.session_id}`"),
+    ]
+    if sync.prompt:
+        elements.append(md(f"**指令**\n{final_reply_text(sync.prompt, 900)}"))
+    if sync.output:
+        elements.extend([divider(), md(f"**最新结果**\n{final_reply_text(sync.output, 2600)}")])
+    elements.append(
+        action_row(
+            [
+                compact_button("刷新", "desktop_refresh", {"chat_id": sync.chat_id, "session_id": sync.session_id}, "primary"),
+                compact_button("状态", "status", {"chat_id": sync.chat_id}),
+                compact_button("打开会话", "conversation", {"chat_id": sync.chat_id, "session_id": sync.session_id}),
+            ]
+        )
+    )
+    return base_card("Codex Desktop 指令", elements, template)
+
+
+def update_desktop_sync_card(
+    chat_id: str,
+    conv: ConversationInfo,
+    runtime_cwd: Path,
+    kind: str = "",
+    text: str = "",
+    force: bool = False,
+) -> bool:
+    sync = get_desktop_sync(chat_id, conv, runtime_cwd)
+    if kind == "user" and text:
+        sync.prompt = text
+        sync.status = "用户输入"
+    elif kind == "agent" and text:
+        sync.output = text
+        sync.status = "进行中"
+    elif kind == "complete":
+        if text:
+            sync.output = text
+        sync.status = "完成"
+    elif not sync.status:
+        sync.status = "监听中"
+    sync.updated_at = time.time()
+
+    now = time.time()
+    if not force and now - sync.last_card_update_at < 2:
+        return bool(sync.message_id)
+    sync.last_card_update_at = now
+    card = build_desktop_sync_card(sync)
+    if sync.message_id and update_card(sync.message_id, card):
+        return True
+    if sync.message_id:
+        logger.warning(
+            "desktop sync card update failed; sending a new card: chat_id=%s session_id=%s message_id=%s",
+            chat_id,
+            conv.session_id,
+            sync.message_id,
+        )
+        sync.message_id = ""
+    message_id = send_card(chat_id, card)
+    if message_id:
+        sync.message_id = message_id
+        logger.info("desktop sync card sent: chat_id=%s session_id=%s message_id=%s", chat_id, conv.session_id, message_id)
+        return True
+    return False
+
+
 def parse_plan_tasks(content: str) -> list[str]:
     text = re.sub(r"^/plan\b", "", content.strip(), flags=re.IGNORECASE).strip()
 
@@ -3942,12 +4063,21 @@ def session_watcher_loop():
                         SESSION_SYNC_SEEN.add(fingerprint)
                         if len(SESSION_SYNC_SEEN) > 2000:
                             SESSION_SYNC_SEEN.clear()
-                        if kind == "user":
-                            send_msg(chat_id, f"Codex Desktop 新消息：\n{text}")
-                        elif kind == "agent":
-                            send_msg(chat_id, f"Codex Desktop 进展：\n{text}")
-                        elif kind == "complete":
-                            send_msg(chat_id, synced_task_complete_text(conv, conv.cwd or runtime_cwd, text))
+                        if kind in ("user", "agent", "complete"):
+                            if not update_desktop_sync_card(
+                                chat_id,
+                                conv,
+                                runtime_cwd,
+                                kind=kind,
+                                text=text,
+                                force=(kind == "complete"),
+                            ):
+                                logger.warning(
+                                    "desktop sync card update failed: chat_id=%s session_id=%s kind=%s",
+                                    chat_id,
+                                    conv.session_id,
+                                    kind,
+                                )
         except Exception:
             logger.exception("session watcher failed")
         STOP_SCHEDULER.wait(SESSION_WATCH_INTERVAL_SECONDS)
@@ -4581,6 +4711,17 @@ def handle_card_action(action: dict[str, Any]):
             if action.get("render") == "callback":
                 return action_card(build_task_card(chat_id, task_id=task_id), "已返回任务卡")
             return task_card_patch_response(chat_id, task_id, "已刷新")
+        elif name == "desktop_refresh":
+            session_id = action.get("session_id", "")
+            conv = get_active_conversation(session_id)
+            if not is_desktop_conversation(conv):
+                return action_toast("找不到 Codex Desktop 会话。", "error")
+            sync = get_desktop_sync(chat_id, conv, get_runtime(chat_id).cwd)
+            sync.prompt = conv.last_user or sync.prompt
+            sync.output = conv.last_assistant or sync.output
+            sync.status = "完成" if conv.status == "完成" else "监听中"
+            sync.updated_at = conv.updated_at or time.time()
+            return action_card(build_desktop_sync_card(sync), "已刷新")
         elif name == "stop":
             task_id = action.get("task_id", "")
             if stop_codex(chat_id, task_id):
