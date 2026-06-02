@@ -113,14 +113,18 @@ class ConversationInfo:
     updated_at: float = 0
     title: str = "未命名对话"
     last_user: str = ""
+    last_user_at: float = 0
     last_assistant: str = ""
+    last_assistant_at: float = 0
     status: str = "未知"
     turns: int = 0
     duration_seconds: float = 0
     today_turns: int = 0
     today_duration_seconds: float = 0
     today_failed_count: int = 0
+    today_approval_count: int = 0
     today_assistant_messages: list[str] = field(default_factory=list)
+    today_activity_count: int = 0
     originator: str = ""
     source: str = ""
 
@@ -178,6 +182,7 @@ class CodexTaskRuntime:
     sandbox_mode: str = ""
     approved_retry: bool = False
     force_ordinary: bool = False
+    last_message_path: str = ""
 
 
 @dataclass
@@ -850,14 +855,17 @@ def looks_failed(text: str) -> bool:
     return any(signal.lower() in haystack for signal in signals)
 
 
+def looks_approval_related(text: str) -> bool:
+    value = str(text or "")
+    if should_create_approval(value):
+        return True
+    return any(signal in value for signal in ("**待审批**", "**审批结果**", "审批 ID"))
+
+
 def iter_session_files(report_date=None) -> list[Path]:
     if not CODEX_SESSIONS_DIR.exists():
         return []
-    if report_date:
-        date_dir = CODEX_SESSIONS_DIR / report_date.strftime("%Y") / report_date.strftime("%m") / report_date.strftime("%d")
-        files = list(date_dir.glob("*.jsonl")) if date_dir.exists() else []
-    else:
-        files = list(CODEX_SESSIONS_DIR.glob("**/*.jsonl"))
+    files = list(CODEX_SESSIONS_DIR.glob("**/*.jsonl"))
     files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return files[:MAX_SESSION_FILES]
 
@@ -886,6 +894,39 @@ def parse_conversation(path: Path, report_date=None) -> Optional[ConversationInf
     meaningful_users: list[str] = []
     assistant_messages: list[str] = []
     report_date = report_date or datetime.now().date()
+    today_user_fingerprints: set[str] = set()
+    today_failure_fingerprints: set[str] = set()
+    today_approval_fingerprints: set[str] = set()
+
+    def record_today_activity(ts: float):
+        if event_date(ts) == report_date:
+            info.today_activity_count += 1
+
+    def record_today_user(text: str, ts: float):
+        if event_date(ts) != report_date:
+            return
+        key = re.sub(r"\s+", " ", text).strip()
+        if not key:
+            return
+        fingerprint = hashlib.sha1(key.encode("utf-8")).hexdigest()
+        if fingerprint in today_user_fingerprints:
+            return
+        today_user_fingerprints.add(fingerprint)
+        info.today_turns += 1
+
+    def record_today_result_signals(text: str, ts: float):
+        if event_date(ts) != report_date or not text:
+            return
+        key = re.sub(r"\s+", " ", text).strip()
+        if not key:
+            return
+        fingerprint = hashlib.sha1(key.encode("utf-8")).hexdigest()
+        if looks_failed(text) and fingerprint not in today_failure_fingerprints:
+            today_failure_fingerprints.add(fingerprint)
+            info.today_failed_count += 1
+        if looks_approval_related(text) and fingerprint not in today_approval_fingerprints:
+            today_approval_fingerprints.add(fingerprint)
+            info.today_approval_count += 1
 
     try:
         with path.open("r", encoding="utf-8", errors="ignore") as f:
@@ -917,6 +958,8 @@ def parse_conversation(path: Path, report_date=None) -> Optional[ConversationInf
 
                 if typ == "event_msg":
                     event_type = payload.get("type")
+                    if event_type in ("task_started", "task_complete", "user_message", "agent_message"):
+                        record_today_activity(ts)
                     if event_type == "task_complete":
                         info.status = "完成"
                         duration_ms = payload.get("duration_ms")
@@ -926,10 +969,12 @@ def parse_conversation(path: Path, report_date=None) -> Optional[ConversationInf
                             if is_report_date:
                                 info.today_duration_seconds += duration
                         last_message = payload.get("last_agent_message", "")
+                        if last_message:
+                            info.last_assistant = last_message
+                            info.last_assistant_at = ts
                         if is_report_date and last_message:
                             info.today_assistant_messages.append(last_message)
-                            if looks_failed(last_message):
-                                info.today_failed_count += 1
+                            record_today_result_signals(last_message, ts)
                     elif event_type == "task_started":
                         info.status = "运行过"
                     elif event_type == "user_message":
@@ -937,15 +982,17 @@ def parse_conversation(path: Path, report_date=None) -> Optional[ConversationInf
                         if text and not text.startswith("<"):
                             meaningful_users.append(text)
                             info.last_user = text
-                            if is_report_date:
-                                info.today_turns += 1
+                            info.last_user_at = ts
+                            record_today_user(text, ts)
                     elif event_type == "agent_message":
                         text = payload.get("message", "")
                         if text:
                             assistant_messages.append(text)
                             info.last_assistant = text
+                            info.last_assistant_at = ts
                             if is_report_date and payload.get("phase") != "commentary":
                                 info.today_assistant_messages.append(text)
+                                record_today_result_signals(text, ts)
                     continue
 
                 if typ != "response_item" or not isinstance(payload, dict):
@@ -960,11 +1007,17 @@ def parse_conversation(path: Path, report_date=None) -> Optional[ConversationInf
                 if role == "user":
                     meaningful_users.append(text)
                     info.last_user = text
+                    info.last_user_at = ts
+                    record_today_activity(ts)
+                    record_today_user(text, ts)
                 elif role == "assistant":
                     assistant_messages.append(text)
                     info.last_assistant = text
+                    info.last_assistant_at = ts
+                    record_today_activity(ts)
                     if is_report_date and obj.get("phase") != "commentary":
                         info.today_assistant_messages.append(text)
+                        record_today_result_signals(text, ts)
     except OSError:
         return None
 
@@ -988,6 +1041,8 @@ def build_index(report_date=None) -> tuple[list[ProjectInfo], dict[str, Conversa
     for path in iter_session_files(report_date=report_date):
         conv = parse_conversation(path, report_date=metric_date)
         if not conv:
+            continue
+        if report_date and conv.today_activity_count <= 0:
             continue
         if not LARK_CODEX_SHOW_ARCHIVED and is_session_archived(conv.session_id):
             continue
@@ -2003,6 +2058,8 @@ def update_task_card(chat_id: str, status: str = "", output: str = "", detail: s
         if task:
             task.output = output_text
         runtime.task_output = output_text
+    elif force and task:
+        refresh_task_latest_reply(chat_id, task)
     now = time.time()
     last_update = task.last_card_update_at if task else runtime.last_task_card_update_at
     message_id = task.message_id if task else runtime.task_message_id
@@ -2534,6 +2591,42 @@ def find_conversation_for_run(runtime: ChatRuntime, cwd: Path, started_at: float
         if fallback is None or conv.updated_at > fallback.updated_at:
             fallback = conv
     return fallback
+
+
+def refresh_task_latest_reply(chat_id: str, task: CodexTaskRuntime) -> bool:
+    runtime = get_runtime(chat_id)
+    latest = read_last_message_file(Path(task.last_message_path)) if task.last_message_path else ""
+    source = "last_message_file" if latest else ""
+
+    if not latest:
+        conv = find_conversation_for_run(runtime, task.cwd, task.started_at, task.prompt)
+        if conv:
+            if conv.session_id:
+                task.session_id = conv.session_id
+                runtime.task_session_id = conv.session_id
+                if runtime.active_session_id != conv.session_id:
+                    runtime.active_session_id = conv.session_id
+            if conv.last_assistant_at >= max(task.started_at - 1, conv.last_user_at):
+                latest = conv.last_assistant.strip()
+            source = "session_file" if latest else ""
+
+    if not latest:
+        return False
+
+    output_text = final_reply_text(latest, 5000)
+    if output_text == task.output:
+        return False
+
+    task.output = output_text
+    runtime.task_output = output_text
+    logger.info(
+        "task latest reply refreshed: chat_id=%s task_id=%s source=%s",
+        chat_id,
+        task.task_id,
+        source,
+    )
+    save_runtime(chat_id)
+    return True
 
 
 def latest_panel_conversation(index: int = 0) -> Optional[ConversationInfo]:
@@ -3169,6 +3262,7 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
         fd, name = tempfile.mkstemp(prefix="lark-codex-last-", suffix=".txt", dir="/tmp")
         os.close(fd)
         last_message_path = Path(name)
+        task.last_message_path = str(last_message_path)
     except OSError:
         logger.exception("failed to create codex last message file")
 
@@ -3345,6 +3439,7 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
             run_lock.release()
         if last_message_path:
             last_message_path.unlink(missing_ok=True)
+        task.last_message_path = ""
         save_runtime(chat_id)
 
 
@@ -3360,16 +3455,17 @@ def latest_running_task_for_chat(chat_id: str) -> Optional[CodexTaskRuntime]:
     return max(tasks, key=lambda task: task.started_at)
 
 
-def stop_codex(chat_id: str, task_id: str = ""):
+def stop_codex(chat_id: str, task_id: str = "") -> bool:
     runtime = get_runtime(chat_id)
     task = find_task(task_id) if task_id else latest_running_task_for_chat(chat_id)
     with LOCK:
         proc = task.process if task else runtime.process
     if proc is None or proc.poll() is not None:
         text = "当前没有正在运行的任务。"
-        if not update_task_card(chat_id, status=runtime.task_status or "空闲", detail=text, force=True, task_id=task_id):
+        updated = update_task_card(chat_id, status=runtime.task_status or "空闲", detail=text, force=True, task_id=task_id)
+        if not updated:
             send_msg(chat_id, text)
-        return
+        return updated
 
     proc.terminate()
     try:
@@ -3381,22 +3477,24 @@ def stop_codex(chat_id: str, task_id: str = ""):
         task.process = None
     if runtime.process is proc:
         runtime.process = None
-    if not update_task_card(chat_id, status="已停止", detail="已停止当前 Codex 任务。", force=True, task_id=task.task_id if task else task_id):
+    updated = update_task_card(chat_id, status="已停止", detail="已停止当前 Codex 任务。", force=True, task_id=task.task_id if task else task_id)
+    if not updated:
         send_msg(chat_id, "已停止当前 Codex 任务。")
+    return updated
 
 
-def approve_pending(chat_id: str, approval_id: str, approved: bool, notify: bool = True):
+def approve_pending(chat_id: str, approval_id: str, approved: bool, notify: bool = True) -> bool:
     approval = PENDING_APPROVALS.get(approval_id)
     if not approval:
         text = f"找不到审批：{approval_id}"
         if notify or not update_task_card(chat_id, detail=text, force=True):
             send_msg(chat_id, text)
-        return
+        return False
     if approval.status != "pending":
         text = f"审批 {approval_id} 已处理：{approval.status}"
         if notify or not update_task_card(chat_id, detail=text, force=True, task_id=approval.task_id):
             send_msg(chat_id, text)
-        return
+        return False
 
     approval.status = "approved" if approved else "rejected"
     status_text = f"审批 {approval_id} 已{'批准' if approved else '拒绝'}。"
@@ -3418,18 +3516,19 @@ def approve_pending(chat_id: str, approval_id: str, approved: bool, notify: bool
     else:
         result_text += "\n\n用户已拒绝，本次任务不会继续执行待审批操作。"
 
-    if not update_task_card(
+    updated = update_task_card(
         chat_id,
         status="已批准" if approved else "已拒绝",
         output=result_text,
         detail=status_text,
         force=True,
         task_id=approval.task_id,
-    ) and notify:
+    )
+    if not updated and notify:
         send_msg(chat_id, status_text)
 
     if not approved:
-        return
+        return updated
 
     runtime = get_runtime(chat_id)
     task = find_task(approval.task_id)
@@ -3460,8 +3559,9 @@ def approve_pending(chat_id: str, approval_id: str, approved: bool, notify: bool
         task.approval_policy = APPROVED_CODEX_APPROVAL_POLICY
         task.sandbox_mode = APPROVED_CODEX_SANDBOX_MODE
         task.approved_retry = True
-    update_task_card(chat_id, status="已批准，继续执行", output=result_text, force=True, task_id=approval.task_id)
+    continued_updated = update_task_card(chat_id, status="已批准，继续执行", output=result_text, force=True, task_id=approval.task_id)
     threading.Thread(target=run_codex, args=(chat_id, prompt, False, approval.task_id), daemon=True).start()
+    return updated or continued_updated
 
 
 # ===================== 状态和日报 =====================
@@ -3551,6 +3651,57 @@ def today_project_plans(project: ProjectInfo, chat_id: str, today) -> list[PlanR
             continue
         result.append(plan)
     return result
+
+
+def today_project_tasks(project: ProjectInfo, chat_id: str, today) -> list[CodexTaskRuntime]:
+    with LOCK:
+        tasks = list(TASKS.values())
+    result = []
+    for task in tasks:
+        if chat_id and task.chat_id != chat_id:
+            continue
+        if datetime.fromtimestamp(task.started_at).date() != today:
+            continue
+        if project.cwd and task.cwd and not same_project_cwd(project, task.cwd):
+            continue
+        result.append(task)
+    return result
+
+
+def task_failed(task: CodexTaskRuntime) -> bool:
+    status = str(task.status or "")
+    return status in ("失败", "异常", "超时") or looks_failed(task.output)
+
+
+def plan_task_failed(task: PlanTask) -> bool:
+    return task.status == "failed" or looks_failed(task.output) or looks_failed(task.test_summary)
+
+
+def plan_task_approval_count(task: PlanTask) -> int:
+    if task.approval_required or task.status == "approval":
+        return 1
+    text = f"{task.output}\n{task.test_summary}"
+    return 1 if "审批" in text or "待提交审批" in text else 0
+
+
+def daily_instruction_count(report_convs: list[ConversationInfo], tasks: list[CodexTaskRuntime], plans: list[PlanRuntime]) -> int:
+    session_turns = sum(c.today_turns for c in report_convs)
+    task_count = len(tasks)
+    plan_item_count = sum(len(plan.tasks) for plan in plans)
+    return max(session_turns, task_count + plan_item_count)
+
+
+def daily_approval_count(report_convs: list[ConversationInfo], approvals: list[PendingApproval], plans: list[PlanRuntime]) -> int:
+    session_approvals = sum(c.today_approval_count for c in report_convs)
+    plan_approvals = sum(plan_task_approval_count(task) for plan in plans for task in plan.tasks)
+    return max(len(approvals), session_approvals) + plan_approvals
+
+
+def daily_failed_count(report_convs: list[ConversationInfo], tasks: list[CodexTaskRuntime], plans: list[PlanRuntime]) -> int:
+    session_failures = sum(c.today_failed_count for c in report_convs)
+    task_failures = sum(1 for task in tasks if task_failed(task))
+    plan_failures = sum(1 for plan in plans for task in plan.tasks if plan_task_failed(task))
+    return max(session_failures, task_failures) + plan_failures
 
 
 def clean_daily_item(line: str) -> str:
@@ -3654,8 +3805,8 @@ def project_progress_text(project_key_value: str = "", chat_id: str = "", report
         ]
         approvals = today_project_approvals(project, chat_id, report_date)
         plans = today_project_plans(project, chat_id, report_date)
-        plan_failed_count = sum(1 for plan in plans for task in plan.tasks if task.status == "failed")
-        report_turns = sum(c.today_turns or c.turns for c in report_convs)
+        tasks = today_project_tasks(project, chat_id, report_date)
+        instruction_count = daily_instruction_count(report_convs, tasks, plans)
         report_duration = sum(c.today_duration_seconds for c in report_convs)
         if not report_duration:
             report_duration = sum(
@@ -3663,10 +3814,14 @@ def project_progress_text(project_key_value: str = "", chat_id: str = "", report
                 for c in report_convs
                 if parse_event_timestamp(c.created_at)
             )
-        failed_count = sum(c.today_failed_count for c in report_convs) + plan_failed_count
+        approval_count = daily_approval_count(report_convs, approvals, plans)
+        failed_count = daily_failed_count(report_convs, tasks, plans)
         summary_texts = []
         for conv in report_convs:
             summary_texts.extend(conv.today_assistant_messages[-4:] or [conv.last_assistant])
+        for task in tasks:
+            if task.output:
+                summary_texts.append(task.output)
         for plan in plans:
             summary_texts.extend(task.output for task in plan.tasks if task.output)
         update_items = daily_update_items(summary_texts)
@@ -3677,9 +3832,9 @@ def project_progress_text(project_key_value: str = "", chat_id: str = "", report
         lines.append(f"**目录**：`{project.cwd or '无项目目录'}`")
         lines.append("**统计**")
         lines.append(f"- 当日活跃对话数量：{len(report_convs)}")
-        lines.append(f"- 总会话次数：{report_turns}")
+        lines.append(f"- 总指令数：{instruction_count}")
         lines.append(f"- 总耗时：{format_duration(report_duration)}")
-        lines.append(f"- 审批总数：{len(approvals)}")
+        lines.append(f"- 审批总数：{approval_count}")
         lines.append(f"- 失败总数：{failed_count}")
         lines.append("")
         lines.append(f"**当日更新或新增功能（{len(update_items)}）**")
@@ -4304,6 +4459,15 @@ def action_card(card: dict[str, Any], content: str = "已更新", typ: str = "su
     )
 
 
+def task_card_patch_response(chat_id: str, task_id: str, content: str = "已刷新"):
+    updated = update_task_card(chat_id, force=True, task_id=task_id)
+    if updated:
+        logger.info("task card action updated in place: chat_id=%s task_id=%s", chat_id, task_id)
+        return action_toast(content)
+    logger.warning("task card action fallback to callback card: chat_id=%s task_id=%s", chat_id, task_id)
+    return action_card(build_task_card(chat_id, task_id=task_id), content)
+
+
 def normalize_action_value(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
@@ -4364,7 +4528,9 @@ def handle_card_action(action: dict[str, Any]):
                     chat_id,
                     back_action="task_refresh" if get_runtime(chat_id).task_message_id else "dashboard",
                     back_label="返回任务卡" if get_runtime(chat_id).task_message_id else "返回看板",
-                    back_value={"task_id": task_id} if task_id else None,
+                    back_value=({"task_id": task_id} if task_id else {}) | {"render": "callback"}
+                    if get_runtime(chat_id).task_message_id
+                    else None,
                 )
             )
         elif name == "daily":
@@ -4379,10 +4545,14 @@ def handle_card_action(action: dict[str, Any]):
                 )
             )
         elif name == "task_refresh":
-            return action_card(build_task_card(chat_id, task_id=action.get("task_id", "")), "已刷新")
+            task_id = action.get("task_id", "")
+            if action.get("render") == "callback":
+                return action_card(build_task_card(chat_id, task_id=task_id), "已返回任务卡")
+            return task_card_patch_response(chat_id, task_id, "已刷新")
         elif name == "stop":
             task_id = action.get("task_id", "")
-            stop_codex(chat_id, task_id)
+            if stop_codex(chat_id, task_id):
+                return action_toast("已停止")
             return action_card(build_task_card(chat_id, task_id=task_id), "已停止")
         elif name == "restart":
             request_restart_confirmation(chat_id, requester_type="card_action")
@@ -4432,11 +4602,15 @@ def handle_card_action(action: dict[str, Any]):
             plan = find_plan(action.get("plan_id", ""))
             return action_card(build_plan_card(plan), "已跳过提交") if plan else action_toast("已跳过提交")
         elif name == "approve":
-            approve_pending(chat_id, action.get("approval_id", ""), True, notify=False)
-            return action_card(build_task_card(chat_id, task_id=action.get("task_id", "")), "已批准")
+            task_id = action.get("task_id", "")
+            if approve_pending(chat_id, action.get("approval_id", ""), True, notify=False):
+                return action_toast("已批准")
+            return action_card(build_task_card(chat_id, task_id=task_id), "已批准")
         elif name == "reject":
-            approve_pending(chat_id, action.get("approval_id", ""), False, notify=False)
-            return action_card(build_task_card(chat_id, task_id=action.get("task_id", "")), "已拒绝")
+            task_id = action.get("task_id", "")
+            if approve_pending(chat_id, action.get("approval_id", ""), False, notify=False):
+                return action_toast("已拒绝")
+            return action_card(build_task_card(chat_id, task_id=task_id), "已拒绝")
         else:
             return action_toast("未知卡片操作。", "error")
     except Exception:
