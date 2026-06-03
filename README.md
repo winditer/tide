@@ -7,6 +7,7 @@
 ## 功能
 
 - 在 Lark 中直接发送自然语言指令，启动或续写 Codex 任务。
+- 在 Lark 中发送图片或文件，再用下一条消息或回复/引用消息给 Codex 下指令。
 - 通过 `Codex 指令` 面板查看当前任务状态、最新结果、待审批项，并直接批准或拒绝。
 - 查看 Codex 项目、对话、当前项目状态和日报。
 - 通过 `/plan` 把任务清单拆成多个 Codex 子任务并行处理。
@@ -39,7 +40,7 @@ macOS 保活依赖系统自带命令：
   - `LARK_ENCRYPT_KEY`
   - `LARK_VERIFICATION_TOKEN`
 - 启用机器人能力，并把机器人加入目标群聊。
-- 开通和发布 IM 相关权限，确保机器人能收消息、发消息、接收卡片按钮回调。
+- 开通和发布 IM 相关权限，确保机器人能收消息、发消息、下载消息图片/文件资源、接收卡片按钮回调。
 - 事件订阅使用 WebSocket 长连接，本脚本会注册：
   - 消息接收事件
   - 消息已读事件
@@ -178,13 +179,24 @@ nohup python3 lark_codex_ws.py > lark_codex_ws.log 2>&1 &
 - `/mark-chat [session_id]`：把会话手动标记为普通对话；不填 session 时使用当前选中会话。
 - `/approve <id>`：批准待审批项。
 - `/reject <id>`：拒绝待审批项。
+- `/cancel <指令ID>`：取消等待启动的排队任务；卡片上也会显示“取消”按钮。
 - `/stop`：停止当前 Codex 任务。
 - `/restart`：原地重启 `lark_codex_ws.py` 脚本。
+- 图片/文件消息：附件会下载到当前工作目录的 `.lark-codex/attachments` 下；如果这条消息没有文字，下一条普通指令会自动带上这些附件。
+- 回复/引用图片或文件消息下指令：Codex 会结合被回复消息中的附件本地路径执行。
 - 其他文本：作为 Codex 指令执行。
 
 待审批项会显示在 `Codex 指令` 面板中，可直接点击“批准 / 拒绝”。审批处理后，面板的 `最新结果` 会更新为当前审批信息。
 
 `/restart` 会先向 Lark 发送重启提示，再清理 macOS 保活状态并用当前 Python 解释器原地重启进程。使用 `nohup python3 lark_codex_ws.py &` 启动时，重启后仍会沿用同一个进程；如果代码或 `.env` 配置错误，重启后的进程可能直接退出。
+
+## 图片和文件附件
+
+收到图片或文件消息后，脚本会用机器人身份下载消息资源，并保存到当前 Codex 工作目录下的 `.lark-codex/attachments/<chat_id>/<message_id>/`。这个目录默认已被 `.gitignore` 忽略。
+
+如果附件消息没有文字，脚本只会暂存附件并提示继续发送指令；同一用户在 `LARK_PENDING_ATTACHMENT_TTL_SECONDS` 内发送的下一条普通指令会自动带上这些附件。也可以回复或引用原附件消息下指令，脚本会根据 Lark message id 找回附件路径。
+
+启动 Codex 时，任务 prompt 会包含附件类型、文件名、本地路径和 Lark message id。Codex 是否能直接理解图片内容取决于当前 Codex CLI 和模型能力；文件类附件会以本地路径形式提供给 Codex 读取。
 
 ## 项目和普通对话
 
@@ -289,8 +301,18 @@ lark-codex/<plan_id>-<task_id>
 | `CODEX_PROJECTS_ROOT` | `CODEX_DEFAULT_CWD` 的父目录 | `/project=new` 创建项目目录的位置。 |
 | `CODEX_APPROVAL_POLICY` | `on-request` | 普通任务的 Codex approval policy。 |
 | `CODEX_SANDBOX_MODE` | `workspace-write` | 普通任务的 Codex sandbox 模式。 |
-| `APPROVED_CODEX_APPROVAL_POLICY` | `never` | Lark 审批批准后，单次重试使用的 approval policy。 |
-| `APPROVED_CODEX_SANDBOX_MODE` | `danger-full-access` | Lark 审批批准后，单次重试使用的 sandbox 模式。 |
+| `APPROVED_CODEX_APPROVAL_POLICY` | `on-request` | Lark 审批批准后，单次重试使用的 approval policy。 |
+| `APPROVED_CODEX_SANDBOX_MODE` | `workspace-write` | Lark 审批批准后，单次重试使用的 sandbox 模式。 |
+| `CODEX_ALLOWED_ROOTS` | `CODEX_PROJECTS_ROOT` 和 `CODEX_DEFAULT_CWD` | 允许 Codex 执行、`/cd`、项目创建和 Plan worktree 运行的目录范围，多个路径用 `:` 或 `,` 分隔。 |
+
+### 访问控制
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `LARK_ALLOWED_CHAT_IDS` | 空 | 允许使用 bridge 的 Lark 群聊 ID；为空时按 `LARK_REQUIRE_KNOWN_CHAT` 处理，填 `*` 表示允许所有群。 |
+| `LARK_ALLOWED_OPEN_IDS` | 空 | 允许操作 bridge 的用户 open_id；为空表示不按用户过滤。 |
+| `LARK_ADMIN_OPEN_IDS` | 空 | 可执行审批、停止、重启、切目录、提交等敏感操作的用户 open_id；为空时沿用允许用户。 |
+| `LARK_REQUIRE_KNOWN_CHAT` | `1` | 未配置 `LARK_ALLOWED_CHAT_IDS` 时，仅允许状态文件里已有的 chat。 |
 
 ### 卡片和消息
 
@@ -302,12 +324,20 @@ lark-codex/<plan_id>-<task_id>
 | `MAX_PROJECTS_IN_PANEL` | `8` | 面板最多展示项目数。 |
 | `MAX_CONVERSATIONS_IN_PANEL` | `8` | 面板最多展示对话数。 |
 | `MAX_SESSION_FILES` | `300` | 索引的 Codex session 文件数量上限。 |
+| `MAX_RUNNING_TASKS` | `6` | 全局同时运行的 Codex 子进程上限；小于等于 0 表示不限制。 |
+| `MAX_RUNNING_TASKS_PER_CHAT` | `4` | 单个 Lark chat 同时运行的 Codex 子进程上限；小于等于 0 表示不限制。 |
+| `LARK_EVENT_QUEUE_MAXSIZE` | `200` | Lark 事件队列最大积压数量。 |
+| `LARK_ATTACHMENTS_DIR` | `.lark-codex/attachments` | Lark 图片/文件下载目录；相对路径会落到当前 Codex 工作目录下。 |
+| `LARK_ATTACHMENT_MAX_BYTES` | `52428800` | 单个附件最大下载字节数。 |
+| `LARK_PENDING_ATTACHMENT_TTL_SECONDS` | `900` | 只有附件、没有文字的消息可被下一条指令自动消费的暂存时间。 |
+| `MAX_LARK_ATTACHMENTS_PER_MESSAGE` | `8` | 单条 Lark 消息最多处理的附件数量。 |
 | `TASK_CARD_REFRESH_INTERVAL_SECONDS` | `15` | Codex 指令面板自动刷新间隔。 |
 | `PLAN_MAX_PARALLEL` | `3` | `/plan` 并行执行的最大子任务数。 |
 | `PLAN_TASK_OUTPUT_MAX_CHARS` | `1200` | Plan 面板中每个子任务输出的最大展示长度。 |
 | `PLAN_USE_WORKTREES` | `1` | 是否为 Plan 子任务启用 Git worktree 隔离。 |
 | `PLAN_WORKTREE_ROOT` | 空 | 自定义 worktree 根目录；为空时使用当前仓库的 `.lark-codex/worktrees`。 |
 | `PLAN_TEST_COMMAND` | `git diff --check` | 子任务完成后、进入提交审批前执行的检查命令。 |
+| `PLAN_TEST_COMMAND_SHELL` | `0` | 是否用 shell 执行 `PLAN_TEST_COMMAND`。 |
 | `PLAN_TEST_TIMEOUT_SECONDS` | `120` | Plan 检查命令超时时间。 |
 
 ### 审批
@@ -325,9 +355,12 @@ lark-codex/<plan_id>-<task_id>
 | `DAILY_REPORT_TIME` | `19:00` | 每日项目进展日报推送时间。 |
 | `LARK_CODEX_STATE_FILE` | `.lark_codex_state.json` | 本地运行状态文件。 |
 | `LARK_CODEX_SHOW_ARCHIVED` | `0` | 是否在查询结果中显示已归档项目、普通对话和会话。 |
+| `LARK_CODEX_INCLUDE_PLAN_WORKTREES` | `0` | 是否把 `/plan` 创建的 worktree 子目录作为项目/对话统计进看板和日报；默认不统计。 |
 | `LARK_CODEX_WELCOME_MESSAGE` | `I'm Lark Codex, a lightweight agent that helps you use lark to work perfectly with Codex!` | WebSocket 脚本启动时向已知 Lark 会话发送的欢迎语；为空则不发送。 |
-| `SYNC_DESKTOP_SESSIONS` | `1` | 是否监听 Codex Desktop 会话更新。 |
+| `SYNC_DESKTOP_SESSIONS` | `0` | 是否监听 Codex Desktop 会话更新。 |
 | `SESSION_WATCH_INTERVAL_SECONDS` | `3` | Codex Desktop 会话监听间隔。 |
+| `LARK_CARD_ENABLE_FORWARD` | `0` | 是否允许 Lark 卡片被转发。 |
+| `LOG_MESSAGE_CONTENT` | `0` | 是否在日志中记录 Lark 消息和 Codex prompt 内容片段。 |
 | `LOG_LEVEL` | `INFO` | 日志级别。 |
 
 ### macOS 保活
@@ -384,8 +417,8 @@ Codex Desktop 是否在主界面直接展示这类非交互会话，取决于客
 - 确认 `.env` 中批准后的配置符合预期：
 
 ```env
-APPROVED_CODEX_APPROVAL_POLICY=never
-APPROVED_CODEX_SANDBOX_MODE=danger-full-access
+APPROVED_CODEX_APPROVAL_POLICY=on-request
+APPROVED_CODEX_SANDBOX_MODE=workspace-write
 ```
 
 ### Git 提交失败

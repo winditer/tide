@@ -60,6 +60,8 @@ Lark-Codex bridge 的目标是把 Lark 群聊变成 Codex 的远程控制台：
 
 这样可以避免两个 `codex resume <session_id>` 同时写同一个 session 文件，造成上下文和结果混乱。没有 session 的新任务不加锁，会各自创建新的 Codex session。
 
+排队中的任务会在 `Codex 指令` 卡片上显示“引导”和“取消”操作。取消只对尚未启动 Codex 子进程的等待任务生效；线程最终拿到 session 锁后会检查取消标记，已取消任务不会再启动。
+
 ## [已完成] 审批模型
 
 审批由 Codex 输出中的风险信号触发，例如权限不足、sandbox 拒绝、`.git/index.lock`、`permission denied` 等。
@@ -80,8 +82,8 @@ Lark-Codex bridge 的目标是把 Lark 群聊变成 Codex 的远程控制台：
 批准后会使用：
 
 ```env
-APPROVED_CODEX_APPROVAL_POLICY=never
-APPROVED_CODEX_SANDBOX_MODE=danger-full-access
+APPROVED_CODEX_APPROVAL_POLICY=on-request
+APPROVED_CODEX_SANDBOX_MODE=workspace-write
 ```
 
 对原任务做一次重试。等待审批时间由：
@@ -138,6 +140,12 @@ lark-codex/<plan_id>-<task_id>
 - 独立输出、测试结果和 diff 摘要
 
 如果当前目录不是 Git 仓库，或关闭 `PLAN_USE_WORKTREES`，子任务会退回原目录执行。这时仍然是多线程和多 Codex 进程，但文件改动没有隔离，存在互相覆盖风险。
+
+项目/对话看板和日报默认不会把 Plan 创建的 worktree 子目录当作独立项目统计，避免 `.lark-codex/worktrees/...` 污染项目列表。这个过滤只影响 `build_index()` 的项目索引，不影响 `Codex Plan` 面板展示子任务执行状态、输出、worktree 路径和审批操作。需要统计这些 worktree 会话时可设置：
+
+```env
+LARK_CODEX_INCLUDE_PLAN_WORKTREES=1
+```
 
 ### [部分完成] Plan 子任务收尾
 
@@ -259,6 +267,23 @@ CODEX_MODEL=
 ```
 
 若为空，则使用 Codex CLI 自身默认配置。
+
+## [已完成] Lark 图片和文件附件
+
+第一版附件处理走现有 WebSocket 消息事件和 Python SDK：
+
+- `on_message` 按 `message_type` 识别 `image`、`file` 和带内嵌图片的 `post`。
+- 图片和文件通过 `im/v1/messages/:message_id/resources/:file_key` 下载。
+- 相对 `LARK_ATTACHMENTS_DIR` 会落到当前 Codex 工作目录下，默认是 `.lark-codex/attachments`，因此 `workspace-write` sandbox 可以读取。
+- 只有附件、没有文字的消息会按 `chat_id + sender_id` 暂存，下一条普通文本指令自动消费。
+- 回复或引用附件消息时，会从本地 state 的 `message_refs` 中找回附件路径。
+- Codex 任务卡展示附件摘要，实际 prompt 里包含附件类型、文件名、本地路径和 Lark message id。
+
+当前边界：
+
+- 不自动解压压缩包。
+- 不做 OCR 或图片视觉预处理；图片理解能力取决于当前 Codex CLI 和模型。
+- 大文件只做单文件大小限制，不做断点续传。
 
 ## [部分完成] 日报
 

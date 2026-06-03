@@ -5,6 +5,7 @@ import logging
 import os
 import queue
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -19,6 +20,7 @@ import lark_oapi as lark
 from lark_oapi.api.im.v1 import (
     CreateMessageRequest,
     CreateMessageRequestBody,
+    GetMessageResourceRequest,
     PatchMessageRequest,
     PatchMessageRequestBody,
 )
@@ -64,8 +66,9 @@ CODEX_PROJECTS_ROOT_VALUE = os.getenv("CODEX_PROJECTS_ROOT", "")
 CODEX_PROJECTS_ROOT = Path(CODEX_PROJECTS_ROOT_VALUE).expanduser() if CODEX_PROJECTS_ROOT_VALUE else DEFAULT_CWD.parent
 CODEX_APPROVAL_POLICY = os.getenv("CODEX_APPROVAL_POLICY", "on-request")
 CODEX_SANDBOX_MODE = os.getenv("CODEX_SANDBOX_MODE", "workspace-write")
-APPROVED_CODEX_APPROVAL_POLICY = os.getenv("APPROVED_CODEX_APPROVAL_POLICY", "never")
-APPROVED_CODEX_SANDBOX_MODE = os.getenv("APPROVED_CODEX_SANDBOX_MODE", "danger-full-access")
+APPROVED_CODEX_APPROVAL_POLICY = os.getenv("APPROVED_CODEX_APPROVAL_POLICY", "on-request")
+APPROVED_CODEX_SANDBOX_MODE = os.getenv("APPROVED_CODEX_SANDBOX_MODE", "workspace-write")
+CODEX_ALLOWED_ROOTS_VALUE = os.getenv("CODEX_ALLOWED_ROOTS", "")
 
 MESSAGE_CHUNK_SIZE = int(os.getenv("LARK_MESSAGE_CHUNK_SIZE", "1800"))
 FINAL_REPLY_MAX_CHARS = int(os.getenv("LARK_FINAL_REPLY_MAX_CHARS", "4000"))
@@ -73,6 +76,13 @@ FINAL_QUESTION_MAX_CHARS = int(os.getenv("LARK_FINAL_QUESTION_MAX_CHARS", "1200"
 MAX_PROJECTS_IN_PANEL = int(os.getenv("MAX_PROJECTS_IN_PANEL", "8"))
 MAX_CONVERSATIONS_IN_PANEL = int(os.getenv("MAX_CONVERSATIONS_IN_PANEL", "8"))
 MAX_SESSION_FILES = int(os.getenv("MAX_SESSION_FILES", "300"))
+MAX_RUNNING_TASKS = int(os.getenv("MAX_RUNNING_TASKS", "6"))
+MAX_RUNNING_TASKS_PER_CHAT = int(os.getenv("MAX_RUNNING_TASKS_PER_CHAT", "4"))
+LARK_EVENT_QUEUE_MAXSIZE = int(os.getenv("LARK_EVENT_QUEUE_MAXSIZE", "200"))
+LARK_ATTACHMENTS_DIR = os.getenv("LARK_ATTACHMENTS_DIR", ".lark-codex/attachments")
+LARK_ATTACHMENT_MAX_BYTES = int(os.getenv("LARK_ATTACHMENT_MAX_BYTES", str(50 * 1024 * 1024)))
+LARK_PENDING_ATTACHMENT_TTL_SECONDS = int(os.getenv("LARK_PENDING_ATTACHMENT_TTL_SECONDS", "900"))
+MAX_LARK_ATTACHMENTS_PER_MESSAGE = int(os.getenv("MAX_LARK_ATTACHMENTS_PER_MESSAGE", "8"))
 STATUS_INTERVAL_SECONDS = int(os.getenv("STATUS_INTERVAL_SECONDS", "0"))
 TASK_CARD_REFRESH_INTERVAL_SECONDS = int(os.getenv("TASK_CARD_REFRESH_INTERVAL_SECONDS", "15"))
 PENDING_APPROVAL_WAIT_SECONDS = int(os.getenv("PENDING_APPROVAL_WAIT_SECONDS", "300"))
@@ -82,20 +92,42 @@ PLAN_TASK_OUTPUT_MAX_CHARS = int(os.getenv("PLAN_TASK_OUTPUT_MAX_CHARS", "1200")
 PLAN_USE_WORKTREES = os.getenv("PLAN_USE_WORKTREES", "1") == "1"
 PLAN_WORKTREE_ROOT = os.getenv("PLAN_WORKTREE_ROOT", "")
 PLAN_TEST_COMMAND = os.getenv("PLAN_TEST_COMMAND", "git diff --check")
+PLAN_TEST_COMMAND_SHELL = os.getenv("PLAN_TEST_COMMAND_SHELL", "0") == "1"
 PLAN_TEST_TIMEOUT_SECONDS = int(os.getenv("PLAN_TEST_TIMEOUT_SECONDS", "120"))
 DAILY_REPORT_TIME = os.getenv("DAILY_REPORT_TIME", "19:00")
 STATE_FILE = Path(os.getenv("LARK_CODEX_STATE_FILE", ".lark_codex_state.json"))
 LARK_CODEX_SHOW_ARCHIVED = os.getenv("LARK_CODEX_SHOW_ARCHIVED", "0") == "1"
+LARK_CODEX_INCLUDE_PLAN_WORKTREES = os.getenv("LARK_CODEX_INCLUDE_PLAN_WORKTREES", "0") == "1"
+MAX_LARK_MESSAGE_REFS = int(os.getenv("MAX_LARK_MESSAGE_REFS", "1000"))
 LARK_CODEX_WELCOME_MESSAGE = os.getenv(
     "LARK_CODEX_WELCOME_MESSAGE",
     "I'm Lark Codex, a lightweight agent that helps you use lark to work perfectly with Codex!",
 )
-SYNC_DESKTOP_SESSIONS = os.getenv("SYNC_DESKTOP_SESSIONS", "1") == "1"
+SYNC_DESKTOP_SESSIONS = os.getenv("SYNC_DESKTOP_SESSIONS", "0") == "1"
 SESSION_WATCH_INTERVAL_SECONDS = int(os.getenv("SESSION_WATCH_INTERVAL_SECONDS", "3"))
 KEEP_AWAKE_ON_AC_POWER = os.getenv("KEEP_AWAKE_ON_AC_POWER", "1") == "1"
 KEEP_AWAKE_CHECK_INTERVAL_SECONDS = int(os.getenv("KEEP_AWAKE_CHECK_INTERVAL_SECONDS", "60"))
 KEEP_AWAKE_DISABLE_SLEEP = os.getenv("KEEP_AWAKE_DISABLE_SLEEP", "0") == "1"
+LARK_ALLOWED_CHAT_IDS_VALUE = os.getenv("LARK_ALLOWED_CHAT_IDS", "")
+LARK_ALLOWED_OPEN_IDS_VALUE = os.getenv("LARK_ALLOWED_OPEN_IDS", "")
+LARK_ADMIN_OPEN_IDS_VALUE = os.getenv("LARK_ADMIN_OPEN_IDS", "")
+LARK_REQUIRE_KNOWN_CHAT = os.getenv("LARK_REQUIRE_KNOWN_CHAT", "1") == "1"
+LARK_CARD_ENABLE_FORWARD = os.getenv("LARK_CARD_ENABLE_FORWARD", "0") == "1"
+LOG_MESSAGE_CONTENT = os.getenv("LOG_MESSAGE_CONTENT", "0") == "1"
 # =================================================
+
+
+def parse_csv_set(value: str) -> set[str]:
+    return {
+        item.strip()
+        for item in re.split(r"[,;\s]+", str(value or ""))
+        if item.strip()
+    }
+
+
+LARK_ALLOWED_CHAT_IDS = parse_csv_set(LARK_ALLOWED_CHAT_IDS_VALUE)
+LARK_ALLOWED_OPEN_IDS = parse_csv_set(LARK_ALLOWED_OPEN_IDS_VALUE)
+LARK_ADMIN_OPEN_IDS = parse_csv_set(LARK_ADMIN_OPEN_IDS_VALUE)
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
@@ -162,6 +194,7 @@ class ChatRuntime:
     next_model: str = ""
     plan_input_mode: bool = False
     active_plan_id: str = ""
+    guidance_task_id: str = ""
 
 
 @dataclass
@@ -183,6 +216,34 @@ class CodexTaskRuntime:
     approved_retry: bool = False
     force_ordinary: bool = False
     last_message_path: str = ""
+    source_message_id: str = ""
+    queued_for_session: bool = False
+    guidance_requested: bool = False
+    guidance_messages: list[str] = field(default_factory=list)
+    cancel_requested: bool = False
+    attachments: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class LarkAttachment:
+    kind: str
+    file_key: str
+    message_id: str
+    file_name: str = ""
+    local_path: str = ""
+    size: int = 0
+    content_type: str = ""
+
+
+@dataclass
+class LarkReferenceContext:
+    message_id: str = ""
+    task_id: str = ""
+    session_id: str = ""
+    cwd: str = ""
+    text: str = ""
+    source: str = ""
+    attachments: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -274,10 +335,11 @@ LOCK = threading.RLock()
 SEND_LOCK = threading.RLock()
 PLAN_LOCK = threading.RLock()
 SESSION_RUN_LOCKS: dict[str, threading.Lock] = {}
+PENDING_LARK_ATTACHMENTS: dict[str, list[dict[str, Any]]] = {}
 CLIENT = None
 EVENT_HANDLER = None
 STOP_SCHEDULER = threading.Event()
-EVENT_QUEUE: queue.Queue[tuple[str, tuple[Any, ...]]] = queue.Queue()
+EVENT_QUEUE: queue.Queue[tuple[str, tuple[Any, ...]]] = queue.Queue(maxsize=max(1, LARK_EVENT_QUEUE_MAXSIZE))
 SESSION_WATCH_OFFSETS: dict[tuple[str, str], int] = {}
 SESSION_SYNC_SEEN: set[str] = set()
 KEEP_AWAKE_PROCESS: Optional[subprocess.Popen] = None
@@ -311,7 +373,105 @@ def read_state() -> dict[str, Any]:
 def write_state(state: dict[str, Any]):
     tmp = STATE_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        tmp.chmod(0o600)
+    except OSError:
+        logger.exception("failed to chmod state tmp file")
     tmp.replace(STATE_FILE)
+    try:
+        STATE_FILE.chmod(0o600)
+    except OSError:
+        logger.exception("failed to chmod state file")
+
+
+def lark_message_ref_key(chat_id: str, message_id: str) -> str:
+    return f"{chat_id}:{message_id}"
+
+
+def prune_lark_message_refs(refs: dict[str, Any]):
+    if MAX_LARK_MESSAGE_REFS <= 0 or len(refs) <= MAX_LARK_MESSAGE_REFS:
+        return
+    ordered = sorted(
+        refs.items(),
+        key=lambda item: float((item[1] or {}).get("updated_at", 0) or 0),
+        reverse=True,
+    )
+    refs.clear()
+    refs.update(dict(ordered[:MAX_LARK_MESSAGE_REFS]))
+
+
+def record_lark_message_ref(
+    chat_id: str,
+    message_id: str,
+    *,
+    task_id: str = "",
+    session_id: str = "",
+    cwd: str = "",
+    text: str = "",
+    source: str = "",
+    root_id: str = "",
+    parent_id: str = "",
+    thread_id: str = "",
+    attachments: Optional[list[dict[str, Any]]] = None,
+):
+    if not is_valid_chat_id(chat_id) or not message_id:
+        return
+    state = read_state()
+    refs = state.setdefault("message_refs", {})
+    key = lark_message_ref_key(chat_id, message_id)
+    existing = refs.get(key, {}) if isinstance(refs.get(key), dict) else {}
+    updated = dict(existing)
+    updated.update(
+        {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "updated_at": time.time(),
+        }
+    )
+    for field_name, value in (
+        ("task_id", task_id),
+        ("session_id", session_id),
+        ("cwd", cwd),
+        ("text", final_reply_text(text, 3000) if text else ""),
+        ("source", source),
+        ("root_id", root_id),
+        ("parent_id", parent_id),
+        ("thread_id", thread_id),
+    ):
+        if value:
+            updated[field_name] = str(value)
+    if attachments is not None:
+        updated["attachments"] = normalize_attachment_dicts(attachments)
+    refs[key] = updated
+    prune_lark_message_refs(refs)
+    write_state(state)
+
+
+def find_lark_message_ref(chat_id: str, message_id: str, state: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    if not chat_id or not message_id:
+        return {}
+    state = state or read_state()
+    ref = state.get("message_refs", {}).get(lark_message_ref_key(chat_id, message_id), {})
+    return ref if isinstance(ref, dict) else {}
+
+
+def find_lark_thread_ref(chat_id: str, reference_ids: list[str], state: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    if not chat_id or not reference_ids:
+        return {}
+    state = state or read_state()
+    refs = state.get("message_refs", {})
+    if not isinstance(refs, dict):
+        return {}
+    wanted = set(reference_ids)
+    candidates = []
+    for ref in refs.values():
+        if not isinstance(ref, dict) or ref.get("chat_id") != chat_id:
+            continue
+        if ref.get("root_id") in wanted or ref.get("thread_id") in wanted or ref.get("parent_id") in wanted:
+            candidates.append(ref)
+    if not candidates:
+        return {}
+    return max(candidates, key=lambda item: float(item.get("updated_at", 0) or 0))
 
 
 def save_runtime(chat_id: str):
@@ -341,6 +501,7 @@ def save_runtime(chat_id: str):
             "send_disabled": runtime.send_disabled,
             "last_approval_fingerprint": runtime.last_approval_fingerprint,
             "active_plan_id": runtime.active_plan_id,
+            "guidance_task_id": runtime.guidance_task_id,
         }
         write_state(state)
 
@@ -366,6 +527,7 @@ def load_known_chats():
             send_disabled=bool(data.get("send_disabled", False)),
             last_approval_fingerprint=data.get("last_approval_fingerprint", ""),
             active_plan_id=data.get("active_plan_id", ""),
+            guidance_task_id=data.get("guidance_task_id", ""),
         )
         RUNTIMES[chat_id].last_status_sent_at = now
 
@@ -388,7 +550,7 @@ def send_startup_welcome():
         chat_ids = [
             chat_id
             for chat_id, runtime in RUNTIMES.items()
-            if is_valid_chat_id(chat_id) and not runtime.send_disabled
+            if chat_is_allowed(chat_id) and not runtime.send_disabled
         ]
     for chat_id in chat_ids:
         send_msg(chat_id, message)
@@ -409,6 +571,65 @@ def is_valid_chat_id(chat_id: str) -> bool:
     return isinstance(chat_id, str) and chat_id.startswith("oc_") and len(chat_id) > 10
 
 
+def wildcard_enabled(values: set[str]) -> bool:
+    return "*" in values or "all" in {item.lower() for item in values}
+
+
+def known_chat_ids() -> set[str]:
+    ids = {chat_id for chat_id in RUNTIMES if is_valid_chat_id(chat_id)}
+    ids.update(
+        chat_id
+        for chat_id in read_state().get("chats", {})
+        if is_valid_chat_id(chat_id)
+    )
+    return ids
+
+
+def chat_is_allowed(chat_id: str) -> bool:
+    if not is_valid_chat_id(chat_id):
+        return False
+    if wildcard_enabled(LARK_ALLOWED_CHAT_IDS):
+        return True
+    if LARK_ALLOWED_CHAT_IDS:
+        return chat_id in LARK_ALLOWED_CHAT_IDS
+    if not LARK_REQUIRE_KNOWN_CHAT:
+        return True
+    return chat_id in known_chat_ids()
+
+
+def sender_is_allowed(sender_id: str) -> bool:
+    if wildcard_enabled(LARK_ALLOWED_OPEN_IDS) or not LARK_ALLOWED_OPEN_IDS:
+        return True
+    return bool(sender_id) and sender_id in LARK_ALLOWED_OPEN_IDS
+
+
+def sender_is_admin(sender_id: str) -> bool:
+    if wildcard_enabled(LARK_ADMIN_OPEN_IDS):
+        return True
+    if LARK_ADMIN_OPEN_IDS:
+        return bool(sender_id) and sender_id in LARK_ADMIN_OPEN_IDS
+    if LARK_ALLOWED_OPEN_IDS:
+        return sender_is_allowed(sender_id)
+    return True
+
+
+def is_authorized_lark_event(
+    chat_id: str,
+    sender_id: str = "",
+    admin_required: bool = False,
+) -> bool:
+    if not chat_is_allowed(chat_id):
+        logger.warning("reject unauthorized chat: chat_id=%s", chat_id)
+        return False
+    if not sender_is_allowed(sender_id):
+        logger.warning("reject unauthorized sender: chat_id=%s sender_id=%s", chat_id, sender_id)
+        return False
+    if admin_required and not sender_is_admin(sender_id):
+        logger.warning("reject non-admin action: chat_id=%s sender_id=%s", chat_id, sender_id)
+        return False
+    return True
+
+
 def disable_chat_send(chat_id: str, reason: str):
     if not is_valid_chat_id(chat_id):
         return
@@ -426,6 +647,355 @@ def response_ok(resp) -> bool:
         return bool(success)
     code = getattr(resp, "code", 0)
     return code in (0, None)
+
+
+def parse_lark_json_content(raw_content: str) -> Any:
+    raw_content = (raw_content or "").strip()
+    if not raw_content:
+        return {}
+    try:
+        return json.loads(raw_content)
+    except json.JSONDecodeError:
+        return {}
+
+
+def parse_lark_message_text(raw_content: str, message_type: str = "") -> str:
+    if str(message_type or "").lower() in ("image", "file"):
+        return ""
+    return parse_text_message(raw_content)
+
+
+def parse_int_value(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def parse_float_value(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def normalize_attachment_dicts(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, LarkAttachment):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for item in value:
+        if isinstance(item, LarkAttachment):
+            raw = {
+                "kind": item.kind,
+                "file_key": item.file_key,
+                "message_id": item.message_id,
+                "file_name": item.file_name,
+                "local_path": item.local_path,
+                "size": item.size,
+                "content_type": item.content_type,
+            }
+        elif isinstance(item, dict):
+            raw = item
+        else:
+            continue
+        normalized = {
+            "kind": str(raw.get("kind", "") or ""),
+            "file_key": str(raw.get("file_key", "") or raw.get("image_key", "") or ""),
+            "message_id": str(raw.get("message_id", "") or ""),
+            "file_name": str(raw.get("file_name", "") or raw.get("name", "") or ""),
+            "local_path": str(raw.get("local_path", "") or raw.get("path", "") or ""),
+            "size": parse_int_value(raw.get("size") or raw.get("file_size")),
+            "content_type": str(raw.get("content_type", "") or ""),
+            "created_at": parse_float_value(raw.get("created_at", 0)),
+        }
+        if normalized["file_key"] or normalized["local_path"]:
+            result.append(normalized)
+    return result
+
+
+def collect_lark_attachment_specs(value: Any, default_kind: str = "") -> list[dict[str, Any]]:
+    specs: list[dict[str, Any]] = []
+
+    def visit(node: Any):
+        if isinstance(node, list):
+            for child in node:
+                visit(child)
+            return
+        if not isinstance(node, dict):
+            return
+
+        image_key = node.get("image_key") or node.get("imageKey")
+        if image_key:
+            specs.append(
+                {
+                    "kind": "image",
+                    "file_key": str(image_key),
+                    "file_name": node.get("file_name") or node.get("name") or "",
+                    "size": parse_int_value(node.get("file_size") or node.get("size")),
+                }
+            )
+
+        file_key = node.get("file_key") or node.get("fileKey")
+        if file_key:
+            kind = "image" if default_kind == "image" else "file"
+            specs.append(
+                {
+                    "kind": kind,
+                    "file_key": str(file_key),
+                    "file_name": node.get("file_name") or node.get("name") or "",
+                    "size": parse_int_value(node.get("file_size") or node.get("size")),
+                }
+            )
+
+        for child in node.values():
+            if isinstance(child, (dict, list)):
+                visit(child)
+
+    visit(value)
+
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for spec in specs:
+        key = (str(spec.get("kind", "")), str(spec.get("file_key", "")))
+        if not key[1] or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(spec)
+        if MAX_LARK_ATTACHMENTS_PER_MESSAGE > 0 and len(deduped) >= MAX_LARK_ATTACHMENTS_PER_MESSAGE:
+            break
+    return deduped
+
+
+def sanitize_lark_filename(value: str, fallback: str) -> str:
+    name = Path(str(value or "")).name.strip() or fallback
+    name = re.sub(r"[\x00-\x1f/\\:]+", "_", name).strip(" .")
+    return (name or fallback)[:180]
+
+
+def default_lark_attachment_filename(kind: str, file_key: str) -> str:
+    suffix = ".png" if kind == "image" else ".bin"
+    safe_key = re.sub(r"[^A-Za-z0-9_-]+", "_", str(file_key or ""))[:24] or "resource"
+    return f"{kind}-{safe_key}{suffix}"
+
+
+def unique_lark_attachment_path(directory: Path, filename: str) -> Path:
+    path = directory / filename
+    if not path.exists():
+        return path
+    stem = path.stem
+    suffix = path.suffix
+    for index in range(2, 1000):
+        candidate = directory / f"{stem}-{index}{suffix}"
+        if not candidate.exists():
+            return candidate
+    return directory / f"{stem}-{int(time.time())}{suffix}"
+
+
+def lark_attachment_base_dir(runtime: ChatRuntime) -> Path:
+    base = Path(LARK_ATTACHMENTS_DIR).expanduser()
+    if not base.is_absolute():
+        base = runtime_task_cwd(runtime) / base
+    base.mkdir(parents=True, exist_ok=True)
+    try:
+        base.chmod(0o700)
+    except OSError:
+        logger.exception("failed to chmod attachment dir: %s", base)
+    return base
+
+
+def download_lark_message_attachments(chat_id: str, msg, meta: dict[str, str]) -> tuple[list[dict[str, Any]], list[str]]:
+    message_type = str(getattr(msg, "message_type", "") or "").lower()
+    payload = parse_lark_json_content(getattr(msg, "content", "") or "")
+    specs = collect_lark_attachment_specs(payload, default_kind=message_type)
+    if not specs:
+        return [], []
+
+    runtime = get_runtime(chat_id)
+    message_id = meta.get("message_id") or str(getattr(msg, "message_id", "") or "")
+    if not message_id:
+        return [], ["附件下载失败：缺少 Lark message_id"]
+    target_dir = lark_attachment_base_dir(runtime) / chat_id / (message_id or hashlib.sha1(str(time.time()).encode()).hexdigest()[:10])
+    target_dir.mkdir(parents=True, exist_ok=True)
+    attachments: list[dict[str, Any]] = []
+    errors: list[str] = []
+
+    for spec in specs:
+        kind = str(spec.get("kind") or "file")
+        file_key = str(spec.get("file_key") or "")
+        declared_size = parse_int_value(spec.get("size"))
+        if not file_key:
+            continue
+        if LARK_ATTACHMENT_MAX_BYTES > 0 and declared_size > LARK_ATTACHMENT_MAX_BYTES:
+            errors.append(f"{kind} 超过大小限制：{declared_size} bytes")
+            continue
+
+        req = (
+            GetMessageResourceRequest.builder()
+            .message_id(message_id)
+            .file_key(file_key)
+            .type(kind)
+            .build()
+        )
+        try:
+            resp = get_client().im.v1.message_resource.get(req)
+            if not response_ok(resp):
+                code = getattr(resp, "code", None)
+                msg_text = getattr(resp, "msg", "")
+                errors.append(f"{kind} 下载失败：{code} {msg_text}")
+                logger.error("download lark resource failed: message_id=%s kind=%s code=%s msg=%s", message_id, kind, code, msg_text)
+                continue
+            source = getattr(resp, "file", None)
+            if source is None:
+                errors.append(f"{kind} 下载失败：响应没有文件流")
+                continue
+            response_name = getattr(resp, "file_name", "") or ""
+            filename = sanitize_lark_filename(
+                str(spec.get("file_name") or response_name),
+                default_lark_attachment_filename(kind, file_key),
+            )
+            path = unique_lark_attachment_path(target_dir, filename)
+            tmp_path = path.with_name(path.name + ".tmp")
+            total = 0
+            try:
+                with tmp_path.open("wb") as out:
+                    while True:
+                        chunk = source.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        if isinstance(chunk, str):
+                            chunk = chunk.encode("utf-8")
+                        total += len(chunk)
+                        if LARK_ATTACHMENT_MAX_BYTES > 0 and total > LARK_ATTACHMENT_MAX_BYTES:
+                            raise ValueError(f"attachment exceeds {LARK_ATTACHMENT_MAX_BYTES} bytes")
+                        out.write(chunk)
+                tmp_path.replace(path)
+                attachments.append(
+                    {
+                        "kind": kind,
+                        "file_key": file_key,
+                        "message_id": message_id,
+                        "file_name": path.name,
+                        "local_path": str(path),
+                        "size": total,
+                        "content_type": getattr(resp, "content_type", "") or "",
+                    }
+                )
+                logger.info("downloaded lark attachment: chat_id=%s message_id=%s kind=%s path=%s size=%s", chat_id, message_id, kind, path, total)
+            except Exception as e:
+                tmp_path.unlink(missing_ok=True)
+                errors.append(f"{filename} 保存失败：{type(e).__name__}: {e}")
+                logger.exception("failed to save lark attachment: message_id=%s file_key=%s", message_id, file_key)
+            finally:
+                close = getattr(source, "close", None)
+                if callable(close):
+                    close()
+        except Exception as e:
+            errors.append(f"{kind} 下载异常：{type(e).__name__}: {e}")
+            logger.exception("download lark resource exception: message_id=%s file_key=%s", message_id, file_key)
+
+    return normalize_attachment_dicts(attachments), errors
+
+
+def pending_lark_attachment_key(chat_id: str, sender_id: str) -> str:
+    return f"{chat_id}:{sender_id or 'unknown'}"
+
+
+def prune_pending_lark_attachments(now: Optional[float] = None):
+    now = now or time.time()
+    ttl = max(1, LARK_PENDING_ATTACHMENT_TTL_SECONDS)
+    with LOCK:
+        for key in list(PENDING_LARK_ATTACHMENTS):
+            kept = [
+                item for item in PENDING_LARK_ATTACHMENTS.get(key, [])
+                if now - float(item.get("created_at", now) or now) <= ttl
+            ]
+            if kept:
+                PENDING_LARK_ATTACHMENTS[key] = kept
+            else:
+                PENDING_LARK_ATTACHMENTS.pop(key, None)
+
+
+def stash_pending_lark_attachments(chat_id: str, sender_id: str, attachments: list[dict[str, Any]]):
+    items = normalize_attachment_dicts(attachments)
+    if not items:
+        return
+    now = time.time()
+    for item in items:
+        item["created_at"] = now
+    key = pending_lark_attachment_key(chat_id, sender_id)
+    with LOCK:
+        existing = PENDING_LARK_ATTACHMENTS.get(key, [])
+        PENDING_LARK_ATTACHMENTS[key] = dedupe_lark_attachments(existing + items)
+    prune_pending_lark_attachments(now)
+
+
+def consume_pending_lark_attachments(chat_id: str, sender_id: str) -> list[dict[str, Any]]:
+    prune_pending_lark_attachments()
+    key = pending_lark_attachment_key(chat_id, sender_id)
+    with LOCK:
+        items = PENDING_LARK_ATTACHMENTS.pop(key, [])
+    return normalize_attachment_dicts(items)
+
+
+def dedupe_lark_attachments(attachments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in normalize_attachment_dicts(attachments):
+        key = item.get("local_path") or f"{item.get('message_id')}:{item.get('file_key')}"
+        if not key or key in seen:
+            continue
+        seen.add(str(key))
+        result.append(item)
+    return result
+
+
+def existing_lark_attachments(attachments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    result = []
+    for item in dedupe_lark_attachments(attachments):
+        path = item.get("local_path", "")
+        if path and Path(path).exists():
+            result.append(item)
+    return result
+
+
+def lark_attachment_label(item: dict[str, Any]) -> str:
+    kind = "图片" if item.get("kind") == "image" else "文件"
+    name = item.get("file_name") or Path(str(item.get("local_path", ""))).name or item.get("file_key") or "attachment"
+    size = parse_int_value(item.get("size"))
+    size_text = f" ({size} bytes)" if size else ""
+    return f"{kind}: {name}{size_text}"
+
+
+def lark_attachment_summary_text(attachments: list[dict[str, Any]], limit: int = 5) -> str:
+    items = normalize_attachment_dicts(attachments)
+    if not items:
+        return ""
+    labels = [lark_attachment_label(item) for item in items[:limit]]
+    if len(items) > limit:
+        labels.append(f"... 另有 {len(items) - limit} 个")
+    return "\n".join(f"- {label}" for label in labels)
+
+
+def build_lark_attachment_prompt(content: str, attachments: list[dict[str, Any]]) -> str:
+    items = existing_lark_attachments(attachments)
+    if not items:
+        return content
+    lines = [
+        "用户在 Lark 发送了附件。请结合下面的本地文件路径执行指令。",
+        "这些文件已经下载到本机，必要时请直接读取路径对应的文件。",
+        "",
+        "附件：",
+    ]
+    for item in items:
+        label = lark_attachment_label(item)
+        lines.append(f"- {label}")
+        lines.append(f"  路径: {item.get('local_path')}")
+        if item.get("message_id"):
+            lines.append(f"  Lark message_id: {item.get('message_id')}")
+    lines.extend(["", "用户指令：", content])
+    return "\n".join(lines)
 
 
 def get_event_handler():
@@ -635,6 +1205,141 @@ def normalize_text_command(content: str) -> str:
     return content
 
 
+def strip_leading_lark_mentions(content: str) -> str:
+    text = str(content or "").strip()
+    while True:
+        updated = re.sub(r"^@\S+[\s:：,，]+", "", text, count=1).strip()
+        if updated == text:
+            return text
+        text = updated
+
+
+def lark_reference_ids(meta: dict[str, str]) -> list[str]:
+    current_message_id = meta.get("message_id", "")
+    result: list[str] = []
+    for key in ("quote_message_id", "parent_id", "root_id", "thread_id"):
+        value = str(meta.get(key, "") or "").strip()
+        if value and value != current_message_id and value not in result:
+            result.append(value)
+    return result
+
+
+def lark_message_relation_meta(meta: dict[str, str]) -> dict[str, str]:
+    return {
+        "root_id": meta.get("root_id", ""),
+        "parent_id": meta.get("parent_id", ""),
+        "thread_id": meta.get("thread_id", ""),
+    }
+
+
+def record_incoming_lark_message(
+    chat_id: str,
+    content: str,
+    meta: dict[str, str],
+    task_id: str = "",
+    attachments: Optional[list[dict[str, Any]]] = None,
+):
+    message_id = meta.get("message_id", "")
+    if not message_id:
+        return
+    runtime = get_runtime(chat_id)
+    record_lark_message_ref(
+        chat_id,
+        message_id,
+        task_id=task_id,
+        session_id=runtime.active_session_id or runtime.task_session_id,
+        cwd=str(runtime.cwd),
+        text=content,
+        source="user",
+        attachments=attachments,
+        **lark_message_relation_meta(meta),
+    )
+
+
+def record_task_lark_refs(task: Optional[CodexTaskRuntime], text: str = ""):
+    if not task:
+        return
+    content = text or task.output or task.prompt
+    for message_id, source in (
+        (task.message_id, "task_card"),
+        (task.source_message_id, "user"),
+    ):
+        if not message_id:
+            continue
+        record_lark_message_ref(
+            task.chat_id,
+            message_id,
+            task_id=task.task_id,
+            session_id=task.session_id,
+            cwd=str(task.cwd),
+            text=content,
+            source=source,
+        )
+
+
+def resolve_lark_reference_context(chat_id: str, meta: dict[str, str]) -> Optional[LarkReferenceContext]:
+    refs = lark_reference_ids(meta)
+    if not refs:
+        return None
+    state = read_state()
+    found: dict[str, Any] = {}
+    for message_id in refs:
+        found = find_lark_message_ref(chat_id, message_id, state)
+        if found:
+            break
+    if not found:
+        found = find_lark_thread_ref(chat_id, refs, state)
+    if not found:
+        return None
+    return LarkReferenceContext(
+        message_id=str(found.get("message_id", "") or ""),
+        task_id=str(found.get("task_id", "") or ""),
+        session_id=str(found.get("session_id", "") or ""),
+        cwd=str(found.get("cwd", "") or ""),
+        text=str(found.get("text", "") or ""),
+        source=str(found.get("source", "") or ""),
+        attachments=normalize_attachment_dicts(found.get("attachments", [])),
+    )
+
+
+def apply_lark_reference_context(chat_id: str, context: LarkReferenceContext) -> bool:
+    runtime = get_runtime(chat_id)
+    switched = False
+    conv = get_active_conversation(context.session_id)
+    if conv:
+        runtime.active_session_id = conv.session_id
+        if conv.cwd:
+            runtime.cwd = conv.cwd
+            root = find_project_root(conv.cwd)
+            runtime.active_project_key = project_key(root) if root else ""
+        switched = True
+    elif context.cwd:
+        try:
+            cwd = Path(context.cwd).expanduser()
+            if cwd.is_dir() and is_allowed_cwd(cwd):
+                runtime.cwd = cwd
+        except OSError:
+            logger.exception("failed to apply referenced cwd: %s", context.cwd)
+    save_runtime(chat_id)
+    return switched
+
+
+def build_lark_reference_prompt(content: str, context: LarkReferenceContext) -> str:
+    lines = [
+        "这条指令来自 Lark 中对历史消息或话题的回复/引用。",
+        "请结合当前 Codex session 上下文和下面的 Lark 引用内容执行用户的新指令。",
+        "",
+        "引用信息：",
+        f"- Lark message_id: {context.message_id or '-'}",
+        f"- Codex session_id: {context.session_id or '-'}",
+        f"- 目录: {context.cwd or '-'}",
+    ]
+    if context.text:
+        lines.extend(["", "被引用的 Lark 内容：", context.text])
+    lines.extend(["", "用户当前指令：", content])
+    return "\n".join(lines)
+
+
 def short_text(text: str, limit: int = 120) -> str:
     text = re.sub(r"\s+", " ", str(text or "")).strip()
     if len(text) <= limit:
@@ -719,6 +1424,42 @@ def normalize_path(path: Path) -> Path:
         return path.expanduser()
 
 
+def parse_path_list(value: str) -> list[Path]:
+    parts: list[str] = []
+    for item in str(value or "").split(os.pathsep):
+        parts.extend(re.split(r"[,;]+", item))
+    return [Path(part).expanduser() for part in parts if part.strip()]
+
+
+def configured_allowed_roots() -> list[Path]:
+    roots = parse_path_list(CODEX_ALLOWED_ROOTS_VALUE)
+    if not roots:
+        roots = [CODEX_PROJECTS_ROOT, DEFAULT_CWD]
+    normalized: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        normalized_root = normalize_path(root)
+        key = str(normalized_root)
+        if key not in seen:
+            normalized.append(normalized_root)
+            seen.add(key)
+    return normalized
+
+
+def path_is_under(path: Path, root: Path) -> bool:
+    path = normalize_path(path)
+    root = normalize_path(root)
+    return path == root or root in path.parents
+
+
+def is_allowed_cwd(path: Path) -> bool:
+    return any(path_is_under(path, root) for root in configured_allowed_roots())
+
+
+def allowed_roots_text() -> str:
+    return ", ".join(f"`{root}`" for root in configured_allowed_roots())
+
+
 def is_generic_conversation_dir(cwd: Optional[Path]) -> bool:
     if not cwd:
         return True
@@ -730,6 +1471,21 @@ def is_generic_conversation_dir(cwd: Optional[Path]) -> bool:
         normalize_path(Path("/private/tmp")),
     }
     return path in generic
+
+
+def is_plan_worktree_path(cwd: Optional[Path]) -> bool:
+    if not cwd:
+        return False
+    path = normalize_path(cwd)
+    if PLAN_WORKTREE_ROOT:
+        root = normalize_path(Path(PLAN_WORKTREE_ROOT))
+        return path == root or root in path.parents
+
+    parts = path.parts
+    for index, part in enumerate(parts[:-1]):
+        if part == ".lark-codex" and parts[index + 1] == "worktrees":
+            return True
+    return False
 
 
 def has_project_marker(path: Path) -> bool:
@@ -1057,6 +1813,8 @@ def build_index(report_date=None) -> tuple[list[ProjectInfo], dict[str, Conversa
         conv = parse_conversation(path, report_date=metric_date)
         if not conv:
             continue
+        if not LARK_CODEX_INCLUDE_PLAN_WORKTREES and is_plan_worktree_path(conv.cwd):
+            continue
         if report_date and conv.today_activity_count <= 0:
             continue
         if not LARK_CODEX_SHOW_ARCHIVED and is_session_archived(conv.session_id):
@@ -1130,6 +1888,70 @@ def get_active_conversation(session_id: str) -> Optional[ConversationInfo]:
         return None
     _, conversations = build_index()
     return conversations.get(session_id)
+
+
+def active_conversation_for_runtime(runtime: ChatRuntime) -> Optional[ConversationInfo]:
+    return get_active_conversation(runtime.active_session_id or runtime.task_session_id)
+
+
+def active_session_summary(runtime: ChatRuntime) -> tuple[str, str]:
+    session_id = runtime.active_session_id or runtime.task_session_id
+    conv = active_conversation_for_runtime(runtime)
+    title = conv.title if conv else ""
+    return session_id, title
+
+
+def activate_conversation(chat_id: str, conv: ConversationInfo):
+    runtime = get_runtime(chat_id)
+    runtime.active_session_id = conv.session_id
+    runtime.task_session_id = conv.session_id
+    root = find_project_root(conv.cwd)
+    runtime.active_project_key = project_key(root) if root else ""
+    if conv.cwd:
+        runtime.cwd = conv.cwd
+        runtime.task_cwd = str(conv.cwd)
+    save_runtime(chat_id)
+
+
+def project_conversation(project: ProjectInfo, session_id: str) -> Optional[ConversationInfo]:
+    if not session_id:
+        return None
+    for conv in project.conversations:
+        if conv.session_id == session_id:
+            return conv
+    return None
+
+
+def activate_project(chat_id: str, project: ProjectInfo) -> Optional[ConversationInfo]:
+    runtime = get_runtime(chat_id)
+    selected = project_conversation(project, runtime.active_session_id) or project_conversation(project, runtime.task_session_id)
+    if selected:
+        activate_conversation(chat_id, selected)
+        return selected
+
+    runtime.active_project_key = project.key
+    if project.cwd:
+        runtime.cwd = project.cwd
+        runtime.task_cwd = str(project.cwd)
+    if project.conversations:
+        selected = project.conversations[0]
+        runtime.active_session_id = selected.session_id
+        runtime.task_session_id = selected.session_id
+        if selected.cwd:
+            runtime.cwd = selected.cwd
+            runtime.task_cwd = str(selected.cwd)
+    else:
+        runtime.active_session_id = ""
+        runtime.task_session_id = ""
+    save_runtime(chat_id)
+    return selected
+
+
+def project_session_summary(project: ProjectInfo, runtime: ChatRuntime) -> tuple[str, str]:
+    conv = project_conversation(project, runtime.active_session_id) or project_conversation(project, runtime.task_session_id)
+    if not conv:
+        return "", ""
+    return conv.session_id, conv.title
 
 
 def conversation_source_label(conv: ConversationInfo) -> str:
@@ -1348,10 +2170,13 @@ def run_plan_test_command(cwd: Path) -> tuple[bool, str]:
     if not command:
         return True, "未配置测试命令。"
     try:
+        argv: str | list[str] = command if PLAN_TEST_COMMAND_SHELL else shlex.split(command)
+        if not argv:
+            return True, "未配置测试命令。"
         result = subprocess.run(
-            command,
+            argv,
             cwd=str(cwd),
-            shell=True,
+            shell=PLAN_TEST_COMMAND_SHELL,
             capture_output=True,
             text=True,
             timeout=PLAN_TEST_TIMEOUT_SECONDS,
@@ -1433,8 +2258,11 @@ def task_end_text(
     last_agent_message: str = "",
     detail: str = "",
     user_question: str = "",
+    task: Optional[CodexTaskRuntime] = None,
 ) -> str:
     result = "成功" if code == 0 else "失败" if code is not None else "未完成"
+    task_model = task.model if task else runtime.task_model
+    task_session_id = (task.session_id if task else "") or runtime.task_session_id or runtime.active_session_id
     lines = [
         "**Codex 任务结束**",
         "",
@@ -1442,10 +2270,10 @@ def task_end_text(
         f"**完成时间**：{datetime.now().strftime('%m-%d %H:%M')}",
         f"**耗时**：{format_duration(time.time() - started_at)}",
         f"**目录**：`{cwd}`",
-        f"**模型**：`{model_label(runtime.task_model)}`",
+        f"**模型**：`{model_label(task_model)}`",
     ]
-    if runtime.task_session_id or runtime.active_session_id:
-        lines.append(f"**Session**：`{runtime.task_session_id or runtime.active_session_id}`")
+    if task_session_id:
+        lines.append(f"**Session**：`{task_session_id}`")
     if detail:
         lines.append(f"**说明**：{detail}")
     if user_question:
@@ -1649,7 +2477,7 @@ def normalize_lark_md(content: str) -> str:
 
 def markdown_message_card(content: str) -> dict[str, Any]:
     return {
-        "config": {"wide_screen_mode": True, "enable_forward": True},
+        "config": {"wide_screen_mode": True, "enable_forward": LARK_CARD_ENABLE_FORWARD},
         "elements": [
             {
                 "tag": "div",
@@ -1731,29 +2559,43 @@ def pending_restart_for_chat(chat_id: str) -> Optional[PendingRestart]:
 
 
 def build_restart_confirm_card(restart: PendingRestart) -> dict[str, Any]:
-    return base_card(
-        "确认重启 Lark-Codex",
-        [
-            fields(
-                [
-                    ("状态", "等待确认"),
-                    ("审批 ID", restart.restart_id),
-                    ("请求人", restart.requester_id or "-"),
-                    ("来源类型", restart.requester_type or "-"),
-                ]
-            ),
-            md(
-                "收到 `/restart` 请求。重启会中断当前 WebSocket 连接，并让脚本用当前 Python 解释器原地重启。\n\n"
+    status_labels = {
+        "pending": "等待确认",
+        "approved": "已确认，正在重启",
+        "cancelled": "已取消",
+    }
+    template = "orange" if restart.status == "pending" else "green" if restart.status == "approved" else "grey"
+    elements: list[dict[str, Any]] = [
+        fields(
+            [
+                ("状态", status_labels.get(restart.status, restart.status or "-")),
+                ("审批 ID", restart.restart_id),
+                ("请求人", restart.requester_id or "-"),
+                ("来源类型", restart.requester_type or "-"),
+            ]
+        ),
+        md(
+            "收到 `/restart` 请求。重启会中断当前 WebSocket 连接，并让脚本用当前 Python 解释器原地重启。\n\n"
+            + (
                 "请确认这是你主动触发的操作。"
-            ),
+                if restart.status == "pending"
+                else "该重启请求已经处理，按钮已失效。"
+            )
+        ),
+    ]
+    if restart.status == "pending":
+        elements.append(
             action_row(
                 [
                     compact_button("确认重启", "restart_confirm", {"chat_id": restart.chat_id, "restart_id": restart.restart_id}, "primary"),
                     compact_button("取消", "restart_cancel", {"chat_id": restart.chat_id, "restart_id": restart.restart_id}, "danger"),
                 ]
-            ),
-        ],
-        "orange",
+            )
+        )
+    return base_card(
+        "确认重启 Lark-Codex",
+        elements,
+        template,
     )
 
 
@@ -1900,7 +2742,7 @@ def update_card(message_id: str, card: dict[str, Any]) -> bool:
 
 def base_card(title: str, elements: list[dict[str, Any]], template: str = "blue"):
     return {
-        "config": {"wide_screen_mode": True, "enable_forward": True},
+        "config": {"wide_screen_mode": True, "enable_forward": LARK_CARD_ENABLE_FORWARD},
         "header": {
             "template": template,
             "title": {"tag": "plain_text", "content": title},
@@ -1954,6 +2796,106 @@ def latest_task_for_chat(chat_id: str) -> Optional[CodexTaskRuntime]:
     return max(tasks, key=lambda task: task.started_at)
 
 
+def task_can_accept_guidance(task: Optional[CodexTaskRuntime]) -> bool:
+    if not task or not task.queued_for_session or task.cancel_requested:
+        return False
+    return task.process is None or task.process.poll() is not None
+
+
+def task_can_cancel(task: Optional[CodexTaskRuntime]) -> bool:
+    if not task or task.cancel_requested or not task.queued_for_session:
+        return False
+    return task.process is None or task.process.poll() is not None
+
+
+def cancel_queued_task(chat_id: str, task_id: str) -> tuple[bool, str]:
+    task = find_task(task_id)
+    if not task or task.chat_id != chat_id:
+        return False, "找不到这条排队任务。"
+    if task.cancel_requested:
+        return True, "这条任务已经取消。"
+    if not task_can_cancel(task):
+        return False, "只有等待启动的排队任务可以取消；运行中的任务请使用停止。"
+    runtime = get_runtime(chat_id)
+    task.cancel_requested = True
+    task.queued_for_session = False
+    task.guidance_requested = False
+    task.status = "已取消"
+    if runtime.guidance_task_id == task.task_id:
+        runtime.guidance_task_id = ""
+    save_runtime(chat_id)
+    update_task_card(
+        chat_id,
+        status="已取消",
+        detail="已取消这条等待启动的排队任务。",
+        force=True,
+        task_id=task.task_id,
+    )
+    return True, "已取消排队任务。"
+
+
+def request_task_guidance(chat_id: str, task_id: str) -> tuple[bool, str]:
+    task = find_task(task_id)
+    if not task or task.chat_id != chat_id:
+        return False, "找不到这条排队任务。"
+    if not task_can_accept_guidance(task):
+        return False, "这条任务当前不能追加引导；可能已经开始执行。"
+    runtime = get_runtime(chat_id)
+    runtime.guidance_task_id = task.task_id
+    task.guidance_requested = True
+    save_runtime(chat_id)
+    update_task_card(
+        chat_id,
+        detail="已进入引导模式。请直接发送一条普通消息，它会追加到这条排队任务中。",
+        force=True,
+        task_id=task.task_id,
+    )
+    return True, "请发送引导内容。"
+
+
+def append_task_guidance(chat_id: str, content: str) -> bool:
+    runtime = get_runtime(chat_id)
+    task_id = runtime.guidance_task_id
+    if not task_id:
+        return False
+    task = find_task(task_id)
+    if not task or task.chat_id != chat_id:
+        runtime.guidance_task_id = ""
+        save_runtime(chat_id)
+        send_msg(chat_id, "引导目标任务已不存在。")
+        return True
+    if not task_can_accept_guidance(task):
+        runtime.guidance_task_id = ""
+        task.guidance_requested = False
+        save_runtime(chat_id)
+        update_task_card(chat_id, detail="任务已经开始执行，不能再追加引导。", force=True, task_id=task.task_id)
+        return True
+    guidance = content.strip()
+    if not guidance:
+        return True
+    task.guidance_messages.append(guidance)
+    task.guidance_requested = False
+    runtime.guidance_task_id = ""
+    save_runtime(chat_id)
+    update_task_card(
+        chat_id,
+        detail="已追加引导；任务排到后会带上这段补充说明一起执行。",
+        force=True,
+        task_id=task.task_id,
+    )
+    return True
+
+
+def apply_guidance_to_task_prompt(task: CodexTaskRuntime):
+    if not task.guidance_messages:
+        return
+    guidance = "\n".join(f"- {item}" for item in task.guidance_messages)
+    marker = "排队期间用户追加的引导："
+    if marker in task.prompt:
+        return
+    task.prompt = f"{task.prompt}\n\n{marker}\n{guidance}"
+
+
 def task_card_state(chat_id: str, task_id: str = "") -> tuple[ChatRuntime, Optional[CodexTaskRuntime]]:
     runtime = get_runtime(chat_id)
     task = find_task(task_id) if task_id else latest_task_for_chat(chat_id)
@@ -1987,6 +2929,9 @@ def build_task_card(chat_id: str, status: str = "", output: str = "", detail: st
     task_model = task.model if task else runtime.task_model
     task_started_at = task.started_at if task else runtime.task_started_at
     task_prompt = task.prompt if task else runtime.task_prompt
+    task_attachments = task.attachments if task else []
+    task_session_conv = get_active_conversation(task_session_id)
+    task_session_title = task_session_conv.title if task_session_conv else ""
 
     elements: list[dict[str, Any]] = [
         fields(
@@ -1999,10 +2944,29 @@ def build_task_card(chat_id: str, status: str = "", output: str = "", detail: st
         ),
         md(f"**指令**\n{short_text(task_prompt, 900) or '无'}"),
     ]
+    if task_attachments:
+        elements.append(md(f"**附件**\n{lark_attachment_summary_text(task_attachments, 6)}"))
     if shown_task_id:
         elements.append(md(f"**指令 ID**\n`{shown_task_id}`"))
     if task_session_id:
-        elements.append(md(f"**Session**\n`{task_session_id}`"))
+        elements.append(
+            md(
+                f"**Session**\n"
+                f"{task_session_title or '-'}\n"
+                f"`{task_session_id}`"
+            )
+        )
+    if task and task.queued_for_session:
+        elements.append(
+            md(
+                f"**排队状态**\n"
+                f"同一 Session `{task.session_id}` 已有任务在运行，本指令正在排队。"
+            )
+        )
+    if task and task.guidance_messages:
+        elements.append(md(f"**已追加引导**\n{final_reply_text(chr(10).join(task.guidance_messages), 900)}"))
+    if task and task.guidance_requested:
+        elements.append(md("**引导模式**\n请直接发送一条普通消息，作为这条排队任务的补充引导。"))
     if detail:
         elements.append(md(f"**说明**\n{detail}"))
     if pending:
@@ -2036,13 +3000,25 @@ def build_task_card(chat_id: str, status: str = "", output: str = "", detail: st
         compact_button("刷新", "task_refresh", {"chat_id": chat_id, "task_id": shown_task_id}, "primary"),
         compact_button("状态", "status", {"chat_id": chat_id, "task_id": shown_task_id}),
     ]
+    if task_can_accept_guidance(task):
+        actions.append(compact_button("引导", "task_guide", {"chat_id": chat_id, "task_id": shown_task_id}))
+    if task_can_cancel(task):
+        actions.append(compact_button("取消", "task_cancel", {"chat_id": chat_id, "task_id": shown_task_id}, "danger"))
     if running:
         actions.append(compact_button("停止", "stop", {"chat_id": chat_id, "task_id": shown_task_id}, "danger"))
     elements.append(action_row(actions))
     return base_card("Codex 指令", elements, template)
 
 
-def send_task_card(chat_id: str, prompt: str, status: str, model: str = "", force_ordinary: bool = False) -> str:
+def send_task_card(
+    chat_id: str,
+    prompt: str,
+    status: str,
+    model: str = "",
+    force_ordinary: bool = False,
+    source_message_id: str = "",
+    attachments: Optional[list[dict[str, Any]]] = None,
+) -> str:
     runtime = get_runtime(chat_id)
     task_id = generate_task_id(chat_id, prompt)
     task = CodexTaskRuntime(
@@ -2056,6 +3032,8 @@ def send_task_card(chat_id: str, prompt: str, status: str, model: str = "", forc
         approval_policy=runtime.next_approval_policy,
         sandbox_mode=runtime.next_sandbox_mode,
         force_ordinary=force_ordinary,
+        source_message_id=source_message_id,
+        attachments=normalize_attachment_dicts(attachments or []),
     )
     with LOCK:
         TASKS[task_id] = task
@@ -2072,8 +3050,11 @@ def send_task_card(chat_id: str, prompt: str, status: str, model: str = "", forc
         task.message_id = message_id
         runtime.task_message_id = message_id
         logger.info("task card sent: chat_id=%s task_id=%s message_id=%s", chat_id, task_id, message_id)
+        record_task_lark_refs(task)
     else:
         logger.warning("task card sent without message_id: chat_id=%s task_id=%s", chat_id, task_id)
+    if source_message_id:
+        record_task_lark_refs(task)
     save_runtime(chat_id)
     return task_id
 
@@ -2394,6 +3375,17 @@ def build_dashboard_card(chat_id: str, expanded: bool = False):
     total_convs = sum(len(p.conversations) for p in projects)
     running = runtime.process is not None and runtime.process.poll() is None
     latest_project = projects[0] if projects else None
+    active_conv = active_conversation_for_runtime(runtime)
+    active_root = find_project_root(active_conv.cwd) if active_conv else None
+    current_project = (
+        find_project(projects, project_key(active_root))
+        if active_root
+        else find_project(projects, runtime.active_project_key)
+    )
+    current_project = current_project or latest_project
+    active_session_id, active_session_name = (
+        project_session_summary(current_project, runtime) if current_project else ("", "")
+    )
 
     elements = [
         fields(
@@ -2405,11 +3397,16 @@ def build_dashboard_card(chat_id: str, expanded: bool = False):
         ),
         md(f"**当前目录**\n`{runtime.cwd}`"),
         md(
-            f"**最近项目**\n"
-            f"{latest_project.name if latest_project else '暂无'}"
+            f"**当前 Session**\n"
+            f"{active_session_name or '-'}\n"
+            f"`{active_session_id or '-'}`"
+        ),
+        md(
+            f"**当前项目**\n"
+            f"{current_project.name if current_project else '暂无'}"
             + (
-                f" · {format_time(latest_project.conversations[0].updated_at)}"
-                if latest_project and latest_project.conversations
+                f" · {format_time(current_project.conversations[0].updated_at)}"
+                if current_project and current_project.conversations
                 else ""
             )
         ),
@@ -2445,7 +3442,7 @@ def build_dashboard_card(chat_id: str, expanded: bool = False):
     if not projects:
         elements.append(md("还没有识别到项目会话。普通对话可发送 /chats 查看。"))
     for idx, project in enumerate(projects[:MAX_PROJECTS_IN_PANEL], 1):
-        active = "（当前）" if project.key == runtime.active_project_key else ""
+        active = "（当前）" if current_project and project.key == current_project.key else ""
         latest = format_time(project.conversations[0].updated_at) if project.conversations else "-"
         cwd = str(project.cwd) if project.cwd else "无项目目录"
         desktop_count, bridge_count, other_count = project_source_counts(project)
@@ -2488,16 +3485,20 @@ def build_project_card(chat_id: str, project_key_value: str, expanded: bool = Fa
             "red",
         )
 
-    runtime.active_project_key = project.key
-    if project.cwd:
-        runtime.cwd = project.cwd
-    save_runtime(chat_id)
+    activate_project(chat_id, project)
+    runtime = get_runtime(chat_id)
 
     desktop_count, bridge_count, other_count = project_source_counts(project)
     stage, next_step = project_stage_text(project, chat_id)
+    active_session_id, active_session_name = project_session_summary(project, runtime)
     elements = [
         fields([("项目", project.name), ("阶段", stage), ("对话", str(len(project.conversations)))]),
         md(f"**目录**\n`{project.cwd or '无项目目录'}`"),
+        md(
+            f"**当前 Session**\n"
+            f"{active_session_name or '-'}\n"
+            f"`{active_session_id or '-'}`"
+        ),
         md(f"**来源**\nDesktop {desktop_count} / Lark bridge {bridge_count} / 其他 {other_count}\n**下一步**\n{next_step}"),
         action_row(
             [
@@ -2549,8 +3550,14 @@ def build_chats_card(chat_id: str, expanded: bool = True):
     runtime = get_runtime(chat_id)
     groups, _ = build_index()
     chats = ordinary_chat_groups(groups)
+    active_session_id, active_session_name = active_session_summary(runtime)
     elements: list[dict[str, Any]] = [
-        fields([("普通对话", str(len(chats))), ("状态", "已展开" if expanded else "已收起"), ("当前", runtime.active_session_id or "-")]),
+        fields([("普通对话", str(len(chats))), ("状态", "已展开" if expanded else "已收起"), ("当前", active_session_id or "-")]),
+        md(
+            f"**当前 Session**\n"
+            f"{active_session_name or '-'}\n"
+            f"`{active_session_id or '-'}`"
+        ),
         action_row(
             [
                 compact_button("返回看板", "dashboard", {"chat_id": chat_id}, "primary"),
@@ -2583,7 +3590,7 @@ def build_chats_card(chat_id: str, expanded: bool = True):
         elements.append(
             action_row(
                 [
-                    compact_button("打开", "conversation", {"chat_id": chat_id, "session_id": conv.session_id}, "primary"),
+                    compact_button("切换", "conversation", {"chat_id": chat_id, "session_id": conv.session_id}, "primary"),
                     compact_button("标为项目", "mark_project_from_chat", {"chat_id": chat_id, "session_id": conv.session_id}),
                 ]
             )
@@ -2607,12 +3614,9 @@ def build_conversation_card(chat_id: str, session_id: str):
             "red",
         )
 
-    runtime.active_session_id = conv.session_id
+    activate_conversation(chat_id, conv)
+    runtime = get_runtime(chat_id)
     root = find_project_root(conv.cwd)
-    runtime.active_project_key = project_key(root) if root else ""
-    if conv.cwd:
-        runtime.cwd = conv.cwd
-    save_runtime(chat_id)
 
     running = runtime.process is not None and runtime.process.poll() is None
     mode = "可续写" if is_resumable_conversation(conv) else "只读展示"
@@ -2709,10 +3713,19 @@ def same_path(left: Optional[Path], right: Optional[Path]) -> bool:
         return str(left.expanduser()) == str(right.expanduser())
 
 
+def conversation_matches_run(conv: ConversationInfo, cwd: Path, started_at: float, prompt: str) -> bool:
+    if not same_path(conv.cwd, cwd):
+        return False
+    normalized_prompt = prompt.strip()
+    if normalized_prompt:
+        return conv.last_user.strip() == normalized_prompt
+    return conv.updated_at >= started_at - 10
+
+
 def find_conversation_for_run(runtime: ChatRuntime, cwd: Path, started_at: float, prompt: str) -> Optional[ConversationInfo]:
     cutoff = started_at - 10
     conv = get_active_conversation(runtime.task_session_id or runtime.active_session_id)
-    if conv and conv.updated_at >= cutoff:
+    if conv and conv.updated_at >= cutoff and conversation_matches_run(conv, cwd, started_at, prompt):
         return conv
 
     fallback: Optional[ConversationInfo] = None
@@ -2728,7 +3741,7 @@ def find_conversation_for_run(runtime: ChatRuntime, cwd: Path, started_at: float
             continue
         if normalized_prompt and conv.last_user.strip() == normalized_prompt:
             return conv
-        if fallback is None or conv.updated_at > fallback.updated_at:
+        if not normalized_prompt and (fallback is None or conv.updated_at > fallback.updated_at):
             fallback = conv
     return fallback
 
@@ -3028,6 +4041,8 @@ def run_plan_task(plan_id: str, task_id: str):
     update_plan_card(plan, force=True)
     try:
         task_cwd = prepare_plan_worktree(plan, task)
+        if not is_allowed_cwd(task_cwd):
+            raise RuntimeError(f"Plan 子任务目录不在允许范围内：{task_cwd}")
         argv = plan_task_command(plan, task, last_message_path)
     except Exception as e:
         task.status = "failed"
@@ -3043,7 +4058,7 @@ def run_plan_task(plan_id: str, task_id: str):
         task_id,
         task_cwd,
         model_label(task.model),
-        short_text(task.prompt, 120),
+        short_text(task.prompt, 120) if LOG_MESSAGE_CONTENT else f"<hidden len={len(task.prompt)}>",
     )
 
     try:
@@ -3173,9 +4188,17 @@ def plan_runner_loop(plan_id: str):
 
 def start_plan(chat_id: str, content: str, model: str = ""):
     runtime = get_runtime(chat_id)
+    if not is_allowed_cwd(runtime.cwd):
+        send_msg(chat_id, f"当前目录不在允许范围内：`{runtime.cwd}`\n允许范围：{allowed_roots_text()}")
+        return
     tasks = parse_plan_tasks(content)
     if not tasks:
         send_msg(chat_id, "请发送任务清单，例如：\n/plan\n- 任务一\n- 任务二")
+        return
+    slots = min(len(tasks), max(1, PLAN_MAX_PARALLEL))
+    allowed, reason = can_start_work(chat_id, slots=slots)
+    if not allowed:
+        send_msg(chat_id, reason)
         return
     plan_id = hashlib.sha1(f"{chat_id}:{time.time()}:{content}".encode("utf-8")).hexdigest()[:10]
     plan = PlanRuntime(
@@ -3203,6 +4226,39 @@ def latest_plan_for_chat(chat_id: str) -> Optional[PlanRuntime]:
     if not plans:
         return None
     return max(plans, key=lambda p: p.created_at)
+
+
+def running_process_counts(chat_id: str = "") -> tuple[int, int]:
+    pids: set[int] = set()
+    chat_pids: set[int] = set()
+    with LOCK:
+        tasks = list(TASKS.values())
+    with PLAN_LOCK:
+        plans = list(PLANS.values())
+
+    def add_proc(proc: Optional[subprocess.Popen], owner_chat_id: str):
+        if proc is None or proc.poll() is not None or proc.pid is None:
+            return
+        pids.add(proc.pid)
+        if chat_id and owner_chat_id == chat_id:
+            chat_pids.add(proc.pid)
+
+    for task in tasks:
+        add_proc(task.process, task.chat_id)
+    for plan in plans:
+        for task in plan.tasks:
+            add_proc(task.process, plan.chat_id)
+    return len(pids), len(chat_pids)
+
+
+def can_start_work(chat_id: str, slots: int = 1) -> tuple[bool, str]:
+    total, per_chat = running_process_counts(chat_id)
+    slots = max(1, slots)
+    if MAX_RUNNING_TASKS > 0 and total + slots > MAX_RUNNING_TASKS:
+        return False, f"当前运行任务数已达上限：{total}/{MAX_RUNNING_TASKS}"
+    if MAX_RUNNING_TASKS_PER_CHAT > 0 and per_chat + slots > MAX_RUNNING_TASKS_PER_CHAT:
+        return False, f"当前会话运行任务数已达上限：{per_chat}/{MAX_RUNNING_TASKS_PER_CHAT}"
+    return True, ""
 
 
 def stop_plan(chat_id: str, plan_id: str = ""):
@@ -3383,6 +4439,11 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
         if not update_task_card(chat_id, status="失败", output=text, force=True, task_id=task.task_id):
             send_msg(chat_id, text)
         return
+    if not is_allowed_cwd(cwd):
+        text = f"当前目录不在允许范围内：`{cwd}`\n允许范围：{allowed_roots_text()}"
+        if not update_task_card(chat_id, status="失败", output=text, force=True, task_id=task.task_id):
+            send_msg(chat_id, text)
+        return
 
     task_session_id = task.session_id
     selected_conv = get_active_conversation(task_session_id)
@@ -3410,6 +4471,7 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
     lock_acquired = False
     if run_lock:
         if run_lock.locked():
+            task.queued_for_session = True
             update_task_card(
                 chat_id,
                 status="等待启动",
@@ -3420,6 +4482,28 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
         run_lock.acquire()
         lock_acquired = True
 
+    if task.cancel_requested:
+        task.queued_for_session = False
+        task.guidance_requested = False
+        if lock_acquired and run_lock:
+            run_lock.release()
+            lock_acquired = False
+        update_task_card(
+            chat_id,
+            status="已取消",
+            detail="这条任务在排队期间已取消，未启动 Codex。",
+            force=True,
+            task_id=task.task_id,
+        )
+        return
+
+    task.queued_for_session = False
+    task.guidance_requested = False
+    apply_guidance_to_task_prompt(task)
+    prompt = task.prompt
+    runtime.task_prompt = task.prompt
+    runtime.task_session_id = task.session_id
+    runtime.task_cwd = str(task.cwd)
     argv = codex_task_command(task, last_message_path)
     selected_model = task.model or CODEX_MODEL
     runtime.next_approval_policy = ""
@@ -3432,7 +4516,7 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
         cwd,
         selected_model or "default",
         bool(task.session_id),
-        short_text(prompt, 120),
+        short_text(prompt, 120) if LOG_MESSAGE_CONTENT else f"<hidden len={len(prompt)}>",
     )
     try:
         proc = subprocess.Popen(
@@ -3500,6 +4584,7 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
                     last_agent_message,
                     detail=f"超过 {format_duration(CODEX_TIMEOUT_SECONDS)}，进程已终止。",
                     user_question=user_question,
+                    task=task,
                 )
                 update_existing_task_card(chat_id, status="超时", output=text, task_id=task.task_id)
                 return
@@ -3524,6 +4609,7 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
                         config["ordinary_sessions"] = sorted(sessions)
                     update_classification(mutate)
                 save_runtime(chat_id)
+                record_task_lark_refs(task)
                 continue
             if kind == "skip" or not text:
                 continue
@@ -3550,7 +4636,16 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
         emitted_output = emitted_output or bool(last_agent_message)
         logger.info("codex exited: chat_id=%s pid=%s code=%s emitted_output=%s", chat_id, proc.pid, code, emitted_output)
         result_status = "完成" if code == 0 else "失败"
-        result_text = task_end_text(runtime, cwd, code, start, emitted_output, last_agent_message, user_question=user_question)
+        result_text = task_end_text(
+            runtime,
+            cwd,
+            code,
+            start,
+            emitted_output,
+            last_agent_message,
+            user_question=user_question,
+            task=task,
+        )
         approval_needed = bool(pending_approvals_for_chat(chat_id, task.task_id))
         if not approval_needed:
             approval_needed = maybe_create_pending_approval(chat_id, runtime, last_agent_message, task) or maybe_create_pending_approval(chat_id, runtime, result_text, task)
@@ -3563,12 +4658,15 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
             decision = wait_for_pending_approval(chat_id, task.task_id)
             logger.info("Lark approval wait finished: chat_id=%s decision=%s", chat_id, decision)
             if decision in ("approved", "rejected"):
+                record_task_lark_refs(task, result_text)
                 return
         update_existing_task_card(chat_id, status=result_status, output=result_text, task_id=task.task_id)
+        record_task_lark_refs(task, result_text)
     except Exception as e:
         logger.exception("run_codex exception")
         text = f"执行异常：{type(e).__name__}: {e}"
         update_existing_task_card(chat_id, status="异常", output=text, task_id=task.task_id)
+        record_task_lark_refs(task, text)
     finally:
         with LOCK:
             if task.process is proc:
@@ -4019,7 +5117,7 @@ def session_watcher_loop():
                     for chat_id, runtime in RUNTIMES.items()
                 ]
             for chat_id, session_id, runtime_cwd in items:
-                if not is_valid_chat_id(chat_id):
+                if not chat_is_allowed(chat_id):
                     continue
                 watch_convs: dict[str, ConversationInfo] = {}
                 active_conv = get_active_conversation(session_id) if session_id else None
@@ -4130,14 +5228,14 @@ def scheduler_loop():
 
             for task in tasks:
                 runtime = get_runtime(task.chat_id)
-                if runtime.send_disabled or not is_valid_chat_id(task.chat_id):
+                if runtime.send_disabled or not chat_is_allowed(task.chat_id):
                     continue
                 if should_auto_refresh_codex_task(task, now):
                     update_task_card(task.chat_id, force=True, task_id=task.task_id)
 
             for chat_id in chat_ids:
                 runtime = get_runtime(chat_id)
-                if runtime.send_disabled or not is_valid_chat_id(chat_id):
+                if runtime.send_disabled or not chat_is_allowed(chat_id):
                     continue
                 if not latest_task_for_chat(chat_id) and should_auto_refresh_task_card(runtime, now):
                     update_task_card(chat_id, force=True)
@@ -4178,6 +5276,9 @@ def handle_cd(chat_id: str, path_text: str):
     if not path.is_dir():
         send_msg(chat_id, f"不是目录：{path}")
         return
+    if not is_allowed_cwd(path):
+        send_msg(chat_id, f"目录不在允许范围内：`{path}`\n允许范围：{allowed_roots_text()}")
+        return
 
     runtime.cwd = path
     root = find_project_root(path)
@@ -4194,6 +5295,9 @@ def mark_project_path(chat_id: str, path_text: str = ""):
     path = normalize_path(path)
     if not path.exists() or not path.is_dir():
         send_msg(chat_id, f"不是有效目录：{path}")
+        return
+    if not is_allowed_cwd(path):
+        send_msg(chat_id, f"目录不在允许范围内：`{path}`\n允许范围：{allowed_roots_text()}")
         return
 
     def mutate(config: dict[str, Any]):
@@ -4230,6 +5334,8 @@ def mark_project_from_session(chat_id: str, session_id: str) -> bool:
     path = find_project_root(conv.cwd) or normalize_path(conv.cwd)
     if is_generic_conversation_dir(path):
         return False
+    if not is_allowed_cwd(path):
+        return False
 
     def mutate(config: dict[str, Any]):
         project_paths = config.setdefault("project_paths", {})
@@ -4251,6 +5357,9 @@ def create_project(chat_id: str, name: str):
         return
     root = normalize_path(CODEX_PROJECTS_ROOT)
     path = root / slugify_name(name)
+    if not is_allowed_cwd(path):
+        send_msg(chat_id, f"项目目录不在允许范围内：`{path}`\n允许范围：{allowed_roots_text()}")
+        return
     suffix = 2
     while path.exists():
         path = root / f"{slugify_name(name)}-{suffix}"
@@ -4277,6 +5386,10 @@ def start_new_chat(chat_id: str, prompt: str):
     if not prompt:
         send_msg(chat_id, "用法：/chat=new <主题或指令>")
         return
+    allowed, reason = can_start_work(chat_id)
+    if not allowed:
+        send_msg(chat_id, reason)
+        return
     runtime = get_runtime(chat_id)
     runtime.active_session_id = ""
     runtime.task_session_id = ""
@@ -4289,6 +5402,10 @@ def start_new_conversation(chat_id: str, prompt: str):
     prompt = prompt.strip()
     if not prompt:
         send_msg(chat_id, "用法：/convos=new <指令>")
+        return
+    allowed, reason = can_start_work(chat_id)
+    if not allowed:
+        send_msg(chat_id, reason)
         return
     runtime = get_runtime(chat_id)
     runtime.active_session_id = ""
@@ -4386,6 +5503,30 @@ def handle_entity_command(chat_id: str, content: str) -> bool:
     return True
 
 
+def text_command_requires_admin(content: str) -> bool:
+    normalized = re.sub(r"\s+", " ", content.strip()).lower()
+    admin_exact = {"/restart", "/stop"}
+    if normalized in admin_exact:
+        return True
+    admin_prefixes = (
+        "/approve ",
+        "/reject ",
+        "/cd ",
+        "/mark-project",
+        "/mark-chat",
+        "/project=new",
+        "/project=archive",
+        "/project=achive",
+        "/chat=archive",
+        "/convos=archive",
+        "/对话=archive",
+        "/项目=archive",
+    )
+    if normalized.startswith(admin_prefixes):
+        return True
+    return normalized in ("/plan stop", "/plan 停止")
+
+
 def send_help(chat_id: str):
     send_msg(
         chat_id,
@@ -4413,6 +5554,7 @@ def send_help(chat_id: str):
                 "/mark-chat [session_id] 手动标记普通对话",
                 "/approve <id> 批准待审批",
                 "/reject <id> 拒绝待审批",
+                "/cancel <指令ID> 取消等待启动的排队任务",
                 "/stop 停止当前任务",
                 "/restart 重启 Lark-Codex WebSocket 脚本",
                 "其他文本会继续当前对话；未选对话时会在当前项目中新建对话。",
@@ -4459,8 +5601,15 @@ def open_latest_by_number(chat_id: str, number_text: str):
     send_card(chat_id, build_conversation_card(chat_id, project.conversations[0].session_id))
 
 
-def on_text(chat_id: str, content: str, meta: Optional[dict[str, str]] = None):
+def on_text(
+    chat_id: str,
+    content: str,
+    meta: Optional[dict[str, str]] = None,
+    attachments: Optional[list[dict[str, Any]]] = None,
+):
     meta = meta or {}
+    attachments = normalize_attachment_dicts(attachments or [])
+    content = strip_leading_lark_mentions(content)
     content = normalize_text_command(content)
     content = content.strip()
     if not content:
@@ -4469,7 +5618,16 @@ def on_text(chat_id: str, content: str, meta: Optional[dict[str, str]] = None):
     if selected_model and not content:
         send_msg(chat_id, "用法：`/model=<模型名> +具体指令`，例如 `/model=gpt-5.5 +修复 README`。")
         return
+    sender_id = meta.get("sender_id", "")
+    if text_command_requires_admin(content) and not is_authorized_lark_event(chat_id, sender_id, admin_required=True):
+        send_msg(chat_id, "你没有权限执行这个敏感操作。")
+        return
     runtime = get_runtime(chat_id)
+    record_incoming_lark_message(chat_id, content, meta, attachments=attachments)
+
+    if runtime.guidance_task_id and not content.startswith("/"):
+        if append_task_guidance(chat_id, content):
+            return
 
     if runtime.plan_input_mode and not content.startswith("/"):
         start_plan(chat_id, content, selected_model)
@@ -4600,12 +5758,48 @@ def on_text(chat_id: str, content: str, meta: Optional[dict[str, str]] = None):
     if content.startswith("/reject "):
         approve_pending(chat_id, content[8:].strip(), False, notify=True)
         return
+    if content.startswith("/cancel "):
+        ok, message = cancel_queued_task(chat_id, content[8:].strip())
+        send_msg(chat_id, message)
+        return
     if content.startswith("/"):
         send_msg(chat_id, "未知指令。发送 /help 查看可用指令。")
         return
 
-    task_id = send_task_card(chat_id, content, "等待启动", selected_model)
-    threading.Thread(target=run_codex, args=(chat_id, content, False, task_id), daemon=True).start()
+    allowed, reason = can_start_work(chat_id)
+    if not allowed:
+        send_msg(chat_id, reason)
+        return
+
+    prompt = content
+    prompt_attachments = normalize_attachment_dicts(attachments)
+    reference_context = resolve_lark_reference_context(chat_id, meta)
+    if reference_context:
+        apply_lark_reference_context(chat_id, reference_context)
+        prompt = build_lark_reference_prompt(content, reference_context)
+        prompt_attachments.extend(reference_context.attachments)
+        logger.info(
+            "resolved lark reference: chat_id=%s message_id=%s session_id=%s task_id=%s",
+            chat_id,
+            reference_context.message_id,
+            reference_context.session_id,
+            reference_context.task_id,
+        )
+    prompt_attachments.extend(consume_pending_lark_attachments(chat_id, sender_id))
+    prompt_attachments = existing_lark_attachments(prompt_attachments)
+    if prompt_attachments:
+        prompt = build_lark_attachment_prompt(prompt, prompt_attachments)
+
+    task_id = send_task_card(
+        chat_id,
+        prompt,
+        "等待启动",
+        selected_model,
+        source_message_id=meta.get("message_id", ""),
+        attachments=prompt_attachments,
+    )
+    record_incoming_lark_message(chat_id, content, meta, task_id, attachments=prompt_attachments or attachments)
+    threading.Thread(target=run_codex, args=(chat_id, prompt, False, task_id), daemon=True).start()
 
 
 def action_toast(content: str, typ: str = "success"):
@@ -4643,19 +5837,114 @@ def normalize_action_value(value: Any) -> dict[str, Any]:
     return {}
 
 
+def obj_value(obj: Any, name: str) -> Any:
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        return obj.get(name)
+    return getattr(obj, name, None)
+
+
+def first_nested_value(obj: Any, paths: list[tuple[str, ...]]) -> str:
+    for path in paths:
+        current = obj
+        for name in path:
+            current = obj_value(current, name)
+            if current is None:
+                break
+        if current:
+            if isinstance(current, dict):
+                current = current.get("open_id") or current.get("user_id") or current.get("union_id") or current.get("chat_id")
+            if current:
+                return str(current)
+    return ""
+
+
+def card_action_meta(data) -> dict[str, str]:
+    event = getattr(data, "event", None)
+    return {
+        "chat_id": first_nested_value(
+            event,
+            [
+                ("context", "open_chat_id"),
+                ("context", "chat_id"),
+                ("message", "chat_id"),
+                ("open_chat_id",),
+                ("chat_id",),
+            ],
+        ),
+        "sender_id": first_nested_value(
+            event,
+            [
+                ("operator", "open_id"),
+                ("operator", "user_id"),
+                ("operator", "union_id"),
+                ("operator", "operator_id", "open_id"),
+                ("operator", "operator_id", "user_id"),
+            ],
+        ),
+        "message_id": first_nested_value(
+            event,
+            [
+                ("context", "open_message_id"),
+                ("context", "message_id"),
+                ("message", "message_id"),
+                ("open_message_id",),
+                ("message_id",),
+            ],
+        ),
+    }
+
+
 def on_card_action(data):
     action = normalize_action_value(getattr(getattr(data.event, "action", None), "value", None))
-    logger.info("card action received: %s", action)
-    return handle_card_action(action)
+    meta = card_action_meta(data)
+    logger.info(
+        "card action received: action=%s chat_id=%s sender_id=%s message_id=%s",
+        action.get("action", ""),
+        action.get("chat_id", "") or meta.get("chat_id", ""),
+        meta.get("sender_id", ""),
+        meta.get("message_id", ""),
+    )
+    return handle_card_action(action, meta)
 
 
-def handle_card_action(action: dict[str, Any]):
-    chat_id = action.get("chat_id")
+CARD_ADMIN_ACTIONS = {
+    "approve",
+    "reject",
+    "plan_approve",
+    "plan_reject",
+    "plan_commit",
+    "plan_skip_commit",
+    "stop",
+    "plan_stop",
+    "restart",
+    "restart_confirm",
+    "restart_cancel",
+    "mark_project_from_chat",
+}
+
+
+def handle_card_action(action: dict[str, Any], meta: Optional[dict[str, str]] = None):
+    meta = meta or {}
+    action_chat_id = str(action.get("chat_id") or "")
+    event_chat_id = meta.get("chat_id", "")
+    if event_chat_id and action_chat_id and event_chat_id != action_chat_id:
+        logger.warning("reject card action with mismatched chat_id: event=%s action=%s", event_chat_id, action_chat_id)
+        return action_toast("卡片来源不匹配，已拒绝。", "error")
+
+    chat_id = event_chat_id or action_chat_id
     if not chat_id:
         logger.error("card action missing chat_id: %s", action)
         return action_toast("缺少 chat_id", "error")
 
     name = action.get("action", "")
+    if not is_authorized_lark_event(
+        chat_id,
+        meta.get("sender_id", ""),
+        admin_required=name in CARD_ADMIN_ACTIONS,
+    ):
+        return action_toast("你没有权限执行这个操作。", "error")
     try:
         if name == "dashboard":
             return action_card(build_dashboard_card(chat_id, expanded=bool(action.get("expanded"))))
@@ -4711,6 +6000,14 @@ def handle_card_action(action: dict[str, Any]):
             if action.get("render") == "callback":
                 return action_card(build_task_card(chat_id, task_id=task_id), "已返回任务卡")
             return task_card_patch_response(chat_id, task_id, "已刷新")
+        elif name == "task_guide":
+            task_id = action.get("task_id", "")
+            ok, message = request_task_guidance(chat_id, task_id)
+            return action_card(build_task_card(chat_id, task_id=task_id), message, "success" if ok else "error")
+        elif name == "task_cancel":
+            task_id = action.get("task_id", "")
+            ok, message = cancel_queued_task(chat_id, task_id)
+            return action_card(build_task_card(chat_id, task_id=task_id), message, "success" if ok else "error")
         elif name == "desktop_refresh":
             session_id = action.get("session_id", "")
             conv = get_active_conversation(session_id)
@@ -4732,10 +6029,18 @@ def handle_card_action(action: dict[str, Any]):
             restart = pending_restart_for_chat(chat_id)
             return action_card(build_restart_confirm_card(restart), "请确认重启") if restart else action_toast("已发送确认")
         elif name == "restart_confirm":
-            ok, message = handle_restart_confirmation(chat_id, action.get("restart_id", ""), True)
+            restart_id = action.get("restart_id", "")
+            ok, message = handle_restart_confirmation(chat_id, restart_id, True)
+            restart = PENDING_RESTARTS.get(restart_id)
+            if restart and restart.chat_id == chat_id:
+                return action_card(build_restart_confirm_card(restart), message, "success" if ok else "error")
             return action_toast(message, "success" if ok else "error")
         elif name == "restart_cancel":
-            ok, message = handle_restart_confirmation(chat_id, action.get("restart_id", ""), False)
+            restart_id = action.get("restart_id", "")
+            ok, message = handle_restart_confirmation(chat_id, restart_id, False)
+            restart = PENDING_RESTARTS.get(restart_id)
+            if restart and restart.chat_id == chat_id:
+                return action_card(build_restart_confirm_card(restart), message, "success" if ok else "error")
             return action_toast(message, "success" if ok else "error")
         elif name == "plan_refresh":
             plan = find_plan(action.get("plan_id", "")) or latest_plan_for_chat(chat_id)
@@ -4807,21 +6112,71 @@ def is_duplicate_event(data) -> bool:
     return False
 
 
-def is_bot_message(message) -> bool:
-    sender = getattr(message, "sender", None)
+def event_sender(data, message):
+    event = getattr(data, "event", None)
+    return getattr(event, "sender", None) or getattr(message, "sender", None)
+
+
+def is_bot_message(data, message) -> bool:
+    sender = event_sender(data, message)
     return getattr(sender, "sender_type", "") == "app"
 
 
 def sender_meta_from_message(data, message) -> dict[str, str]:
-    sender = getattr(message, "sender", None)
+    sender = event_sender(data, message)
     header = getattr(data, "header", None)
-    sender_id = getattr(sender, "sender_id", "") or getattr(sender, "id", "")
-    if isinstance(sender_id, dict):
-        sender_id = sender_id.get("open_id") or sender_id.get("user_id") or sender_id.get("union_id") or json.dumps(sender_id, ensure_ascii=False)
+    sender_id = first_nested_value(
+        sender,
+        [
+            ("sender_id", "open_id"),
+            ("sender_id", "user_id"),
+            ("sender_id", "union_id"),
+            ("sender_id",),
+            ("id", "open_id"),
+            ("id", "user_id"),
+            ("id", "union_id"),
+            ("id",),
+            ("open_id",),
+            ("user_id",),
+            ("union_id",),
+        ],
+    )
     return {
         "sender_id": str(sender_id or ""),
         "sender_type": str(getattr(sender, "sender_type", "") or ""),
         "message_id": str(getattr(message, "message_id", "") or ""),
+        "root_id": first_nested_value(
+            message,
+            [
+                ("root_id",),
+                ("message_root_id",),
+                ("open_root_id",),
+            ],
+        ),
+        "parent_id": first_nested_value(
+            message,
+            [
+                ("parent_id",),
+                ("message_parent_id",),
+                ("open_parent_id",),
+            ],
+        ),
+        "thread_id": first_nested_value(
+            message,
+            [
+                ("thread_id",),
+                ("message_thread_id",),
+                ("open_thread_id",),
+            ],
+        ),
+        "quote_message_id": first_nested_value(
+            message,
+            [
+                ("quote_message_id",),
+                ("quoted_message_id",),
+                ("reply_message_id",),
+            ],
+        ),
         "event_id": str(getattr(header, "event_id", "") or ""),
     }
 
@@ -4832,7 +6187,7 @@ def on_message(data: lark.im.v1.P2ImMessageReceiveV1):
 
     msg = data.event.message
     meta = sender_meta_from_message(data, msg)
-    if is_bot_message(msg):
+    if is_bot_message(data, msg):
         logger.debug(
             "ignore bot message: chat_id=%s sender_id=%s sender_type=%s message_id=%s event_id=%s",
             getattr(msg, "chat_id", ""),
@@ -4844,9 +6199,31 @@ def on_message(data: lark.im.v1.P2ImMessageReceiveV1):
         return
 
     chat_id = msg.chat_id
+    if not is_authorized_lark_event(chat_id, meta.get("sender_id", "")):
+        return
     get_runtime(chat_id)
-    content = parse_text_message(msg.content)
+    message_type = str(getattr(msg, "message_type", "") or "")
+    attachments, attachment_errors = download_lark_message_attachments(chat_id, msg, meta)
+    content = parse_lark_message_text(msg.content, message_type)
+    if attachment_errors:
+        send_msg(chat_id, "附件处理有问题：\n" + "\n".join(f"- {item}" for item in attachment_errors[:5]))
     if not content:
+        if attachments:
+            summary = lark_attachment_summary_text(attachments)
+            record_incoming_lark_message(
+                chat_id,
+                f"附件消息：\n{summary}",
+                meta,
+                attachments=attachments,
+            )
+            stash_pending_lark_attachments(chat_id, meta.get("sender_id", ""), attachments)
+            send_msg(
+                chat_id,
+                "已收到并暂存附件。请直接发送下一条 Codex 指令，或回复/引用这条附件消息下指令。\n"
+                + summary,
+            )
+            return
+        raw_for_log = getattr(msg, "content", "") if LOG_MESSAGE_CONTENT else "<hidden>"
         logger.warning(
             "message received with empty parsed content: chat_id=%s sender_id=%s sender_type=%s message_id=%s event_id=%s message_type=%s raw_content=%r",
             chat_id,
@@ -4855,19 +6232,24 @@ def on_message(data: lark.im.v1.P2ImMessageReceiveV1):
             meta.get("message_id", ""),
             meta.get("event_id", ""),
             getattr(msg, "message_type", ""),
-            getattr(msg, "content", ""),
+            raw_for_log,
         )
         return
+    content_for_log = content[:80] if LOG_MESSAGE_CONTENT else f"<hidden len={len(content)}>"
     logger.info(
-        "message received: chat_id=%s sender_id=%s sender_type=%s message_id=%s event_id=%s content=%r",
+        "message received: chat_id=%s sender_id=%s sender_type=%s message_id=%s event_id=%s attachments=%s content=%r",
         chat_id,
         meta.get("sender_id", ""),
         meta.get("sender_type", ""),
         meta.get("message_id", ""),
         meta.get("event_id", ""),
-        content[:80],
+        len(attachments),
+        content_for_log,
     )
-    EVENT_QUEUE.put(("text", (chat_id, content, meta)))
+    try:
+        EVENT_QUEUE.put_nowait(("text", (chat_id, content, meta, attachments)))
+    except queue.Full:
+        logger.error("drop message because event queue is full: chat_id=%s", chat_id)
 
 
 def on_message_read(data):
@@ -4885,7 +6267,7 @@ def event_worker_loop():
             else:
                 logger.warning("unknown queued event kind: %s", kind)
         except Exception:
-            logger.exception("event worker failed: kind=%s args=%s", kind, args)
+            logger.exception("event worker failed: kind=%s", kind)
         finally:
             EVENT_QUEUE.task_done()
 
@@ -4907,6 +6289,15 @@ def validate_config():
         )
     if not DEFAULT_CWD.is_dir():
         raise RuntimeError(f"CODEX_DEFAULT_CWD 不是有效目录：{DEFAULT_CWD}")
+    if STATE_FILE.exists():
+        try:
+            STATE_FILE.chmod(0o600)
+        except OSError:
+            logger.exception("failed to chmod state file")
+    if LARK_REQUIRE_KNOWN_CHAT and not LARK_ALLOWED_CHAT_IDS and not known_chat_ids():
+        logger.warning(
+            "LARK_REQUIRE_KNOWN_CHAT=1 but no known chat is stored; set LARK_ALLOWED_CHAT_IDS for first-time setup"
+        )
 
 
 def main():
