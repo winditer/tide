@@ -171,6 +171,11 @@ nohup python3 lark_codex_ws.py > lark_codex_ws.log 2>&1 &
 - `/plan <任务清单>`：直接解析并执行任务清单。
 - `/plan status`：刷新最近的 Plan 面板。
 - `/plan stop`：停止最近的 Plan。
+- `/plan detail <子任务ID>`：打开最近 Plan 的子任务详情。
+- `/plan retry <子任务ID>`：重试最近 Plan 中失败或取消的子任务。
+- `/plan merge`：打开最近 Plan 的合并总览。
+- `/plan cleanup`：打开最近 Plan 中已结束子任务 worktree 的清理确认。
+- `/plan cleanup branches`：打开最近 Plan 中已合并子任务分支的清理确认。
 - `/cd <目录>`：切换默认工作目录。
 - `/project <编号>`：打开面板中的项目。
 - `/latest <编号>`：打开面板中项目的最新对话。
@@ -250,6 +255,18 @@ Plan 清单里的单个子任务也可以单独指定模型：
 - /model=o3 +审查并发安全问题
 ```
 
+Plan 清单支持轻量阶段和依赖：
+
+```text
+/plan
+阶段 1:
+- 修复 API
+- 修复前端
+阶段 2:
+- 统一运行测试
+- 整理文档 depends:1,2
+```
+
 ## Plan 并行模式
 
 `/plan` 适合把一组相对独立的任务并行交给 Codex 处理。示例：
@@ -272,7 +289,15 @@ Plan 清单里的单个子任务也可以单独指定模型：
 lark-codex/<plan_id>-<task_id>
 ```
 
-这样多个子任务可以并行修改代码，互不覆盖。每个子任务成功结束后会运行 `PLAN_TEST_COMMAND`，生成 Diff 摘要，并在 Plan 卡片中进入“等待提交”状态。点击“批准提交”会把该 worktree 的改动提交到对应子任务分支；不会自动合并回主分支。
+这样多个子任务可以并行修改代码，互不覆盖。每个子任务成功结束后会运行 `PLAN_TEST_COMMAND`，生成 Diff 摘要，并在 Plan 卡片中进入“等待提交”状态。点击“批准提交”会把该 worktree 的改动提交到对应子任务分支；不会自动合并回主分支，但可以在 Plan 合并总览中手动逐个或批量 cherry-pick。
+
+增强后的 Plan 面板还支持：
+
+- 子任务详情：查看 prompt、阶段/依赖、session、worktree、测试、diff、提交和最新输出。
+- 子任务操作：取消排队任务、停止运行任务、重试失败任务、丢弃改动、清理 worktree。
+- 合并总览：把已提交的子任务 commit cherry-pick 回当前项目分支；遇到冲突时可交给 Codex 自动修复，或中止合并。
+- 清理确认：清理 worktree 和已合并子任务分支前会先展示确认卡。
+- 状态恢复：Plan/子任务状态会写入本地状态文件，脚本重启后仍可恢复已结束和待处理的 Plan 卡片操作。
 
 如果当前目录不是 Git 仓库，子任务会退回到原目录执行。对于 Git 仓库，如果 worktree 创建失败，子任务会直接失败并在 Plan 面板中显示原因，避免重新落回同目录并行修改。
 
@@ -353,7 +378,7 @@ lark-codex/<plan_id>-<task_id>
 | --- | --- | --- |
 | `STATUS_INTERVAL_SECONDS` | `0` | 定时推送状态的间隔。默认关闭；设为正整数可开启。 |
 | `DAILY_REPORT_TIME` | `19:00` | 每日项目进展日报推送时间。 |
-| `LARK_CODEX_STATE_FILE` | `.lark_codex_state.json` | 本地运行状态文件。 |
+| `LARK_CODEX_STATE_FILE` | `.lark_codex_state.json` | 本地运行状态文件，用于保存已知 chat、运行面板状态和 Plan/子任务状态。 |
 | `LARK_CODEX_SHOW_ARCHIVED` | `0` | 是否在查询结果中显示已归档项目、普通对话和会话。 |
 | `LARK_CODEX_INCLUDE_PLAN_WORKTREES` | `0` | 是否把 `/plan` 创建的 worktree 子目录作为项目/对话统计进看板和日报；默认不统计。 |
 | `LARK_CODEX_WELCOME_MESSAGE` | `I'm Lark Codex, a lightweight agent that helps you use lark to work perfectly with Codex!` | WebSocket 脚本启动时向已知 Lark 会话发送的欢迎语；为空则不发送。 |

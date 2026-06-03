@@ -147,7 +147,7 @@ lark-codex/<plan_id>-<task_id>
 LARK_CODEX_INCLUDE_PLAN_WORKTREES=1
 ```
 
-### [部分完成] Plan 子任务收尾
+### [已完成] Plan 子任务收尾第一版
 
 子任务结束后会运行：
 
@@ -162,8 +162,23 @@ PLAN_TEST_TIMEOUT_SECONDS=120
 - 有改动：进入 `review`，Plan 卡片展示测试结果和 diff 摘要。
 - 点击“批准提交”：在子任务 worktree 分支上执行 `git add -A && git commit`。
 - 点击“跳过提交”：保留 worktree 改动，标记完成。
+- 点击“丢弃改动”：在子任务 worktree 中执行 `git reset --hard` 和 `git clean -fd`，并标记完成。
 
-Plan 不会自动合并回主分支。主分支合并、cherry-pick 或清理 worktree 尚未实现，需要后续手动处理或另行开发。
+Plan 已新增合并总览，可以把已提交的子任务 commit 逐个或批量 cherry-pick 回当前项目分支。遇到冲突时会进入冲突状态，并提供“Codex 修复冲突”和中止 cherry-pick 的卡片操作。已结束子任务支持清理 worktree，清理前会先展示确认卡；已合并子任务分支也可以单独确认清理。
+
+第一版增强还包括：
+
+- Plan/子任务状态持久化到本地 state，脚本重启后可恢复已结束和待处理的 Plan。
+- 子任务详情卡：查看 prompt、阶段/依赖、session、worktree、测试、diff、提交和最新输出。
+- 子任务操作：取消、停止、重试、丢弃改动、确认后清理 worktree。
+- 合并冲突自动修复：由 Codex 修改冲突文件，脚本复查冲突、运行 `PLAN_TEST_COMMAND`，通过后执行 `git cherry-pick --continue`。
+- 已合并分支清理：确认后删除 `lark-codex/<plan_id>-<task_id>` 子任务分支。
+- 轻量阶段和依赖：支持 `阶段 1:` / `阶段 2:`，以及 `depends:1,2`。
+
+仍需后续增强：
+
+- 更完整的 Plan 事件日志和执行时间线。
+- 依赖语法的更严格校验和错误提示。
 
 ## [已完成] 项目和普通对话
 
@@ -368,11 +383,19 @@ KEEP_AWAKE_DISABLE_SLEEP=1
 lark-codex/<plan_id>-<task_id>
 ```
 
+当前第一版增强已完成：
+
+- Plan/子任务状态持久化，脚本重启后可恢复 Plan 卡片操作。
+- 子任务详情卡，展示 prompt、阶段/依赖、session、worktree、测试、diff、提交和最新输出。
+- 子任务级取消、停止、重试、丢弃改动、确认后清理 worktree。
+- Plan 级合并总览，支持逐个或批量 cherry-pick 已提交子任务，并在冲突时展示冲突状态、Codex 自动修复和中止操作。
+- 已合并子任务分支确认清理。
+- 轻量阶段和依赖解析，支持 `阶段 1:` / `阶段 2:` 以及 `depends:1,2`。
+
 未完成的增强项：
 
-- worktree 自动清理。
-- 子任务分支合并、cherry-pick 或冲突处理。
-- 子任务依赖关系和阶段化执行。
+- 冲突自动修复失败后的更细粒度人工处理向导。
+- 子任务依赖关系的可视化展示、更严格校验和失败策略配置。
 
 ### [已完成] 2. 完成后 Diff 审批卡
 
@@ -382,13 +405,12 @@ lark-codex/<plan_id>-<task_id>
 - 检查是否有 Git 改动。
 - 生成 diff 摘要。
 - 在 Plan 卡片里进入 `review` 状态。
-- 提供“查看 Diff / 批准提交 / 跳过提交”按钮。
+- 提供“查看 Diff / 批准提交 / 跳过提交 / 丢弃改动”按钮。
 - 批准后在子任务 worktree 分支上执行 `git add -A && git commit`。
+- 已提交子任务可从 Plan 合并总览逐个或批量 cherry-pick 回当前项目分支；发生冲突时可交给 Codex 自动修复，通过测试后继续 cherry-pick。
 
 未完成的增强项：
 
-- “拒绝”按钮的语义可进一步细化为丢弃改动或保留 worktree。
-- “重试”按钮尚未实现。
 - Diff 展示仍是摘要级别，后续可支持分文件查看。
 
 ### [计划] 3. Lark 任务看板
@@ -506,8 +528,8 @@ lark-codex/<plan_id>-<task_id>
 
 优先级较高：
 
-- `[计划]` 把 `TASKS`、`PLANS` 和审批记录做更完整的持久化，避免脚本重启后任务卡按钮无法找到内存态。
-- `[计划]` 为 `/plan` 增加 worktree 清理、合并或 cherry-pick 指令。
+- `[部分完成]` 把 `TASKS`、`PLANS` 和审批记录做更完整的持久化；`PLANS` 第一版已落地，普通任务和审批记录仍可继续增强。
+- `[计划]` 为 `/plan` 增加冲突自动修复失败后的人工处理向导、分文件 Diff 和执行时间线。
 - `[计划]` 增加 `ALLOWED_CHAT_IDS` / `ALLOWED_OPEN_IDS`，限制可触发 Codex 的 Lark 会话和用户。
 - `[部分完成]` 对同一个 `app_id/app_secret` 的多实例风险已写入文档；运行时检测尚未实现。
 - `[计划]` 为任务级隔离、审批和 Plan worktree 增加自动化测试。
@@ -515,6 +537,6 @@ lark-codex/<plan_id>-<task_id>
 中期可做：
 
 - `[计划]` 中心化多用户部署模式：用数据库保存用户、项目、权限、任务和 session 路由。
-- `[计划]` Plan 子任务依赖关系：支持串行阶段、前置条件和失败策略。
+- `[部分完成]` Plan 子任务依赖关系：已支持轻量阶段和 `depends:`；前置条件 UI 和失败策略尚未实现。
 - `[计划]` 更完整日报：持久记录每次任务的开始、结束、状态、审批和耗时。
 - `[部分完成]` project/chat/convos 创建和归档已实现；归档恢复命令尚未实现。

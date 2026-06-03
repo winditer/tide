@@ -6,6 +6,7 @@ import os
 import queue
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -294,6 +295,8 @@ class PlanTask:
     title: str
     prompt: str
     model: str = ""
+    phase: str = ""
+    depends_on: list[str] = field(default_factory=list)
     status: str = "pending"
     process: Optional[subprocess.Popen] = None
     session_id: str = ""
@@ -309,6 +312,10 @@ class PlanTask:
     test_summary: str = ""
     commit_message: str = ""
     commit_hash: str = ""
+    retry_count: int = 0
+    merge_status: str = ""
+    cleanup_status: str = ""
+    branch_cleanup_status: str = ""
 
 
 @dataclass
@@ -323,6 +330,8 @@ class PlanRuntime:
     created_at: float = field(default_factory=time.time)
     last_card_update_at: float = 0
     stop_requested: bool = False
+    merge_status: str = ""
+    merge_output: str = ""
 
 
 RUNTIMES: dict[str, ChatRuntime] = {}
@@ -530,6 +539,136 @@ def load_known_chats():
             guidance_task_id=data.get("guidance_task_id", ""),
         )
         RUNTIMES[chat_id].last_status_sent_at = now
+
+
+def plan_task_to_state(task: PlanTask) -> dict[str, Any]:
+    return {
+        "task_id": task.task_id,
+        "title": task.title,
+        "prompt": task.prompt,
+        "model": task.model,
+        "phase": task.phase,
+        "depends_on": list(task.depends_on or []),
+        "status": task.status,
+        "session_id": task.session_id,
+        "output": task.output,
+        "started_at": task.started_at,
+        "finished_at": task.finished_at,
+        "approved_retry": task.approved_retry,
+        "approval_required": task.approval_required,
+        "worktree_path": task.worktree_path,
+        "branch_name": task.branch_name,
+        "base_head": task.base_head,
+        "diff_summary": task.diff_summary,
+        "test_summary": task.test_summary,
+        "commit_message": task.commit_message,
+        "commit_hash": task.commit_hash,
+        "retry_count": task.retry_count,
+        "merge_status": task.merge_status,
+        "cleanup_status": task.cleanup_status,
+        "branch_cleanup_status": task.branch_cleanup_status,
+    }
+
+
+def plan_task_from_state(data: dict[str, Any]) -> PlanTask:
+    status = str(data.get("status", "pending") or "pending")
+    if status in ("running", "pending", "approval"):
+        status = "failed"
+        output = str(data.get("output", "") or "")
+        output = (output + "\n\n" if output else "") + "脚本重启后恢复：该子任务原本未结束，已标记为失败，需要手动重试。"
+    else:
+        output = str(data.get("output", "") or "")
+    return PlanTask(
+        task_id=str(data.get("task_id", "") or ""),
+        title=str(data.get("title", "") or ""),
+        prompt=str(data.get("prompt", "") or data.get("title", "") or ""),
+        model=str(data.get("model", "") or ""),
+        phase=str(data.get("phase", "") or ""),
+        depends_on=[str(item) for item in data.get("depends_on", []) if item],
+        status=status,
+        session_id=str(data.get("session_id", "") or ""),
+        output=output,
+        started_at=float(data.get("started_at", 0) or 0),
+        finished_at=float(data.get("finished_at", 0) or 0),
+        approved_retry=bool(data.get("approved_retry", False)),
+        approval_required=bool(data.get("approval_required", False)),
+        worktree_path=str(data.get("worktree_path", "") or ""),
+        branch_name=str(data.get("branch_name", "") or ""),
+        base_head=str(data.get("base_head", "") or ""),
+        diff_summary=str(data.get("diff_summary", "") or ""),
+        test_summary=str(data.get("test_summary", "") or ""),
+        commit_message=str(data.get("commit_message", "") or ""),
+        commit_hash=str(data.get("commit_hash", "") or ""),
+        retry_count=int(data.get("retry_count", 0) or 0),
+        merge_status=str(data.get("merge_status", "") or ""),
+        cleanup_status=str(data.get("cleanup_status", "") or ""),
+        branch_cleanup_status=str(data.get("branch_cleanup_status", "") or ""),
+    )
+
+
+def plan_to_state(plan: PlanRuntime) -> dict[str, Any]:
+    return {
+        "plan_id": plan.plan_id,
+        "chat_id": plan.chat_id,
+        "cwd": str(plan.cwd),
+        "tasks": [plan_task_to_state(task) for task in plan.tasks],
+        "max_parallel": plan.max_parallel,
+        "message_id": plan.message_id,
+        "status": plan.status,
+        "created_at": plan.created_at,
+        "stop_requested": plan.stop_requested,
+        "merge_status": plan.merge_status,
+        "merge_output": plan.merge_output,
+    }
+
+
+def plan_from_state(data: dict[str, Any]) -> Optional[PlanRuntime]:
+    plan_id = str(data.get("plan_id", "") or "")
+    chat_id = str(data.get("chat_id", "") or "")
+    if not plan_id or not is_valid_chat_id(chat_id):
+        return None
+    tasks = [
+        task for task in (plan_task_from_state(item) for item in data.get("tasks", []))
+        if task.task_id and task.prompt
+    ]
+    if not tasks:
+        return None
+    return PlanRuntime(
+        plan_id=plan_id,
+        chat_id=chat_id,
+        cwd=Path(data.get("cwd") or DEFAULT_CWD).expanduser(),
+        tasks=tasks,
+        max_parallel=int(data.get("max_parallel", PLAN_MAX_PARALLEL) or PLAN_MAX_PARALLEL),
+        message_id=str(data.get("message_id", "") or ""),
+        status=str(data.get("status", "") or "pending"),
+        created_at=float(data.get("created_at", time.time()) or time.time()),
+        stop_requested=bool(data.get("stop_requested", False)),
+        merge_status=str(data.get("merge_status", "") or ""),
+        merge_output=str(data.get("merge_output", "") or ""),
+    )
+
+
+def save_plans_state():
+    with PLAN_LOCK:
+        plans = {plan_id: plan_to_state(plan) for plan_id, plan in PLANS.items()}
+    state = read_state()
+    state["plans"] = plans
+    write_state(state)
+
+
+def load_plans_state():
+    state = read_state()
+    restored: dict[str, PlanRuntime] = {}
+    for plan_id, data in state.get("plans", {}).items():
+        if not isinstance(data, dict):
+            continue
+        plan = plan_from_state(data)
+        if plan:
+            restored[plan_id] = plan
+    with PLAN_LOCK:
+        PLANS.update(restored)
+    if restored:
+        logger.info("restored %s plan runtime records from state", len(restored))
 
 
 def get_runtime(chat_id: str) -> ChatRuntime:
@@ -3213,39 +3352,84 @@ def update_desktop_sync_card(
     return False
 
 
-def parse_plan_tasks(content: str) -> list[str]:
-    text = re.sub(r"^/plan\b", "", content.strip(), flags=re.IGNORECASE).strip()
+def clean_plan_item(item: str) -> str:
+    item = item.strip()
+    item = re.sub(r"^[-*]\s+\[[ xX]\]\s+", "", item)
+    item = re.sub(r"^[-*]\s+", "", item)
+    item = re.sub(r"^\d+[\.)、]\s+", "", item)
+    return item.strip()
 
-    def clean_plan_item(item: str) -> str:
-        item = item.strip()
-        item = re.sub(r"^[-*]\s+\[[ xX]\]\s+", "", item)
-        item = re.sub(r"^[-*]\s+", "", item)
-        item = re.sub(r"^\d+[\.)、]\s+", "", item)
-        return item.strip()
+
+def split_plan_depends(item: str) -> tuple[str, list[str]]:
+    depends: list[str] = []
+
+    def replace_depends(match: re.Match) -> str:
+        raw = match.group(1)
+        for value in re.split(r"[,，、\s]+", raw):
+            value = value.strip()
+            if value:
+                depends.append(value)
+        return ""
+
+    item = re.sub(r"(?:depends|依赖)\s*[:=：]\s*([0-9,\s，、]+)", replace_depends, item, flags=re.IGNORECASE).strip()
+    return re.sub(r"\s+", " ", item).strip(), depends
+
+
+def parse_plan_task_specs(content: str) -> list[dict[str, Any]]:
+    text = re.sub(r"^/plan\b", "", content.strip(), flags=re.IGNORECASE).strip()
 
     numbered_markers = list(re.finditer(r"\d+[\.)、]\s+", text))
     if len(numbered_markers) > 1 and numbered_markers[0].start() == 0:
-        tasks = []
+        specs = []
         for index, marker in enumerate(numbered_markers):
             start = marker.start()
             end = numbered_markers[index + 1].start() if index + 1 < len(numbered_markers) else len(text)
             item = clean_plan_item(text[start:end])
             if item:
-                tasks.append(item)
-        if tasks:
-            return tasks
+                prompt, depends = split_plan_depends(item)
+                if prompt:
+                    specs.append({"text": prompt, "phase": "", "depends_on": depends})
+        if specs:
+            return specs
 
-    tasks: list[str] = []
+    specs: list[dict[str, Any]] = []
+    current_phase = ""
     for line in text.splitlines():
+        phase_match = re.match(r"^(?:阶段|stage)\s*([^\s:：]+)\s*[:：]\s*$", line.strip(), flags=re.IGNORECASE)
+        if phase_match:
+            current_phase = phase_match.group(1).strip()
+            continue
         item = clean_plan_item(line)
         if item:
-            tasks.append(item)
-    if not tasks and text:
-        tasks.append(text)
-    return tasks
+            prompt, depends = split_plan_depends(item)
+            if prompt:
+                specs.append({"text": prompt, "phase": current_phase, "depends_on": depends})
+    if not specs and text:
+        prompt, depends = split_plan_depends(text)
+        if prompt:
+            specs.append({"text": prompt, "phase": "", "depends_on": depends})
+
+    previous_phase = ""
+    previous_phase_ids: list[str] = []
+    current_phase_ids: list[str] = []
+    for index, spec in enumerate(specs, 1):
+        phase = spec.get("phase", "")
+        if phase != previous_phase:
+            if previous_phase:
+                previous_phase_ids = current_phase_ids
+            current_phase_ids = []
+            previous_phase = phase
+        if phase and previous_phase_ids and not spec.get("depends_on"):
+            spec["depends_on"] = list(previous_phase_ids)
+        current_phase_ids.append(str(index))
+    return specs
 
 
-def plan_task_from_text(index: int, task: str, default_model: str = "") -> PlanTask:
+def parse_plan_tasks(content: str) -> list[str]:
+    return [item["text"] for item in parse_plan_task_specs(content)]
+
+
+def plan_task_from_text(index: int, task: str, default_model: str = "", phase: str = "", depends_on: Optional[list[str]] = None) -> PlanTask:
     model, prompt = parse_model_prefix(task)
     prompt = prompt or task
     return PlanTask(
@@ -3253,14 +3437,50 @@ def plan_task_from_text(index: int, task: str, default_model: str = "") -> PlanT
         title=prompt,
         prompt=prompt,
         model=model or default_model,
+        phase=phase,
+        depends_on=depends_on or [],
     )
+
+
+def plan_task_successful(task: PlanTask) -> bool:
+    return task.status in ("done", "committed")
+
+
+def plan_task_terminal(task: PlanTask) -> bool:
+    return task.status in ("done", "committed", "failed", "cancelled")
+
+
+def plan_task_dependencies_satisfied(plan: PlanRuntime, task: PlanTask) -> tuple[bool, str]:
+    for dep_id in task.depends_on or []:
+        dep = find_plan_task(plan, dep_id)
+        if not dep:
+            return False, f"找不到依赖任务 {dep_id}"
+        if dep.status in ("failed", "cancelled"):
+            return False, f"依赖任务 {dep_id} 已{plan_status_label(dep.status)}"
+        if not plan_task_successful(dep):
+            return False, f"等待依赖任务 {dep_id}"
+    return True, ""
+
+
+def plan_status_label(status: str) -> str:
+    labels = {
+        "pending": "排队中",
+        "running": "运行中",
+        "approval": "等待审批",
+        "review": "等待提交",
+        "done": "完成",
+        "committed": "已提交",
+        "failed": "失败",
+        "cancelled": "已取消",
+    }
+    return labels.get(status, status or "-")
 
 
 def plan_summary(plan: PlanRuntime) -> tuple[int, int, int, int, int, int]:
     pending = sum(1 for task in plan.tasks if task.status == "pending")
     running = sum(1 for task in plan.tasks if task.status == "running")
     done = sum(1 for task in plan.tasks if task.status in ("done", "committed"))
-    failed = sum(1 for task in plan.tasks if task.status == "failed")
+    failed = sum(1 for task in plan.tasks if task.status in ("failed", "cancelled"))
     waiting = sum(1 for task in plan.tasks if task.status == "approval")
     review = sum(1 for task in plan.tasks if task.status == "review")
     return pending, running, done, failed, waiting, review
@@ -3280,13 +3500,15 @@ def plan_status_text(plan: PlanRuntime) -> str:
         return "排队中"
     if failed:
         return "部分失败" if done else "失败"
+    if any(task.status == "committed" and task.merge_status != "merged" for task in plan.tasks):
+        return "等待合并"
     return "完成"
 
 
 def build_plan_card(plan: PlanRuntime) -> dict[str, Any]:
     pending, running, done, failed, waiting, review = plan_summary(plan)
     plan.status = plan_status_text(plan)
-    template = "green" if plan.status == "完成" else "orange" if waiting or review or failed else "blue"
+    template = "green" if plan.status == "完成" else "orange" if waiting or review or failed or plan.status == "等待合并" else "blue"
     elements: list[dict[str, Any]] = [
         fields(
             [
@@ -3301,12 +3523,18 @@ def build_plan_card(plan: PlanRuntime) -> dict[str, Any]:
             f"**排队/失败/审批/待提交**：{pending} / {failed} / {waiting} / {review}"
         ),
     ]
+    if plan.merge_status or plan.merge_output:
+        elements.append(md(f"**合并状态**\n{plan.merge_status or '-'}\n{final_reply_text(plan.merge_output, 900)}"))
     for task in plan.tasks[:12]:
         elapsed = format_duration((task.finished_at or time.time()) - task.started_at) if task.started_at else "-"
         line = (
             f"**{task.task_id}. {short_text(task.title, 80)}**\n"
-            f"状态：{task.status} · 耗时：{elapsed}"
+            f"状态：{plan_status_label(task.status)} · 耗时：{elapsed}"
         )
+        if task.phase:
+            line += f" · 阶段：{task.phase}"
+        if task.depends_on:
+            line += f"\n依赖：{', '.join(task.depends_on)}"
         if task.session_id:
             line += f" · Session：`{task.session_id}`"
         if task.model or CODEX_MODEL:
@@ -3319,6 +3547,18 @@ def build_plan_card(plan: PlanRuntime) -> dict[str, Any]:
             line += f"\n{final_reply_text(task.output, PLAN_TASK_OUTPUT_MAX_CHARS)}"
         elements.append(divider())
         elements.append(md(line))
+        task_actions = [
+            compact_button("详情", "plan_task_detail", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "task_id": task.task_id}, "primary"),
+        ]
+        if task.status == "pending":
+            task_actions.append(compact_button("取消", "plan_task_cancel", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "task_id": task.task_id}, "danger"))
+        elif task.status == "running":
+            task_actions.append(compact_button("停止", "plan_task_stop", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "task_id": task.task_id}, "danger"))
+        elif task.status in ("failed", "cancelled"):
+            task_actions.append(compact_button("重试", "plan_task_retry", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "task_id": task.task_id}))
+        if task.status in ("done", "committed", "failed", "cancelled") and task.worktree_path and task.cleanup_status != "cleaned":
+            task_actions.append(compact_button("清理", "plan_cleanup_confirm", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "task_id": task.task_id, "scope": "task"}))
+        elements.append(action_row(task_actions))
         if task.status == "approval":
             elements.append(
                 action_row(
@@ -3334,7 +3574,22 @@ def build_plan_card(plan: PlanRuntime) -> dict[str, Any]:
                     [
                         compact_button("查看 Diff", "plan_diff", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "task_id": task.task_id}),
                         compact_button("批准提交", "plan_commit", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "task_id": task.task_id}, "primary"),
+                    ]
+                )
+            )
+            elements.append(
+                action_row(
+                    [
                         compact_button("跳过提交", "plan_skip_commit", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "task_id": task.task_id}, "danger"),
+                        compact_button("丢弃改动", "plan_discard", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "task_id": task.task_id}, "danger"),
+                    ]
+                )
+            )
+        if task.status == "committed" and task.commit_hash and task.merge_status != "merged":
+            elements.append(
+                action_row(
+                    [
+                        compact_button("合并", "plan_merge_task", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "task_id": task.task_id}, "primary"),
                     ]
                 )
             )
@@ -3345,15 +3600,195 @@ def build_plan_card(plan: PlanRuntime) -> dict[str, Any]:
     ]
     if plan.status in ("运行中", "排队中", "等待审批", "停止中"):
         actions.append(compact_button("停止全部", "plan_stop", {"chat_id": plan.chat_id, "plan_id": plan.plan_id}, "danger"))
+    if any(task.status == "committed" and task.commit_hash for task in plan.tasks):
+        actions.append(compact_button("合并总览", "plan_merge", {"chat_id": plan.chat_id, "plan_id": plan.plan_id}, "primary"))
+    if any(task.worktree_path and task.cleanup_status != "cleaned" and plan_task_terminal(task) for task in plan.tasks):
+        actions.append(compact_button("清理", "plan_cleanup_confirm", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "scope": "all"}))
     elements.append(action_row(actions))
     return base_card("Codex Plan", elements, template)
 
 
+def build_plan_task_card(plan: PlanRuntime, task: PlanTask) -> dict[str, Any]:
+    cwd = plan_task_cwd(plan, task)
+    elapsed = format_duration((task.finished_at or time.time()) - task.started_at) if task.started_at else "-"
+    elements: list[dict[str, Any]] = [
+        fields(
+            [
+                ("状态", plan_status_label(task.status)),
+                ("任务", task.task_id),
+                ("耗时", elapsed),
+            ]
+        ),
+        md(
+            f"**Plan**：`{plan.plan_id}`\n"
+            f"**目录**：`{cwd}`\n"
+            f"**标题**\n{task.title}"
+        ),
+    ]
+    if task.phase or task.depends_on:
+        elements.append(md(f"**阶段/依赖**\n阶段：{task.phase or '-'}\n依赖：{', '.join(task.depends_on) if task.depends_on else '-'}"))
+    if task.model or CODEX_MODEL:
+        elements.append(md(f"**模型**\n`{model_label(task.model)}`"))
+    if task.session_id:
+        elements.append(md(f"**Session**\n`{task.session_id}`"))
+    if task.worktree_path or task.branch_name:
+        elements.append(md(f"**Worktree / 分支**\n`{task.worktree_path or '-'}`\n`{task.branch_name or '-'}`"))
+    if task.commit_hash or task.merge_status or task.cleanup_status:
+        elements.append(
+            md(
+                f"**提交/合并/清理**\n"
+                f"Commit：`{task.commit_hash or '-'}`\n"
+                f"合并：{task.merge_status or '-'}\n"
+                f"Worktree 清理：{task.cleanup_status or '-'}\n"
+                f"分支清理：{task.branch_cleanup_status or '-'}"
+            )
+        )
+    if task.test_summary:
+        elements.extend([divider(), md(f"**测试**\n{task.test_summary}")])
+    if task.diff_summary:
+        elements.extend([divider(), md(f"**Diff 摘要**\n{final_reply_text(task.diff_summary, 1800)}")])
+    if task.output:
+        elements.extend([divider(), md(f"**最新输出**\n{final_reply_text(task.output, 2400)}")])
+
+    actions = [
+        compact_button("返回 Plan", "plan_refresh", {"chat_id": plan.chat_id, "plan_id": plan.plan_id}, "primary"),
+    ]
+    if task.status == "pending":
+        actions.append(compact_button("取消", "plan_task_cancel", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "task_id": task.task_id}, "danger"))
+    if task.status == "running":
+        actions.append(compact_button("停止", "plan_task_stop", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "task_id": task.task_id}, "danger"))
+    if task.status in ("failed", "cancelled"):
+        actions.append(compact_button("重试", "plan_task_retry", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "task_id": task.task_id}))
+    if task.status == "review":
+        actions.extend(
+            [
+                compact_button("查看 Diff", "plan_diff", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "task_id": task.task_id}),
+                compact_button("批准提交", "plan_commit", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "task_id": task.task_id}, "primary"),
+                compact_button("丢弃改动", "plan_discard", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "task_id": task.task_id}, "danger"),
+            ]
+        )
+    if task.status == "committed" and task.commit_hash and task.merge_status != "merged":
+        actions.append(compact_button("合并", "plan_merge_task", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "task_id": task.task_id}, "primary"))
+    if task.worktree_path and task.cleanup_status != "cleaned" and plan_task_terminal(task):
+        actions.append(compact_button("清理", "plan_cleanup_confirm", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "task_id": task.task_id, "scope": "task"}))
+    elements.append(action_row(actions))
+    return base_card("Plan 子任务", elements, "orange" if task.status in ("failed", "review", "approval") else "blue")
+
+
+def build_plan_merge_card(plan: PlanRuntime) -> dict[str, Any]:
+    repo_root = git_repo_root(plan.cwd)
+    committed = [task for task in plan.tasks if task.status == "committed" and task.commit_hash]
+    cleanup_branches = [
+        task for task in committed
+        if task.merge_status == "merged" and task.branch_name and task.branch_cleanup_status != "cleaned"
+    ]
+    elements: list[dict[str, Any]] = [
+        fields(
+            [
+                ("状态", plan.merge_status or "待合并"),
+                ("可合并", str(sum(1 for task in committed if task.merge_status != "merged"))),
+                ("仓库", short_text(str(repo_root or plan.cwd), 36)),
+            ]
+        ),
+        md(f"**Plan**：`{plan.plan_id}`\n**目录**：`{plan.cwd}`"),
+    ]
+    if plan.merge_output:
+        elements.append(md(f"**合并输出**\n{final_reply_text(plan.merge_output, 1600)}"))
+    for task in committed[:12]:
+        elements.append(divider())
+        elements.append(
+            md(
+                f"**{task.task_id}. {short_text(task.title, 80)}**\n"
+                f"Commit：`{task.commit_hash}`\n"
+                f"合并：{task.merge_status or '待合并'}"
+                + (f"\n分支：`{task.branch_name}`" if task.branch_name else "")
+                + (f"\n分支清理：{task.branch_cleanup_status}" if task.branch_cleanup_status else "")
+            )
+        )
+        if task.merge_status != "merged":
+            elements.append(
+                action_row(
+                    [
+                        compact_button("合并此项", "plan_merge_task", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "task_id": task.task_id}, "primary"),
+                        compact_button("详情", "plan_task_detail", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "task_id": task.task_id}),
+                    ]
+                )
+            )
+    if len(committed) > 12:
+        elements.append(note(f"还有 {len(committed) - 12} 个已提交子任务未显示。"))
+    actions = [
+        compact_button("返回 Plan", "plan_refresh", {"chat_id": plan.chat_id, "plan_id": plan.plan_id}, "primary"),
+    ]
+    if any(task.merge_status != "merged" for task in committed):
+        actions.append(compact_button("合并全部", "plan_merge_all", {"chat_id": plan.chat_id, "plan_id": plan.plan_id}, "primary"))
+    if plan.merge_status == "conflict":
+        actions.append(compact_button("Codex 修复冲突", "plan_merge_fix", {"chat_id": plan.chat_id, "plan_id": plan.plan_id}, "primary"))
+        actions.append(compact_button("中止合并", "plan_merge_abort", {"chat_id": plan.chat_id, "plan_id": plan.plan_id}, "danger"))
+    if cleanup_branches:
+        actions.append(compact_button("清理已合并分支", "plan_cleanup_confirm", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "scope": "branches"}))
+    elements.append(action_row(actions))
+    return base_card("Plan 合并总览", elements, "orange" if plan.merge_status == "conflict" else "blue")
+
+
+def build_plan_cleanup_confirm_card(plan: PlanRuntime, scope: str = "all", task_id: str = "") -> dict[str, Any]:
+    target_task = find_plan_task(plan, task_id) if task_id else None
+    can_execute = False
+    if scope == "task" and target_task:
+        title = "确认清理子任务 Worktree"
+        body = (
+            f"将清理子任务 {target_task.task_id} 的 worktree：\n"
+            f"`{target_task.worktree_path or '-'}`"
+        )
+        can_execute = bool(target_task.worktree_path and target_task.cleanup_status != "cleaned")
+    elif scope == "task":
+        title = "确认清理子任务 Worktree"
+        body = "找不到要清理的子任务。"
+    elif scope == "branches":
+        targets = [
+            task for task in plan.tasks
+            if task.merge_status == "merged" and task.branch_name and task.branch_cleanup_status != "cleaned"
+        ]
+        title = "确认清理已合并分支"
+        body = "将删除这些已通过 Plan 合并的子任务分支：\n" + "\n".join(
+            f"- `{task.branch_name}`" for task in targets[:20]
+        )
+        if len(targets) > 20:
+            body += f"\n还有 {len(targets) - 20} 个分支未显示。"
+        can_execute = bool(targets)
+    else:
+        targets = [
+            task for task in plan.tasks
+            if task.worktree_path and task.cleanup_status != "cleaned" and plan_task_terminal(task)
+        ]
+        title = "确认清理 Plan Worktree"
+        body = "将清理这些已结束子任务的 worktree：\n" + "\n".join(
+            f"- {task.task_id}. `{short_text(task.worktree_path, 120)}`" for task in targets[:20]
+        )
+        if len(targets) > 20:
+            body += f"\n还有 {len(targets) - 20} 个 worktree 未显示。"
+        can_execute = bool(targets)
+    actions = [
+        compact_button("取消", "plan_cleanup_cancel", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "scope": scope}, "default"),
+    ]
+    if can_execute:
+        actions.insert(
+            0,
+            compact_button("确认清理", "plan_cleanup_execute", {"chat_id": plan.chat_id, "plan_id": plan.plan_id, "task_id": task_id, "scope": scope}, "danger"),
+        )
+    elements = [
+        md(f"**Plan**：`{plan.plan_id}`\n{body}\n\n该操作会修改本地 Git/worktree 状态，请确认后继续。"),
+        action_row(actions),
+    ]
+    return base_card(title, elements, "red")
+
+
 def send_plan_card(plan: PlanRuntime):
-    message_id = send_card(plan.chat_id, build_plan_card(plan))
+    card = build_plan_card(plan)
+    message_id = send_card(plan.chat_id, card)
     if message_id:
         plan.message_id = message_id
         logger.info("plan card sent: chat_id=%s plan_id=%s message_id=%s", plan.chat_id, plan.plan_id, message_id)
+        save_plans_state()
 
 
 def update_plan_card(plan: PlanRuntime, force: bool = False) -> bool:
@@ -3361,10 +3796,12 @@ def update_plan_card(plan: PlanRuntime, force: bool = False) -> bool:
     if not force and now - plan.last_card_update_at < 2:
         return bool(plan.message_id)
     plan.last_card_update_at = now
+    card = build_plan_card(plan)
+    save_plans_state()
     if not plan.message_id:
         send_plan_card(plan)
         return bool(plan.message_id)
-    return update_card(plan.message_id, build_plan_card(plan))
+    return update_card(plan.message_id, card)
 
 
 def build_dashboard_card(chat_id: str, expanded: bool = False):
@@ -4170,8 +4607,19 @@ def plan_runner_loop(plan_id: str):
 
         running = [task for task in plan.tasks if task.status == "running"]
         pending = [task for task in plan.tasks if task.status == "pending"]
+        ready: list[PlanTask] = []
+        for task in pending:
+            satisfied, reason = plan_task_dependencies_satisfied(plan, task)
+            if satisfied:
+                ready.append(task)
+            elif reason.startswith("依赖任务") or reason.startswith("找不到依赖"):
+                task.status = "failed"
+                task.output = reason
+                task.finished_at = time.time()
+            else:
+                task.output = reason
         slots = max(0, plan.max_parallel - len(running))
-        for task in pending[:slots]:
+        for task in ready[:slots]:
             task.status = "running"
             task.started_at = time.time()
             threading.Thread(target=run_plan_task, args=(plan_id, task.task_id), name=f"plan-{plan_id}-{task.task_id}", daemon=True).start()
@@ -4191,11 +4639,11 @@ def start_plan(chat_id: str, content: str, model: str = ""):
     if not is_allowed_cwd(runtime.cwd):
         send_msg(chat_id, f"当前目录不在允许范围内：`{runtime.cwd}`\n允许范围：{allowed_roots_text()}")
         return
-    tasks = parse_plan_tasks(content)
-    if not tasks:
+    task_specs = parse_plan_task_specs(content)
+    if not task_specs:
         send_msg(chat_id, "请发送任务清单，例如：\n/plan\n- 任务一\n- 任务二")
         return
-    slots = min(len(tasks), max(1, PLAN_MAX_PARALLEL))
+    slots = min(len(task_specs), max(1, PLAN_MAX_PARALLEL))
     allowed, reason = can_start_work(chat_id, slots=slots)
     if not allowed:
         send_msg(chat_id, reason)
@@ -4206,8 +4654,14 @@ def start_plan(chat_id: str, content: str, model: str = ""):
         chat_id=chat_id,
         cwd=runtime.cwd,
         tasks=[
-            plan_task_from_text(index, task, model)
-            for index, task in enumerate(tasks, 1)
+            plan_task_from_text(
+                index,
+                spec["text"],
+                model,
+                phase=str(spec.get("phase", "") or ""),
+                depends_on=[str(item) for item in spec.get("depends_on", []) if item],
+            )
+            for index, spec in enumerate(task_specs, 1)
         ],
         max_parallel=max(1, PLAN_MAX_PARALLEL),
     )
@@ -4226,6 +4680,444 @@ def latest_plan_for_chat(chat_id: str) -> Optional[PlanRuntime]:
     if not plans:
         return None
     return max(plans, key=lambda p: p.created_at)
+
+
+def restart_plan_runner(plan: PlanRuntime):
+    plan.stop_requested = False
+    threading.Thread(target=plan_runner_loop, args=(plan.plan_id,), name=f"plan-runner-{plan.plan_id}", daemon=True).start()
+
+
+def retry_plan_task(chat_id: str, plan_id: str, task_id: str) -> bool:
+    plan = find_plan(plan_id)
+    if not plan or plan.chat_id != chat_id:
+        return False
+    task = find_plan_task(plan, task_id)
+    if not task:
+        return False
+    if task.process and task.process.poll() is None:
+        task.output = "子任务正在运行，不能重试。"
+        update_plan_card(plan, force=True)
+        return True
+    if task.status not in ("failed", "cancelled"):
+        task.output = f"当前状态 {plan_status_label(task.status)} 不能重试。"
+        update_plan_card(plan, force=True)
+        return True
+    task.retry_count += 1
+    task.status = "pending"
+    task.finished_at = 0
+    task.started_at = 0
+    task.approval_required = False
+    task.approved_retry = False
+    task.diff_summary = ""
+    task.test_summary = ""
+    task.commit_message = ""
+    task.commit_hash = ""
+    task.merge_status = ""
+    task.output = f"已重新排队，重试次数：{task.retry_count}"
+    update_plan_card(plan, force=True)
+    restart_plan_runner(plan)
+    return True
+
+
+def stop_or_cancel_plan_task(chat_id: str, plan_id: str, task_id: str) -> bool:
+    plan = find_plan(plan_id)
+    if not plan or plan.chat_id != chat_id:
+        return False
+    task = find_plan_task(plan, task_id)
+    if not task:
+        return False
+    if task.process and task.process.poll() is None:
+        task.process.terminate()
+        task.status = "cancelled"
+        task.output = "子任务已停止。"
+        task.finished_at = time.time()
+    elif task.status in ("pending", "approval"):
+        task.status = "cancelled"
+        task.output = "子任务已取消。"
+        task.finished_at = time.time()
+    else:
+        task.output = f"当前状态 {plan_status_label(task.status)} 不能取消或停止。"
+    update_plan_card(plan, force=True)
+    return True
+
+
+def discard_plan_task_changes(chat_id: str, plan_id: str, task_id: str) -> bool:
+    plan = find_plan(plan_id)
+    if not plan or plan.chat_id != chat_id:
+        return False
+    task = find_plan_task(plan, task_id)
+    if not task:
+        return False
+    cwd = plan_task_cwd(plan, task)
+    if task.process and task.process.poll() is None:
+        task.output = "子任务仍在运行，不能丢弃改动。"
+        update_plan_card(plan, force=True)
+        return True
+    if not git_repo_root(cwd):
+        task.output = "当前子任务目录不是 Git 仓库，不能自动丢弃改动。"
+        update_plan_card(plan, force=True)
+        return True
+    code, output = git_command(cwd, ["reset", "--hard"], timeout=30)
+    if code == 0:
+        clean_code, clean_output = git_command(cwd, ["clean", "-fd"], timeout=30)
+        code = clean_code
+        output = clean_output
+    if code != 0:
+        task.output = f"丢弃改动失败。\n{short_text(output, 1200)}"
+    else:
+        task.status = "done"
+        task.diff_summary = ""
+        task.output = "已丢弃该子任务 worktree 中的未提交改动。"
+    update_plan_card(plan, force=True)
+    return True
+
+
+def cleanup_plan_task_worktree(chat_id: str, plan_id: str, task_id: str) -> bool:
+    plan = find_plan(plan_id)
+    if not plan or plan.chat_id != chat_id:
+        return False
+    task = find_plan_task(plan, task_id)
+    if not task:
+        return False
+    if task.process and task.process.poll() is None:
+        task.output = "子任务仍在运行，不能清理 worktree。"
+        update_plan_card(plan, force=True)
+        return True
+    if not task.worktree_path:
+        task.cleanup_status = "cleaned"
+        task.output = "没有可清理的 worktree。"
+        update_plan_card(plan, force=True)
+        return True
+    worktree = Path(task.worktree_path).expanduser()
+    repo_root = git_repo_root(plan.cwd)
+    output = ""
+    code = 1
+    if repo_root:
+        code, output = git_command(repo_root, ["worktree", "remove", "--force", str(worktree)], timeout=60)
+    if code != 0 and worktree.exists() and path_is_under(worktree, plan_worktree_root(repo_root or plan.cwd)):
+        try:
+            shutil.rmtree(worktree)
+            code = 0
+            output = "已直接删除 worktree 目录。"
+        except OSError as e:
+            output = f"{output}\n直接删除也失败：{type(e).__name__}: {e}"
+    if code != 0:
+        task.output = f"清理 worktree 失败。\n{short_text(output, 1200)}"
+    else:
+        task.cleanup_status = "cleaned"
+        task.worktree_path = ""
+        task.output = "已清理 worktree。"
+    update_plan_card(plan, force=True)
+    return True
+
+
+def cleanup_plan_worktrees(chat_id: str, plan_id: str) -> bool:
+    plan = find_plan(plan_id)
+    if not plan or plan.chat_id != chat_id:
+        return False
+    count = 0
+    for task in plan.tasks:
+        if task.worktree_path and task.cleanup_status != "cleaned" and plan_task_terminal(task):
+            cleanup_plan_task_worktree(chat_id, plan_id, task.task_id)
+            count += 1
+    plan.merge_output = f"已尝试清理 {count} 个已结束子任务 worktree。"
+    update_plan_card(plan, force=True)
+    return True
+
+
+def cleanup_plan_branches(chat_id: str, plan_id: str) -> bool:
+    plan = find_plan(plan_id)
+    if not plan or plan.chat_id != chat_id:
+        return False
+    repo_root = git_repo_root(plan.cwd)
+    if not repo_root:
+        plan.merge_status = "failed"
+        plan.merge_output = "当前 Plan 目录不是 Git 仓库，不能清理分支。"
+        update_plan_card(plan, force=True)
+        return True
+    cleaned = 0
+    failures: list[str] = []
+    for task in plan.tasks:
+        if task.merge_status != "merged" or not task.branch_name or task.branch_cleanup_status == "cleaned":
+            continue
+        code, output = git_command(repo_root, ["branch", "-D", task.branch_name], timeout=30)
+        if code == 0:
+            task.branch_cleanup_status = "cleaned"
+            cleaned += 1
+        else:
+            failures.append(f"{task.task_id}. `{task.branch_name}`\n{short_text(output, 600)}")
+    plan.merge_output = f"已清理 {cleaned} 个已合并子任务分支。"
+    if failures:
+        plan.merge_output += "\n\n清理失败：\n" + "\n".join(failures[:6])
+    update_plan_card(plan, force=True)
+    return True
+
+
+def execute_plan_cleanup(chat_id: str, plan_id: str, scope: str = "all", task_id: str = "") -> bool:
+    if scope == "task":
+        return cleanup_plan_task_worktree(chat_id, plan_id, task_id)
+    if scope == "branches":
+        return cleanup_plan_branches(chat_id, plan_id)
+    return cleanup_plan_worktrees(chat_id, plan_id)
+
+
+def git_conflict_files(cwd: Path) -> list[str]:
+    is_repo, entries, _ = git_status_entries(cwd)
+    if not is_repo:
+        return []
+    return [entry[3:] if len(entry) > 3 else entry for entry in entries if entry[:2] in ("UU", "AA", "DD", "AU", "UA", "DU", "UD")]
+
+
+def git_cherry_pick_in_progress(cwd: Path) -> bool:
+    code, _ = git_command(cwd, ["rev-parse", "--verify", "CHERRY_PICK_HEAD"], timeout=5)
+    return code == 0
+
+
+def plan_conflict_task(plan: PlanRuntime) -> Optional[PlanTask]:
+    for task in plan.tasks:
+        if task.merge_status == "conflict":
+            return task
+    return None
+
+
+def cherry_pick_plan_task(chat_id: str, plan_id: str, task_id: str) -> bool:
+    plan = find_plan(plan_id)
+    if not plan or plan.chat_id != chat_id:
+        return False
+    task = find_plan_task(plan, task_id)
+    if not task:
+        return False
+    repo_root = git_repo_root(plan.cwd)
+    if not repo_root:
+        plan.merge_status = "failed"
+        plan.merge_output = "当前 Plan 目录不是 Git 仓库，不能合并。"
+        update_plan_card(plan, force=True)
+        return True
+    if task.status != "committed" or not task.commit_hash:
+        task.output = "只有已提交的子任务可以合并。"
+        update_plan_card(plan, force=True)
+        return True
+    is_repo, entries, _ = git_status_entries(repo_root)
+    if is_repo and entries:
+        plan.merge_status = "blocked"
+        plan.merge_output = "主工作区存在未提交改动或冲突，合并前请先处理。\n" + "\n".join(entries[:20])
+        update_plan_card(plan, force=True)
+        return True
+    code, output = git_command(repo_root, ["cherry-pick", task.commit_hash], timeout=120)
+    if code == 0:
+        task.merge_status = "merged"
+        plan.merge_status = "merged"
+        plan.merge_output = f"已合并子任务 {task.task_id}：`{task.commit_hash}`"
+    else:
+        conflicts = git_conflict_files(repo_root)
+        task.merge_status = "conflict" if conflicts else "failed"
+        plan.merge_status = "conflict" if conflicts else "failed"
+        conflict_text = "\n冲突文件：\n" + "\n".join(conflicts[:20]) if conflicts else ""
+        plan.merge_output = f"合并子任务 {task.task_id} 失败。\n{short_text(output, 1600)}{conflict_text}"
+    update_plan_card(plan, force=True)
+    return True
+
+
+def merge_all_plan_tasks(chat_id: str, plan_id: str) -> bool:
+    plan = find_plan(plan_id)
+    if not plan or plan.chat_id != chat_id:
+        return False
+    merged = 0
+    for task in plan.tasks:
+        if task.status == "committed" and task.commit_hash and task.merge_status != "merged":
+            cherry_pick_plan_task(chat_id, plan_id, task.task_id)
+            if task.merge_status == "merged":
+                merged += 1
+                continue
+            return True
+    plan.merge_status = "merged" if merged else (plan.merge_status or "noop")
+    plan.merge_output = f"合并全部完成，本次合并 {merged} 个子任务。"
+    update_plan_card(plan, force=True)
+    return True
+
+
+def plan_merge_conflict_prompt(plan: PlanRuntime, task: Optional[PlanTask], conflicts: list[str]) -> str:
+    task_text = f"{task.task_id}. {task.title}" if task else "未知子任务"
+    conflict_text = "\n".join(f"- {path}" for path in conflicts[:30])
+    return (
+        "当前仓库正在执行 Plan 子任务 cherry-pick，并发生 Git 冲突。\n"
+        "请直接修改工作区文件解决冲突，移除冲突标记，保留正确的业务改动。\n"
+        "不要执行 git add、git commit、git cherry-pick --continue、git cherry-pick --abort，也不要删除无关文件。\n\n"
+        f"Plan：{plan.plan_id}\n"
+        f"子任务：{task_text}\n"
+        f"冲突文件：\n{conflict_text}\n\n"
+        "完成后请简要说明解决思路。"
+    )
+
+
+def start_plan_merge_conflict_fix(chat_id: str, plan_id: str) -> bool:
+    plan = find_plan(plan_id)
+    if not plan or plan.chat_id != chat_id:
+        return False
+    repo_root = git_repo_root(plan.cwd)
+    if not repo_root:
+        plan.merge_status = "failed"
+        plan.merge_output = "当前 Plan 目录不是 Git 仓库，不能自动修复冲突。"
+        update_plan_card(plan, force=True)
+        return True
+    conflicts = git_conflict_files(repo_root)
+    if not conflicts or not git_cherry_pick_in_progress(repo_root):
+        plan.merge_status = "failed"
+        plan.merge_output = "当前没有可自动修复的 cherry-pick 冲突。"
+        update_plan_card(plan, force=True)
+        return True
+    if plan.merge_status == "fixing":
+        return True
+    plan.merge_status = "fixing"
+    plan.merge_output = "已启动 Codex 自动修复合并冲突。"
+    update_plan_card(plan, force=True)
+    threading.Thread(
+        target=run_plan_merge_conflict_fix,
+        args=(chat_id, plan_id),
+        name=f"plan-merge-fix-{plan_id}",
+        daemon=True,
+    ).start()
+    return True
+
+
+def run_plan_merge_conflict_fix(chat_id: str, plan_id: str):
+    plan = find_plan(plan_id)
+    if not plan or plan.chat_id != chat_id:
+        return
+    repo_root = git_repo_root(plan.cwd)
+    if not repo_root:
+        return
+    task = plan_conflict_task(plan)
+    conflicts = git_conflict_files(repo_root)
+    if not conflicts:
+        plan.merge_status = "failed"
+        plan.merge_output = "没有检测到冲突文件，自动修复已停止。"
+        update_plan_card(plan, force=True)
+        return
+
+    last_message_path: Optional[Path] = None
+    try:
+        fd, name = tempfile.mkstemp(prefix="lark-codex-merge-fix-", suffix=".txt", dir="/tmp")
+        os.close(fd)
+        last_message_path = Path(name)
+    except OSError:
+        logger.exception("failed to create merge fix last message file")
+
+    runtime = ChatRuntime(cwd=repo_root)
+    runtime.next_approval_policy = APPROVED_CODEX_APPROVAL_POLICY
+    runtime.next_sandbox_mode = APPROVED_CODEX_SANDBOX_MODE
+    prompt = plan_merge_conflict_prompt(plan, task, conflicts)
+    argv = codex_command(runtime, prompt, last_message_path)
+    output_parts: list[str] = []
+    code: Optional[int] = None
+    try:
+        proc = subprocess.Popen(
+            argv,
+            cwd=str(repo_root),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        assert proc.stdout is not None
+        last_flush = time.time()
+        while True:
+            line = proc.stdout.readline()
+            if not line:
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.1)
+                continue
+            kind, text = parse_codex_json_event(line)
+            if kind == "skip" or kind == "session_id" or not text:
+                continue
+            output_parts.append(text)
+            if time.time() - last_flush >= 3:
+                plan.merge_output = "Codex 正在修复冲突。\n" + final_reply_text("\n".join(output_parts[-4:]), 1200)
+                update_plan_card(plan)
+                last_flush = time.time()
+        code = proc.wait(timeout=5)
+    except Exception as e:
+        logger.exception("plan merge conflict fix failed: plan_id=%s", plan_id)
+        plan.merge_status = "conflict"
+        plan.merge_output = f"Codex 修复冲突执行异常：{type(e).__name__}: {e}"
+        update_plan_card(plan, force=True)
+        return
+    finally:
+        latest = read_last_message_file(last_message_path)
+        if latest:
+            output_parts.append(latest)
+        if last_message_path:
+            last_message_path.unlink(missing_ok=True)
+
+    summary = final_reply_text("\n".join(part for part in output_parts if part), 1600)
+    if code != 0:
+        plan.merge_status = "conflict"
+        plan.merge_output = f"Codex 修复冲突失败，退出码 {code}。\n{summary}"
+        update_plan_card(plan, force=True)
+        return
+
+    conflicts = git_conflict_files(repo_root)
+    if conflicts:
+        plan.merge_status = "conflict"
+        if task:
+            task.merge_status = "conflict"
+        plan.merge_output = "Codex 已返回，但仍存在冲突文件：\n" + "\n".join(conflicts[:20])
+        if summary:
+            plan.merge_output += "\n\n" + summary
+        update_plan_card(plan, force=True)
+        return
+
+    test_ok, test_summary = run_plan_test_command(repo_root)
+    if not test_ok:
+        plan.merge_status = "conflict"
+        plan.merge_output = f"冲突文件已解决，但测试未通过，暂不继续 cherry-pick。\n{test_summary}"
+        if summary:
+            plan.merge_output += "\n\n" + summary
+        update_plan_card(plan, force=True)
+        return
+
+    add_code, add_output = git_command(repo_root, ["add", "-A"], timeout=30)
+    if add_code != 0:
+        plan.merge_status = "conflict"
+        plan.merge_output = f"冲突已解决，但 git add 失败。\n{short_text(add_output, 1200)}"
+        update_plan_card(plan, force=True)
+        return
+
+    continue_code, continue_output = git_command(repo_root, ["-c", "core.editor=true", "cherry-pick", "--continue"], timeout=120)
+    if continue_code == 0:
+        if task:
+            task.merge_status = "merged"
+        plan.merge_status = "merged"
+        plan.merge_output = f"Codex 已修复冲突并完成 cherry-pick。\n\n**测试**\n{test_summary}"
+        if summary:
+            plan.merge_output += "\n\n" + summary
+    else:
+        conflicts = git_conflict_files(repo_root)
+        plan.merge_status = "conflict" if conflicts or git_cherry_pick_in_progress(repo_root) else "failed"
+        if task:
+            task.merge_status = plan.merge_status
+        conflict_text = "\n冲突文件：\n" + "\n".join(conflicts[:20]) if conflicts else ""
+        plan.merge_output = f"冲突修复后继续 cherry-pick 失败。\n{short_text(continue_output, 1600)}{conflict_text}"
+    update_plan_card(plan, force=True)
+
+
+def abort_plan_merge(chat_id: str, plan_id: str) -> bool:
+    plan = find_plan(plan_id)
+    if not plan or plan.chat_id != chat_id:
+        return False
+    repo_root = git_repo_root(plan.cwd)
+    if not repo_root:
+        return False
+    code, output = git_command(repo_root, ["cherry-pick", "--abort"], timeout=30)
+    if code == 0:
+        plan.merge_status = "aborted"
+        plan.merge_output = "已中止 cherry-pick。"
+    else:
+        plan.merge_output = f"中止 cherry-pick 失败。\n{short_text(output, 1200)}"
+    update_plan_card(plan, force=True)
+    return True
 
 
 def running_process_counts(chat_id: str = "") -> tuple[int, int]:
@@ -5524,7 +6416,9 @@ def text_command_requires_admin(content: str) -> bool:
     )
     if normalized.startswith(admin_prefixes):
         return True
-    return normalized in ("/plan stop", "/plan 停止")
+    if normalized in ("/plan stop", "/plan 停止", "/plan merge", "/plan 合并", "/plan cleanup", "/plan clean", "/plan 清理"):
+        return True
+    return normalized.startswith(("/plan cleanup ", "/plan clean ", "/plan 清理 "))
 
 
 def send_help(chat_id: str):
@@ -5546,6 +6440,11 @@ def send_help(chat_id: str):
                 "/plan 进入并行计划模式；也可发送 /plan 后跟任务清单直接执行",
                 "/plan status 刷新最近的计划面板",
                 "/plan stop 停止最近的计划",
+                "/plan detail <子任务ID> 打开子任务详情",
+                "/plan retry <子任务ID> 重试失败或取消的子任务",
+                "/plan merge 打开合并总览",
+                "/plan cleanup 打开已结束子任务 worktree 清理确认",
+                "/plan cleanup branches 打开已合并子任务分支清理确认",
                 "/cd <目录> 切换工作目录",
                 "/project <编号> 打开面板中的项目",
                 "/latest <编号> 打开面板中项目的最新对话",
@@ -5717,8 +6616,46 @@ def on_text(
             else:
                 send_msg(chat_id, "当前还没有 Plan。")
             return
+        if normalized_plan_command in ("merge", "合并", "merge status", "合并总览"):
+            plan = latest_plan_for_chat(chat_id)
+            if plan:
+                send_card(chat_id, build_plan_merge_card(plan))
+            else:
+                send_msg(chat_id, "当前还没有 Plan。")
+            return
+        if normalized_plan_command in ("cleanup branches", "clean branches", "清理分支", "清理 分支"):
+            plan = latest_plan_for_chat(chat_id)
+            if plan:
+                send_card(chat_id, build_plan_cleanup_confirm_card(plan, "branches"))
+            else:
+                send_msg(chat_id, "当前还没有可清理的 Plan。")
+            return
+        if normalized_plan_command in ("cleanup", "clean", "清理"):
+            plan = latest_plan_for_chat(chat_id)
+            if plan:
+                send_card(chat_id, build_plan_cleanup_confirm_card(plan, "all"))
+            else:
+                send_msg(chat_id, "当前还没有可清理的 Plan。")
+            return
         if normalized_plan_command in ("stop", "停止"):
             stop_plan(chat_id)
+            return
+        detail_match = re.match(r"^(?:detail|详情)\s+(\S+)$", normalized_plan_command)
+        if detail_match:
+            plan = latest_plan_for_chat(chat_id)
+            task = find_plan_task(plan, detail_match.group(1)) if plan else None
+            if plan and task:
+                send_card(chat_id, build_plan_task_card(plan, task))
+            else:
+                send_msg(chat_id, "找不到 Plan 子任务。")
+            return
+        retry_match = re.match(r"^(?:retry|重试)\s+(\S+)$", normalized_plan_command)
+        if retry_match:
+            plan = latest_plan_for_chat(chat_id)
+            if plan and retry_plan_task(chat_id, plan.plan_id, retry_match.group(1)):
+                send_plan_card(plan)
+            else:
+                send_msg(chat_id, "找不到 Plan 子任务。")
             return
         start_plan(chat_id, plan_content, selected_model)
         return
@@ -5916,6 +6853,16 @@ CARD_ADMIN_ACTIONS = {
     "plan_reject",
     "plan_commit",
     "plan_skip_commit",
+    "plan_discard",
+    "plan_task_cancel",
+    "plan_task_stop",
+    "plan_task_cleanup",
+    "plan_cleanup",
+    "plan_cleanup_execute",
+    "plan_merge_task",
+    "plan_merge_all",
+    "plan_merge_fix",
+    "plan_merge_abort",
     "stop",
     "plan_stop",
     "restart",
@@ -6047,12 +6994,90 @@ def handle_card_action(action: dict[str, Any], meta: Optional[dict[str, str]] = 
             if not plan:
                 return action_toast("找不到 Plan。", "error")
             return action_card(build_plan_card(plan), "已刷新")
+        elif name == "plan_task_detail":
+            plan = find_plan(action.get("plan_id", "")) or latest_plan_for_chat(chat_id)
+            task = find_plan_task(plan, action.get("task_id", "")) if plan else None
+            if not plan or not task:
+                return action_toast("找不到 Plan 子任务。", "error")
+            return action_card(build_plan_task_card(plan, task), "已打开详情")
+        elif name == "plan_task_retry":
+            if not retry_plan_task(chat_id, action.get("plan_id", ""), action.get("task_id", "")):
+                return action_toast("找不到 Plan 子任务。", "error")
+            plan = find_plan(action.get("plan_id", ""))
+            return action_card(build_plan_card(plan), "已重试") if plan else action_toast("已重试")
+        elif name in ("plan_task_cancel", "plan_task_stop"):
+            if not stop_or_cancel_plan_task(chat_id, action.get("plan_id", ""), action.get("task_id", "")):
+                return action_toast("找不到 Plan 子任务。", "error")
+            plan = find_plan(action.get("plan_id", ""))
+            return action_card(build_plan_card(plan), "已处理") if plan else action_toast("已处理")
         elif name == "plan_stop":
             plan = find_plan(action.get("plan_id", "")) or latest_plan_for_chat(chat_id)
             if not plan:
                 return action_toast("找不到 Plan。", "error")
             plan.stop_requested = True
+            save_plans_state()
             return action_card(build_plan_card(plan), "已停止")
+        elif name == "plan_discard":
+            if not discard_plan_task_changes(chat_id, action.get("plan_id", ""), action.get("task_id", "")):
+                return action_toast("找不到 Plan 子任务。", "error")
+            plan = find_plan(action.get("plan_id", ""))
+            task = find_plan_task(plan, action.get("task_id", "")) if plan else None
+            return action_card(build_plan_task_card(plan, task), "已丢弃") if plan and task else action_toast("已丢弃")
+        elif name == "plan_task_cleanup":
+            plan = find_plan(action.get("plan_id", ""))
+            if not plan:
+                return action_toast("找不到 Plan 子任务。", "error")
+            return action_card(build_plan_cleanup_confirm_card(plan, "task", action.get("task_id", "")), "请确认清理")
+        elif name == "plan_cleanup":
+            plan = find_plan(action.get("plan_id", ""))
+            if not plan:
+                return action_toast("找不到 Plan。", "error")
+            return action_card(build_plan_cleanup_confirm_card(plan, action.get("scope", "all"), action.get("task_id", "")), "请确认清理")
+        elif name == "plan_cleanup_confirm":
+            plan = find_plan(action.get("plan_id", ""))
+            if not plan:
+                return action_toast("找不到 Plan。", "error")
+            return action_card(build_plan_cleanup_confirm_card(plan, action.get("scope", "all"), action.get("task_id", "")), "请确认清理")
+        elif name == "plan_cleanup_execute":
+            scope = action.get("scope", "all")
+            if not execute_plan_cleanup(chat_id, action.get("plan_id", ""), scope, action.get("task_id", "")):
+                return action_toast("找不到 Plan。", "error")
+            plan = find_plan(action.get("plan_id", ""))
+            if not plan:
+                return action_toast("已清理")
+            card = build_plan_merge_card(plan) if scope == "branches" else build_plan_card(plan)
+            return action_card(card, "已清理")
+        elif name == "plan_cleanup_cancel":
+            plan = find_plan(action.get("plan_id", "")) or latest_plan_for_chat(chat_id)
+            if not plan:
+                return action_toast("找不到 Plan。", "error")
+            card = build_plan_merge_card(plan) if action.get("scope") == "branches" else build_plan_card(plan)
+            return action_card(card, "已取消")
+        elif name == "plan_merge":
+            plan = find_plan(action.get("plan_id", "")) or latest_plan_for_chat(chat_id)
+            if not plan:
+                return action_toast("找不到 Plan。", "error")
+            return action_card(build_plan_merge_card(plan), "已打开合并总览")
+        elif name == "plan_merge_task":
+            if not cherry_pick_plan_task(chat_id, action.get("plan_id", ""), action.get("task_id", "")):
+                return action_toast("找不到 Plan 子任务。", "error")
+            plan = find_plan(action.get("plan_id", ""))
+            return action_card(build_plan_merge_card(plan), "已合并") if plan else action_toast("已合并")
+        elif name == "plan_merge_all":
+            if not merge_all_plan_tasks(chat_id, action.get("plan_id", "")):
+                return action_toast("找不到 Plan。", "error")
+            plan = find_plan(action.get("plan_id", ""))
+            return action_card(build_plan_merge_card(plan), "已合并") if plan else action_toast("已合并")
+        elif name == "plan_merge_fix":
+            if not start_plan_merge_conflict_fix(chat_id, action.get("plan_id", "")):
+                return action_toast("找不到 Plan。", "error")
+            plan = find_plan(action.get("plan_id", ""))
+            return action_card(build_plan_merge_card(plan), "已开始修复") if plan else action_toast("已开始修复")
+        elif name == "plan_merge_abort":
+            if not abort_plan_merge(chat_id, action.get("plan_id", "")):
+                return action_toast("找不到 Plan。", "error")
+            plan = find_plan(action.get("plan_id", ""))
+            return action_card(build_plan_merge_card(plan), "已中止") if plan else action_toast("已中止")
         elif name == "plan_approve":
             if not approve_plan_task(chat_id, action.get("plan_id", ""), action.get("task_id", ""), True):
                 return action_toast("找不到 Plan 子任务。", "error")
@@ -6303,6 +7328,7 @@ def validate_config():
 def main():
     validate_config()
     load_known_chats()
+    load_plans_state()
     atexit.register(stop_power_management)
     threading.Thread(target=keep_awake_loop, name="keep-awake", daemon=True).start()
     threading.Thread(target=event_worker_loop, name="event-worker", daemon=True).start()
