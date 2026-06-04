@@ -1,6 +1,6 @@
-# Lark-Codex Development Notes
+# Lark2Agent Development Notes
 
-本文档整理当前 Lark-Codex bridge 的设计方案、已实现计划和后续开发约束，便于继续迭代 `lark_codex_ws.py`。
+本文档整理当前 Lark2Agent bridge 的设计方案、已实现计划和后续开发约束，便于继续迭代 `lark2agent_ws.py`。
 
 状态标记：
 
@@ -10,11 +10,11 @@
 
 ## 目标
 
-Lark-Codex bridge 的目标是把 Lark 群聊变成 Codex 的远程控制台：
+Lark2Agent bridge 的目标是把 Lark 群聊变成多 Agent 远程控制台：
 
-- 在 Lark 里发送自然语言任务，脚本本地启动 Codex CLI 执行。
+- 在 Lark 里发送自然语言任务，脚本本地启动 Codex CLI、Claude Code CLI 或后续 Agent CLI 执行。
 - 用 Lark 卡片展示任务进度、最终结果、审批入口和项目状态。
-- 支持项目、普通对话、Codex 会话的创建、归档和查询。
+- 支持项目、普通对话、Agent 会话的创建、归档和查询。
 - 支持 `/plan` 并行拆分任务清单，并隔离子任务的代码改动。
 - 支持审批、重启、日报、指定模型、macOS 保活和后台运行。
 
@@ -27,7 +27,7 @@ Lark-Codex bridge 的目标是把 Lark 群聊变成 Codex 的远程控制台：
 - `scheduler_loop`：定时刷新运行中的任务卡、发送日报和状态。
 - `session_watcher_loop`：监听 Codex Desktop session 文件更新。
 - `keep_awake_loop`：macOS 接电源时启动 `caffeinate`，必要时开启 `pmset disablesleep`。
-- Codex 任务线程：每条 Lark 指令启动一个独立线程和一个独立 `codex exec` 子进程。
+- Agent 任务线程：每条 Lark 指令启动一个独立线程和一个独立 CLI 子进程；当前支持 Codex 和 Claude Code。
 - Plan 调度线程和子任务线程：`/plan` 用一个调度线程按并发上限启动多个子任务线程。
 
 同一个 `app_id/app_secret` 表示同一个 Lark 应用和机器人身份。不同人不应各自用同一组凭据启动本地 WebSocket 客户端，否则 Lark 会把它们视为同一应用的连接池，事件可能被任意一个客户端消费，导致串事件或丢事件。多人使用时应采用：
@@ -37,9 +37,17 @@ Lark-Codex bridge 的目标是把 Lark 群聊变成 Codex 的远程控制台：
 
 ## [已完成] 普通任务隔离
 
+普通任务已经抽象为 Agent adapter 模型。Bridge 内部仍保留 `CodexTaskRuntime` 这个兼容命名，但运行态带有 `agent_id` 字段，并通过 `AGENT_ADAPTERS` 选择实际 CLI：
+
+- `codex`：使用 `codex exec --json`，会话来自 `CODEX_SESSIONS_DIR`。
+- `claude`：使用 `claude --print --output-format stream-json --verbose`，会话来自 `CLAUDE_PROJECTS_DIR`。
+
+Lark 侧协议不区分具体 CLI：文本消息、卡片按钮、`message.create`、`message.patch` 和 `card.action.trigger` 都复用同一套结构。按钮回调仍以 `task_id` 定位任务，任务运行态再用 `agent_id` 找到对应 adapter。
+
 每条 Lark 指令都会创建一个 `CodexTaskRuntime`，并生成独立 `task_id`。任务运行态绑定：
 
 - `task_id`
+- `agent_id`
 - `chat_id`
 - `cwd`
 - `prompt`
@@ -60,7 +68,7 @@ Lark-Codex bridge 的目标是把 Lark 群聊变成 Codex 的远程控制台：
 
 这样可以避免两个 `codex resume <session_id>` 同时写同一个 session 文件，造成上下文和结果混乱。没有 session 的新任务不加锁，会各自创建新的 Codex session。
 
-排队中的任务会在 `Codex 指令` 卡片上显示“引导”和“取消”操作。取消只对尚未启动 Codex 子进程的等待任务生效；线程最终拿到 session 锁后会检查取消标记，已取消任务不会再启动。
+排队中的任务会在 Agent 指令卡片上显示“引导”和“取消”操作。取消只对尚未启动 CLI 子进程的等待任务生效；线程最终拿到 session 锁后会检查取消标记，已取消任务不会再启动。
 
 ## [已完成] 审批模型
 
@@ -77,7 +85,7 @@ Lark-Codex bridge 的目标是把 Lark 群聊变成 Codex 的远程控制台：
 - 审批状态
 - 批准后使用的 resume prompt
 
-审批入口只显示在对应的 `Codex 指令` 面板里，不再单独新建待审批面板。点击批准或拒绝后，原任务卡的 `最新结果` 会更新为审批结果。
+审批入口只显示在对应的 Agent 指令面板里，不再单独新建待审批面板。点击批准或拒绝后，原任务卡的 `最新结果` 会更新为审批结果。
 
 批准后会使用：
 
@@ -93,16 +101,16 @@ PENDING_APPROVAL_WAIT_SECONDS=300
 PENDING_APPROVAL_POLL_SECONDS=2
 ```
 
-控制。超时后按 Codex 默认配置继续收尾。
+控制。超时后按当前 Agent 默认配置继续收尾。
 
 ## [已完成] `/plan` 并行模式
 
-`/plan` 是真并行，但不是一个 Codex 进程内的多线程。它的结构是：
+`/plan` 是真并行，不依赖单个 Agent 进程内的多线程。它的结构是：
 
 - 一个 `PlanRuntime` 保存整个计划。
 - 一个 `plan_runner_loop` 调度线程。
 - 多个 `run_plan_task` 子任务线程。
-- 每个子任务线程启动一个独立 `codex exec` 子进程。
+- 每个子任务线程启动一个独立 Agent CLI 子进程。
 
 并发上限由：
 
@@ -123,28 +131,28 @@ PLAN_USE_WORKTREES=1
 如果当前目录是 Git 仓库，每个子任务会创建独立 worktree：
 
 ```text
-<repo>/.lark-codex/worktrees/<plan_id>-<task_id>
+<repo>/.lark2agent/worktrees/<plan_id>-<task_id>
 ```
 
 并创建独立分支：
 
 ```text
-lark-codex/<plan_id>-<task_id>
+lark2agent/<plan_id>-<task_id>
 ```
 
 因此每个 Plan 子任务拥有：
 
 - 独立工作目录
 - 独立 Git 分支
-- 独立 Codex 子进程
+- 独立 Agent 子进程
 - 独立输出、测试结果和 diff 摘要
 
-如果当前目录不是 Git 仓库，或关闭 `PLAN_USE_WORKTREES`，子任务会退回原目录执行。这时仍然是多线程和多 Codex 进程，但文件改动没有隔离，存在互相覆盖风险。
+如果当前目录不是 Git 仓库，或关闭 `PLAN_USE_WORKTREES`，子任务会退回原目录执行。这时仍然是多线程和多 Agent 进程，但文件改动没有隔离，存在互相覆盖风险。
 
-项目/对话看板和日报默认不会把 Plan 创建的 worktree 子目录当作独立项目统计，避免 `.lark-codex/worktrees/...` 污染项目列表。这个过滤只影响 `build_index()` 的项目索引，不影响 `Codex Plan` 面板展示子任务执行状态、输出、worktree 路径和审批操作。需要统计这些 worktree 会话时可设置：
+项目/对话看板和日报默认不会把 Plan 创建的 worktree 子目录当作独立项目统计，避免 `.lark2agent/worktrees/...` 污染项目列表。这个过滤只影响 `build_index()` 的项目索引，不影响 `Agent Plan` 面板展示子任务执行状态、输出、worktree 路径和审批操作。需要统计这些 worktree 会话时可设置：
 
 ```env
-LARK_CODEX_INCLUDE_PLAN_WORKTREES=1
+LARK2AGENT_INCLUDE_PLAN_WORKTREES=1
 ```
 
 ### [已完成] Plan 子任务收尾第一版
@@ -172,7 +180,7 @@ Plan 已新增合并总览，可以把已提交的子任务 commit 逐个或批�
 - 子任务详情卡：查看 prompt、阶段/依赖、session、worktree、测试、diff、提交和最新输出。
 - 子任务操作：取消、停止、重试、丢弃改动、确认后清理 worktree。
 - 合并冲突自动修复：由 Codex 修改冲突文件，脚本复查冲突、运行 `PLAN_TEST_COMMAND`，通过后执行 `git cherry-pick --continue`。
-- 已合并分支清理：确认后删除 `lark-codex/<plan_id>-<task_id>` 子任务分支。
+- 已合并分支清理：确认后删除 `lark2agent/<plan_id>-<task_id>` 子任务分支。
 - 轻量阶段和依赖：支持 `阶段 1:` / `阶段 2:`，以及 `depends:1,2`。
 
 仍需后续增强：
@@ -222,7 +230,7 @@ README.md
 归档内容默认不显示在查询结果中。需要显示时设置：
 
 ```env
-LARK_CODEX_SHOW_ARCHIVED=1
+LARK2AGENT_SHOW_ARCHIVED=1
 ```
 
 项目创建根目录由：
@@ -238,13 +246,13 @@ CODEX_PROJECTS_ROOT=
 WebSocket 脚本启动时会向已记录的 Lark 会话发送欢迎语：
 
 ```text
-I'm Lark Codex, a lightweight agent that helps you use lark to work perfectly with Codex!
+I'm Lark2Agent, a lightweight multi-agent bridge for Lark.
 ```
 
 可通过：
 
 ```env
-LARK_CODEX_WELCOME_MESSAGE=
+LARK2AGENT_WELCOME_MESSAGE=
 ```
 
 自定义。设为空字符串时不发送。
@@ -289,15 +297,15 @@ CODEX_MODEL=
 
 - `on_message` 按 `message_type` 识别 `image`、`file` 和带内嵌图片的 `post`。
 - 图片和文件通过 `im/v1/messages/:message_id/resources/:file_key` 下载。
-- 相对 `LARK_ATTACHMENTS_DIR` 会落到当前 Codex 工作目录下，默认是 `.lark-codex/attachments`，因此 `workspace-write` sandbox 可以读取。
+- 相对 `LARK_ATTACHMENTS_DIR` 会落到当前 Agent 工作目录下，默认是 `.lark2agent/attachments`，因此 `workspace-write` sandbox 可以读取。
 - 只有附件、没有文字的消息会按 `chat_id + sender_id` 暂存，下一条普通文本指令自动消费。
 - 回复或引用附件消息时，会从本地 state 的 `message_refs` 中找回附件路径。
-- Codex 任务卡展示附件摘要，实际 prompt 里包含附件类型、文件名、本地路径和 Lark message id。
+- Agent 任务卡展示附件摘要，实际 prompt 里包含附件类型、文件名、本地路径和 Lark message id。
 
 当前边界：
 
 - 不自动解压压缩包。
-- 不做 OCR 或图片视觉预处理；图片理解能力取决于当前 Codex CLI 和模型。
+- 不做 OCR 或图片视觉预处理；图片理解能力取决于当前 Agent CLI 和模型。
 - 大文件只做单文件大小限制，不做断点续传。
 
 ## [部分完成] 日报
@@ -314,7 +322,7 @@ CODEX_MODEL=
 - 今日新增或更新功能
 - 修复 bug 数
 
-当前统计主要来自 Codex session 文件、运行中任务、Plan 状态和本地审批记录。总指令数按用户下发的指令统计，并结合普通任务和 Plan 子任务补齐。指定日期查询已实现。跨进程重启后的历史审批统计和任务级耗时记录仍依赖 `.lark_codex_state.json` 中可持久化的数据，后续可继续增强。
+当前统计主要来自 Codex session 文件、运行中任务、Plan 状态和本地审批记录。总指令数按用户下发的指令统计，并结合普通任务和 Plan 子任务补齐。指定日期查询已实现。跨进程重启后的历史审批统计和任务级耗时记录仍依赖 `.lark2agent_state.json` 中可持久化的数据，后续可继续增强。
 
 ## [已完成] 后台运行和重启
 
@@ -322,27 +330,27 @@ CODEX_MODEL=
 
 ```bash
 cd /Users/haifeng/Documents/lark2codex
-nohup python3 lark_codex_ws.py > lark_codex_ws.log 2>&1 &
+nohup python3 lark2agent_ws.py > lark2agent_ws.log 2>&1 &
 ```
 
 查看进程：
 
 ```bash
-pgrep -fl lark_codex_ws.py
-ps aux | grep '[l]ark_codex_ws.py'
+pgrep -fl lark2agent_ws.py
+ps aux | grep '[l]ark2agent_ws.py'
 ```
 
 查看日志：
 
 ```bash
-tail -n 100 lark_codex_ws.log
-tail -f lark_codex_ws.log
+tail -n 100 lark2agent_ws.log
+tail -f lark2agent_ws.log
 ```
 
 停止：
 
 ```bash
-pkill -f lark_codex_ws.py
+pkill -f lark2agent_ws.py
 ```
 
 Lark 中也支持：
@@ -379,8 +387,8 @@ KEEP_AWAKE_DISABLE_SLEEP=1
 每个子任务默认创建独立 Git worktree 和独立分支，避免多个 Codex 同时修改同一个目录：
 
 ```text
-<repo>/.lark-codex/worktrees/<plan_id>-<task_id>
-lark-codex/<plan_id>-<task_id>
+<repo>/.lark2agent/worktrees/<plan_id>-<task_id>
+lark2agent/<plan_id>-<task_id>
 ```
 
 当前第一版增强已完成：
@@ -441,14 +449,14 @@ lark-codex/<plan_id>-<task_id>
 - 新增 `/tasks` 或 `/board` 命令。
 - 任务卡按钮回调继续携带 `task_id`，看板按 `task_id` 打开详情。
 
-### [计划] 4. 项目级 `.lark-codex` 配置
+### [计划] 4. 项目级 `.lark2agent` 配置
 
 参考 Continue / Cline 的项目规则。目标是每个项目可以定义自己的执行规则，而不是完全依赖全局 `.env`。
 
 建议配置文件：
 
 ```text
-<project>/.lark-codex/config.json
+<project>/.lark2agent/config.json
 ```
 
 建议支持字段：
@@ -478,7 +486,7 @@ lark-codex/<plan_id>-<task_id>
 
 实现建议：
 
-- Codex 任务启动前读取项目配置。
+- Agent 任务启动前读取项目配置。
 - 项目配置优先级高于全局 `.env`，但低于 Lark 指令里的显式参数。
 - 配置读取失败时在任务卡中提示，不静默忽略。
 

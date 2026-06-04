@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Lark-Codex Bridge Deck</title>
+  <title>Lark2Agent Bridge Deck</title>
   <style>
     :root {
       --ink: #111413;
@@ -578,7 +578,7 @@
   <main class="deck">
     <aside class="rail">
       <div class="brand">
-        <div class="eyebrow">Lark-Codex Deck</div>
+        <div class="eyebrow">Lark2Agent Deck</div>
         <h1>Remote Engineering Console</h1>
         <p>根据 <code>PPT_OUTLINE.md</code> 生成的类 PPT 网页。方向键或按钮切换页面。</p>
       </div>
@@ -591,22 +591,22 @@
         <article class="slide active" data-title="标题">
           <header class="slide-header">
             <div class="kicker">01 / Title</div>
-            <h2>Lark-Codex Bridge</h2>
-            <p class="lede">把飞书 / Lark 群聊变成 Codex 的远程工程操作台。</p>
+            <h2>Lark2Agent Bridge</h2>
+            <p class="lede">把飞书 / Lark 群聊变成多 Agent 的远程工程操作台。</p>
           </header>
           <div class="content">
-            <p class="quote">用户在 Lark 里发起任务，本地运行 Codex CLI，并把进度、结果、审批和项目状态回写到 Lark 卡片。</p>
+            <p class="quote">用户在 Lark 里发起任务，本地运行 Agent CLI，并把进度、结果、审批和项目状态回写到 Lark 卡片。</p>
           </div>
         </article>
 
         <article class="slide" data-title="项目想法">
           <header class="slide-header">
             <div class="kicker">02 / Idea</div>
-            <h2>让 Lark 成为 Codex 的远程入口</h2>
-            <p class="lede">Codex 留在本地工程环境里执行，Lark 承担远程可见、可审批、可协作的控制台角色。</p>
+            <h2>让 Lark 成为多 Agent 的远程入口</h2>
+            <p class="lede">Agent CLI 留在本地工程环境里执行，Lark 承担远程可见、可审批、可协作的控制台角色。</p>
           </header>
           <div class="content grid">
-            <div class="card"><h3>本地执行</h3><p>保留代码、凭据、Git 状态和 Codex session，不迁移开发环境。</p></div>
+            <div class="card"><h3>本地执行</h3><p>保留代码、凭据、Git 状态和 Agent session，不迁移开发环境。</p></div>
             <div class="card"><h3>协作入口</h3><p>下发指令、看进度、批权限、收结果，都在团队日常沟通界面里完成。</p></div>
             <div class="card"><h3>低摩擦</h3><p>不替代 Codex，不重做完整 agent 平台，只增加 Lark 控制层。</p></div>
             <div class="card"><h3>工程导向</h3><p>聚焦修复、检查、写文档、并行拆分和状态追踪。</p></div>
@@ -629,11 +629,11 @@
           <header class="slide-header">
             <div class="kicker">04 / Positioning</div>
             <h2>不是通用 Agent 平台</h2>
-            <p class="lede">Lark-Codex bridge 是一个本地运行的 Lark WebSocket 客户端，面向 Codex CLI 和工程任务远程控制。</p>
+            <p class="lede">Lark2Agent bridge 是一个本地运行的 Lark WebSocket 客户端，面向 Codex、Claude Code 等 Agent CLI 的工程任务远程控制。</p>
           </header>
           <div class="content">
             <div class="chips">
-              <span class="chip">Codex CLI first</span>
+              <span class="chip">Agent CLI first</span>
               <span class="chip">Lark cards</span>
               <span class="chip">Local workspace</span>
               <span class="chip">Task approval</span>
@@ -646,8 +646,8 @@
         <article class="slide" data-title="架构">
           <header class="slide-header">
             <div class="kicker">05 / Architecture</div>
-            <h2>Lark WebSocket + Python Bridge + Codex CLI</h2>
-            <p class="lede">一个轻量脚本把 Lark 事件、卡片更新和 Codex 子进程串起来。</p>
+            <h2>Lark WebSocket + Python Bridge + Agent CLI</h2>
+            <p class="lede">一个轻量脚本把 Lark 事件、卡片更新和 Agent 子进程串起来。</p>
           </header>
           <div class="content flow">
             <div class="step"><strong>Lark</strong><span>群聊指令、卡片按钮、审批动作。</span></div>
@@ -669,7 +669,7 @@
             <div class="card"><h3>任务卡片</h3><p>状态、目录、模型、耗时、Session、最新输出。</p></div>
             <div class="card"><h3>审批处理</h3><p>批准或拒绝高风险操作，并按批准后的 sandbox 重试。</p></div>
             <div class="card"><h3>会话管理</h3><p>项目、普通对话、当前项目会话的创建、切换和归档。</p></div>
-            <div class="card"><h3>Plan 并行</h3><p>任务清单拆分，多 Codex 子进程并行执行。</p></div>
+            <div class="card"><h3>Plan 并行</h3><p>任务清单拆分，多 Agent 子进程并行执行。</p></div>
             <div class="card"><h3>日报统计</h3><p>按日期汇总总指令数、审批、失败、更新和修复。</p></div>
           </div>
         </article>
@@ -692,11 +692,11 @@
           <header class="slide-header">
             <div class="kicker">08 / Plan</div>
             <h2>Plan 并行模式</h2>
-            <p class="lede">把任务清单拆成多个 Codex 子任务，默认使用 Git worktree 和独立分支隔离改动。</p>
+            <p class="lede">把任务清单拆成多个 Agent 子任务，默认使用 Git worktree 和独立分支隔离改动。</p>
           </header>
           <div class="content grid">
             <div class="card"><h3>输入</h3><ul><li><code>- 任务</code>、<code>* 任务</code>、待办项。</li><li>支持数字编号和同一行数字列表。</li></ul></div>
-            <div class="card"><h3>执行</h3><ul><li>一个 PlanRuntime 保存整体计划。</li><li>调度线程按并发上限启动子任务。</li><li>每个子任务是独立 Codex 子进程。</li></ul></div>
+            <div class="card"><h3>执行</h3><ul><li>一个 PlanRuntime 保存整体计划。</li><li>调度线程按并发上限启动子任务。</li><li>每个子任务是独立 Agent 子进程。</li></ul></div>
             <div class="card"><h3>隔离</h3><ul><li>每个子任务创建独立 worktree。</li><li>每个子任务创建独立分支。</li></ul></div>
             <div class="card"><h3>收尾</h3><ul><li>运行 <code>git diff --check</code>。</li><li>有改动进入待提交审批。</li><li>当前不自动合并主分支。</li></ul></div>
           </div>
@@ -706,7 +706,7 @@
           <header class="slide-header">
             <div class="kicker">09 / Safety</div>
             <h2>审批与安全</h2>
-            <p class="lede">Codex sandbox 和 Lark 审批卡片共同构成风险控制，批准后只对原任务重试。</p>
+            <p class="lede">Agent CLI sandbox 和 Lark 审批卡片共同构成风险控制，批准后只对原任务重试。</p>
           </header>
           <div class="content grid">
             <div class="card"><h3>触发信号</h3><ul><li>sandbox 拒绝。</li><li>权限不足。</li><li><code>.git/index.lock</code>。</li><li><code>permission denied</code>。</li></ul></div>
@@ -732,16 +732,16 @@
           <header class="slide-header">
             <div class="kicker">11 / Comparison</div>
             <h2>开源项目对比</h2>
-            <p class="lede">Lark-Codex 的差异化不是最大最全，而是最短路径把 Codex 变成 Lark 里的工程执行助手。</p>
+            <p class="lede">Lark2Agent 的差异化不是最大最全，而是最短路径把 Agent CLI 变成 Lark 里的工程执行助手。</p>
           </header>
           <div class="content">
             <table class="compare">
-              <thead><tr><th>维度</th><th>Lark-Codex</th><th>OpenClaw</th><th>Hermes Agent</th></tr></thead>
+              <thead><tr><th>维度</th><th>Lark2Agent</th><th>OpenClaw</th><th>Hermes Agent</th></tr></thead>
               <tbody>
-                <tr><td>定位</td><td>Lark 到 Codex CLI 的远程操作台。</td><td>自托管、多渠道 AI agent 网关。</td><td>自改进、带记忆和技能系统的 agent runtime。</td></tr>
+                <tr><td>定位</td><td>Lark 到 Agent CLI 的远程操作台。</td><td>自托管、多渠道 AI agent 网关。</td><td>自改进、带记忆和技能系统的 agent runtime。</td></tr>
                 <tr><td>入口</td><td>Lark 群聊、卡片、文本指令。</td><td>多聊天渠道、Web 控制台、移动节点。</td><td>CLI/TUI、多平台消息网关、技能和记忆系统。</td></tr>
-                <tr><td>能力来源</td><td>直接调用本地 Codex CLI。</td><td>网关连接 AI coding agents 和多个渠道。</td><td>Hermes 自身 agent loop、技能、记忆、MCP 和工具。</td></tr>
-                <tr><td>优势</td><td>简单、贴近 Codex、Lark 内可直接用。</td><td>渠道覆盖广，适合多通信平台。</td><td>runtime 更完整，适合长期学习和技能沉淀。</td></tr>
+                <tr><td>能力来源</td><td>直接调用本地 Agent CLI。</td><td>网关连接 AI coding agents 和多个渠道。</td><td>Hermes 自身 agent loop、技能、记忆、MCP 和工具。</td></tr>
+                <tr><td>优势</td><td>简单、贴近 Agent CLI、Lark 内可直接用。</td><td>渠道覆盖广，适合多通信平台。</td><td>runtime 更完整，适合长期学习和技能沉淀。</td></tr>
               </tbody>
             </table>
           </div>
@@ -778,10 +778,10 @@
           <header class="slide-header">
             <div class="kicker">14 / Closing</div>
             <h2>做窄，把工程流打通</h2>
-            <p class="lede">Lark-Codex 不追求成为完整 agent 平台，而是把 Lark + Codex 的工程执行闭环打通。</p>
+            <p class="lede">Lark2Agent 不追求成为完整 agent 平台，而是把 Lark + Agent CLI 的工程执行闭环打通。</p>
           </header>
           <div class="content">
-            <p class="bigline">最有价值的方向：在协作入口里稳定地下发、跟踪、审批和收敛 Codex 工程任务。</p>
+            <p class="bigline">最有价值的方向：在协作入口里稳定地下发、跟踪、审批和收敛 Agent 工程任务。</p>
           </div>
         </article>
       </div>

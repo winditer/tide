@@ -1,23 +1,23 @@
-# Lark to Codex Bridge
+# Lark2Agent
 
-把飞书 / Lark 群聊消息转成 Codex CLI 任务，并把执行进度、任务结果、审批操作和项目状态同步回 Lark 卡片。
+把飞书 / Lark 群聊消息转成 Codex、Claude Code 等 Agent CLI 任务，并把执行进度、任务结果、审批操作和项目状态同步回 Lark 卡片。
 
 开发方案、架构说明和后续计划见 [DEVELOPMENT.md](DEVELOPMENT.md)。
 
 ## 功能
 
-- 在 Lark 中直接发送自然语言指令，启动或续写 Codex 任务。
-- 在 Lark 中发送图片或文件，再用下一条消息或回复/引用消息给 Codex 下指令。
-- 通过 `Codex 指令` 面板查看当前任务状态、最新结果、待审批项，并直接批准或拒绝。
-- 查看 Codex 项目、对话、当前项目状态和日报。
-- 通过 `/plan` 把任务清单拆成多个 Codex 子任务并行处理。
+- 在 Lark 中直接发送自然语言指令，启动或续写 Codex / Claude Code 等 Agent CLI 任务。
+- 在 Lark 中发送图片或文件，再用下一条消息或回复/引用消息给 Agent 下指令。
+- 通过 Agent 指令面板查看当前任务状态、最新结果、待审批项，并直接批准或拒绝。
+- 查看 Codex / Claude Code 项目、对话、当前项目状态和日报。
+- 通过 `/plan` 把任务清单拆成多个子任务并行处理。
 - 同步 Codex Desktop 会话的新消息和完成结果。
 - macOS 上接入电源时自动保持脚本运行和网络活跃，可选开启合盖防睡眠。
 
 ## 依赖
 
 - Python 3.10+
-- Codex CLI，命令默认为 `codex`
+- 至少一个 Agent CLI：Codex CLI 默认为 `codex`，Claude Code CLI 默认为 `claude`
 - 飞书 / Lark 自建应用
 - Python SDK：
 
@@ -76,75 +76,75 @@ codex --help
 
 ```bash
 cd /Users/haifeng/Documents/lark2codex
-python3 lark_codex_ws.py
+python3 lark2agent_ws.py
 ```
 
 启动成功后会看到类似输出：
 
 ```text
-Lark-Codex WebSocket 启动成功
+Lark2Agent WebSocket 启动成功
 指令：/panel | /projects | /convos | /status | /daily | /stop | 直接发消息
 ```
 
 脚本启动后会向已记录的 Lark 会话发送欢迎语，默认内容为：
 
 ```text
-I'm Lark Codex, a lightweight agent that helps you use lark to work perfectly with Codex!
+I'm Lark2Agent, a lightweight multi-agent bridge for Lark.
 ```
 
-可通过 `LARK_CODEX_WELCOME_MESSAGE` 自定义；设为空字符串时不发送启动欢迎语。启动时不会自动推送 `/status`，需要状态时可以手动发送 `/status`，或设置 `STATUS_INTERVAL_SECONDS` 开启定时状态推送。
+可通过 `LARK2AGENT_WELCOME_MESSAGE` 自定义；设为空字符串时不发送启动欢迎语。启动时不会自动推送 `/status`，需要状态时可以手动发送 `/status`，或设置 `STATUS_INTERVAL_SECONDS` 开启定时状态推送。
 
 后台运行：
 
 ```bash
 cd /Users/haifeng/Documents/lark2codex
-nohup python3 lark_codex_ws.py > lark_codex_ws.log 2>&1 &
+nohup python3 lark2agent_ws.py > lark2agent_ws.log 2>&1 &
 ```
 
 查询是否正在运行：
 
 ```bash
-pgrep -fl lark_codex_ws.py
+pgrep -fl lark2agent_ws.py
 ```
 
 如果需要查看更完整的进程信息：
 
 ```bash
-ps aux | grep '[l]ark_codex_ws.py'
+ps aux | grep '[l]ark2agent_ws.py'
 ```
 
 查看最近日志：
 
 ```bash
 cd /Users/haifeng/Documents/lark2codex
-tail -n 100 lark_codex_ws.log
+tail -n 100 lark2agent_ws.log
 ```
 
 实时查看运行日志：
 
 ```bash
 cd /Users/haifeng/Documents/lark2codex
-tail -f lark_codex_ws.log
+tail -f lark2agent_ws.log
 ```
 
 停止后台脚本：
 
 ```bash
-pkill -f lark_codex_ws.py
+pkill -f lark2agent_ws.py
 ```
 
 停止后确认进程已退出：
 
 ```bash
-pgrep -fl lark_codex_ws.py
+pgrep -fl lark2agent_ws.py
 ```
 
 重启后台脚本：
 
 ```bash
 cd /Users/haifeng/Documents/lark2codex
-pkill -f lark_codex_ws.py
-nohup python3 lark_codex_ws.py > lark_codex_ws.log 2>&1 &
+pkill -f lark2agent_ws.py
+nohup python3 lark2agent_ws.py > lark2agent_ws.log 2>&1 &
 ```
 
 如果脚本正在运行，也可以在 Lark 中发送 `/restart` 让脚本原地重启。
@@ -153,7 +153,7 @@ nohup python3 lark_codex_ws.py > lark_codex_ws.log 2>&1 &
 
 在机器人所在群聊中发送：
 
-- `/panel`：打开 Codex 看板。
+- `/panel`：打开 Lark2Agent 看板。
 - `/projects`：打开项目面板。
 - `/chats`：打开普通对话列表。
 - `/convos`：打开当前项目对话面板。
@@ -166,6 +166,11 @@ nohup python3 lark_codex_ws.py > lark_codex_ws.log 2>&1 &
 - `/status`：查看当前项目状态。
 - `/daily`：输出项目进展日报。
 - `/daily=2026-06-01`：输出指定日期的项目进展日报，也支持 `/daily 2026-06-01`。
+- `/agent`：查看可用 Agent。
+- `/agent=claude`：把当前 Lark 会话默认 Agent 切换为 Claude Code；`/agent=codex` 切回 Codex。
+- `/agent=claude +<指令>`：使用 Claude Code CLI 执行一次。
+- `/claude <指令>`：使用 Claude Code CLI 执行一次。
+- `/codex <指令>`：使用 Codex CLI 执行一次。
 - `/model=<模型名> +<指令>`：使用指定模型执行一次，例如 `/model=gpt-5.5 +修复 README`。
 - `/plan`：进入并行计划模式，下一条消息发送任务清单。
 - `/plan <任务清单>`：直接解析并执行任务清单。
@@ -179,29 +184,29 @@ nohup python3 lark_codex_ws.py > lark_codex_ws.log 2>&1 &
 - `/cd <目录>`：切换默认工作目录。
 - `/project <编号>`：打开面板中的项目。
 - `/latest <编号>`：打开面板中项目的最新对话。
-- `/conv <session_id>`：切换到指定 Codex 会话。
+- `/conv <session_id>`：切换到指定 Agent 会话。
 - `/mark-project [目录]`：把目录手动标记为项目；不填目录时使用当前工作目录。
 - `/mark-chat [session_id]`：把会话手动标记为普通对话；不填 session 时使用当前选中会话。
 - `/approve <id>`：批准待审批项。
 - `/reject <id>`：拒绝待审批项。
 - `/cancel <指令ID>`：取消等待启动的排队任务；卡片上也会显示“取消”按钮。
-- `/stop`：停止当前 Codex 任务。
-- `/restart`：原地重启 `lark_codex_ws.py` 脚本。
-- 图片/文件消息：附件会下载到当前工作目录的 `.lark-codex/attachments` 下；如果这条消息没有文字，下一条普通指令会自动带上这些附件。
-- 回复/引用图片或文件消息下指令：Codex 会结合被回复消息中的附件本地路径执行。
-- 其他文本：作为 Codex 指令执行。
+- `/stop`：停止当前 Agent 任务。
+- `/restart`：原地重启 `lark2agent_ws.py` 脚本。
+- 图片/文件消息：附件会下载到当前工作目录的 `.lark2agent/attachments` 下；如果这条消息没有文字，下一条普通指令会自动带上这些附件。
+- 回复/引用图片或文件消息下指令：当前 Agent 会结合被回复消息中的附件本地路径执行。
+- 其他文本：作为当前默认 Agent 指令执行。
 
-待审批项会显示在 `Codex 指令` 面板中，可直接点击“批准 / 拒绝”。审批处理后，面板的 `最新结果` 会更新为当前审批信息。
+待审批项会显示在 Agent 指令面板中，可直接点击“批准 / 拒绝”。审批处理后，面板的 `最新结果` 会更新为当前审批信息。
 
-`/restart` 会先向 Lark 发送重启提示，再清理 macOS 保活状态并用当前 Python 解释器原地重启进程。使用 `nohup python3 lark_codex_ws.py &` 启动时，重启后仍会沿用同一个进程；如果代码或 `.env` 配置错误，重启后的进程可能直接退出。
+`/restart` 会先向 Lark 发送重启提示，再清理 macOS 保活状态并用当前 Python 解释器原地重启进程。使用 `nohup python3 lark2agent_ws.py &` 启动时，重启后仍会沿用同一个进程；如果代码或 `.env` 配置错误，重启后的进程可能直接退出。
 
 ## 图片和文件附件
 
-收到图片或文件消息后，脚本会用机器人身份下载消息资源，并保存到当前 Codex 工作目录下的 `.lark-codex/attachments/<chat_id>/<message_id>/`。这个目录默认已被 `.gitignore` 忽略。
+收到图片或文件消息后，脚本会用机器人身份下载消息资源，并保存到当前 Agent 工作目录下的 `.lark2agent/attachments/<chat_id>/<message_id>/`。这个目录默认已被 `.gitignore` 忽略。
 
 如果附件消息没有文字，脚本只会暂存附件并提示继续发送指令；同一用户在 `LARK_PENDING_ATTACHMENT_TTL_SECONDS` 内发送的下一条普通指令会自动带上这些附件。也可以回复或引用原附件消息下指令，脚本会根据 Lark message id 找回附件路径。
 
-启动 Codex 时，任务 prompt 会包含附件类型、文件名、本地路径和 Lark message id。Codex 是否能直接理解图片内容取决于当前 Codex CLI 和模型能力；文件类附件会以本地路径形式提供给 Codex 读取。
+启动 Agent CLI 时，任务 prompt 会包含附件类型、文件名、本地路径和 Lark message id。图片理解能力取决于当前 Agent CLI 和模型；文件类附件会以本地路径形式提供给 Agent 读取。
 
 ## 项目和普通对话
 
@@ -221,12 +226,12 @@ requirements.txt
 README.md
 ```
 
-没有明确项目标记、位于通用目录、或被 `/mark-chat` 手动标记的会话，会进入 `/chats` 普通对话列表。识别错误时可用 `/mark-project [目录]` 和 `/mark-chat [session_id]` 手动修正，修正信息保存在 `.lark_codex_state.json`。
+没有明确项目标记、位于通用目录、或被 `/mark-chat` 手动标记的会话，会进入 `/chats` 普通对话列表。识别错误时可用 `/mark-project [目录]` 和 `/mark-chat [session_id]` 手动修正，修正信息保存在 `.lark2agent_state.json`。
 
 归档后的项目、普通对话和会话默认不再出现在 `/projects`、`/chats`、`/convos`、`/daily` 等查询结果中。需要查看归档内容时设置：
 
 ```env
-LARK_CODEX_SHOW_ARCHIVED=1
+LARK2AGENT_SHOW_ARCHIVED=1
 ```
 
 `/project=new <名称>` 会在 `CODEX_PROJECTS_ROOT` 下创建项目目录；未配置时默认使用 `CODEX_DEFAULT_CWD` 的父目录。
@@ -269,7 +274,7 @@ Plan 清单支持轻量阶段和依赖：
 
 ## Plan 并行模式
 
-`/plan` 适合把一组相对独立的任务并行交给 Codex 处理。示例：
+`/plan` 适合把一组相对独立的任务并行交给 Agent 处理。示例：
 
 ```text
 /plan
@@ -280,13 +285,13 @@ Plan 清单支持轻量阶段和依赖：
 
 任务清单支持 `-`、`*`、待办项和数字编号；数字编号可以逐行写，也可以写在同一行，例如 `1. 任务一 2. 任务二`。也可以先发送 `/plan` 进入输入模式，再发送任务清单。
 
-脚本会创建一个 `Codex Plan` 面板，展示每个子任务的状态、最新输出、session id、审批按钮和最终结果。默认并发数由 `PLAN_MAX_PARALLEL` 控制。
+脚本会创建一个 `Agent Plan` 面板，展示每个子任务的状态、最新输出、session id、审批按钮和最终结果。默认并发数由 `PLAN_MAX_PARALLEL` 控制。
 
 默认情况下，Plan 子任务会在当前 Git 仓库下创建独立 worktree 和分支：
 
 ```text
-.lark-codex/worktrees/<plan_id>-<task_id>
-lark-codex/<plan_id>-<task_id>
+.lark2agent/worktrees/<plan_id>-<task_id>
+lark2agent/<plan_id>-<task_id>
 ```
 
 这样多个子任务可以并行修改代码，互不覆盖。每个子任务成功结束后会运行 `PLAN_TEST_COMMAND`，生成 Diff 摘要，并在 Plan 卡片中进入“等待提交”状态。点击“批准提交”会把该 worktree 的改动提交到对应子任务分支；不会自动合并回主分支，但可以在 Plan 合并总览中手动逐个或批量 cherry-pick。
@@ -330,6 +335,20 @@ lark-codex/<plan_id>-<task_id>
 | `APPROVED_CODEX_SANDBOX_MODE` | `workspace-write` | Lark 审批批准后，单次重试使用的 sandbox 模式。 |
 | `CODEX_ALLOWED_ROOTS` | `CODEX_PROJECTS_ROOT` 和 `CODEX_DEFAULT_CWD` | 允许 Codex 执行、`/cd`、项目创建和 Plan worktree 运行的目录范围，多个路径用 `:` 或 `,` 分隔。 |
 
+### Agent 和 Claude Code
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `DEFAULT_AGENT_ID` | `codex` | 当前 Lark chat 未显式指定时使用的默认 Agent，可设为 `codex` 或 `claude`。 |
+| `CLAUDE_BIN` | `claude` | Claude Code CLI 命令路径。 |
+| `CLAUDE_HOME` | `~/.claude` | Claude Code home 目录。 |
+| `CLAUDE_PROJECTS_DIR` | `$CLAUDE_HOME/projects` | Claude Code 会话 JSONL 索引目录。 |
+| `CLAUDE_TIMEOUT_SECONDS` | `CODEX_TIMEOUT_SECONDS` | 单次 Claude Code 任务超时时间。 |
+| `CLAUDE_MODEL` | 空 | 默认 Claude Code 模型；为空时使用 Claude CLI 自身配置。 |
+| `CLAUDE_PERMISSION_MODE` | `dontAsk` | Claude Code `--permission-mode` 参数；Lark2Agent 默认不走本机终端弹窗。 |
+| `APPROVED_CLAUDE_PERMISSION_MODE` | `acceptEdits` | Lark 审批批准后，单次 Claude Code 重试使用的 `--permission-mode`。 |
+| `CLAUDE_EXTRA_ARGS` | 空 | 追加给 Claude Code CLI 的额外参数，按 shell 规则解析。 |
+
 ### 访问控制
 
 | 变量 | 默认值 | 说明 |
@@ -348,19 +367,19 @@ lark-codex/<plan_id>-<task_id>
 | `LARK_FINAL_QUESTION_MAX_CHARS` | `1200` | 用户问题最大展示长度。 |
 | `MAX_PROJECTS_IN_PANEL` | `8` | 面板最多展示项目数。 |
 | `MAX_CONVERSATIONS_IN_PANEL` | `8` | 面板最多展示对话数。 |
-| `MAX_SESSION_FILES` | `300` | 索引的 Codex session 文件数量上限。 |
-| `MAX_RUNNING_TASKS` | `6` | 全局同时运行的 Codex 子进程上限；小于等于 0 表示不限制。 |
-| `MAX_RUNNING_TASKS_PER_CHAT` | `4` | 单个 Lark chat 同时运行的 Codex 子进程上限；小于等于 0 表示不限制。 |
+| `MAX_SESSION_FILES` | `300` | 每类 Agent 索引的 session 文件数量上限。 |
+| `MAX_RUNNING_TASKS` | `6` | 全局同时运行的 Agent 子进程上限；小于等于 0 表示不限制。 |
+| `MAX_RUNNING_TASKS_PER_CHAT` | `4` | 单个 Lark chat 同时运行的 Agent 子进程上限；小于等于 0 表示不限制。 |
 | `LARK_EVENT_QUEUE_MAXSIZE` | `200` | Lark 事件队列最大积压数量。 |
-| `LARK_ATTACHMENTS_DIR` | `.lark-codex/attachments` | Lark 图片/文件下载目录；相对路径会落到当前 Codex 工作目录下。 |
+| `LARK_ATTACHMENTS_DIR` | `.lark2agent/attachments` | Lark 图片/文件下载目录；相对路径会落到当前 Agent 工作目录下。 |
 | `LARK_ATTACHMENT_MAX_BYTES` | `52428800` | 单个附件最大下载字节数。 |
 | `LARK_PENDING_ATTACHMENT_TTL_SECONDS` | `900` | 只有附件、没有文字的消息可被下一条指令自动消费的暂存时间。 |
 | `MAX_LARK_ATTACHMENTS_PER_MESSAGE` | `8` | 单条 Lark 消息最多处理的附件数量。 |
-| `TASK_CARD_REFRESH_INTERVAL_SECONDS` | `15` | Codex 指令面板自动刷新间隔。 |
+| `TASK_CARD_REFRESH_INTERVAL_SECONDS` | `15` | Agent 指令面板自动刷新间隔。 |
 | `PLAN_MAX_PARALLEL` | `3` | `/plan` 并行执行的最大子任务数。 |
 | `PLAN_TASK_OUTPUT_MAX_CHARS` | `1200` | Plan 面板中每个子任务输出的最大展示长度。 |
 | `PLAN_USE_WORKTREES` | `1` | 是否为 Plan 子任务启用 Git worktree 隔离。 |
-| `PLAN_WORKTREE_ROOT` | 空 | 自定义 worktree 根目录；为空时使用当前仓库的 `.lark-codex/worktrees`。 |
+| `PLAN_WORKTREE_ROOT` | 空 | 自定义 worktree 根目录；为空时使用当前仓库的 `.lark2agent/worktrees`。 |
 | `PLAN_TEST_COMMAND` | `git diff --check` | 子任务完成后、进入提交审批前执行的检查命令。 |
 | `PLAN_TEST_COMMAND_SHELL` | `0` | 是否用 shell 执行 `PLAN_TEST_COMMAND`。 |
 | `PLAN_TEST_TIMEOUT_SECONDS` | `120` | Plan 检查命令超时时间。 |
@@ -378,14 +397,14 @@ lark-codex/<plan_id>-<task_id>
 | --- | --- | --- |
 | `STATUS_INTERVAL_SECONDS` | `0` | 定时推送状态的间隔。默认关闭；设为正整数可开启。 |
 | `DAILY_REPORT_TIME` | `19:00` | 每日项目进展日报推送时间。 |
-| `LARK_CODEX_STATE_FILE` | `.lark_codex_state.json` | 本地运行状态文件，用于保存已知 chat、运行面板状态和 Plan/子任务状态。 |
-| `LARK_CODEX_SHOW_ARCHIVED` | `0` | 是否在查询结果中显示已归档项目、普通对话和会话。 |
-| `LARK_CODEX_INCLUDE_PLAN_WORKTREES` | `0` | 是否把 `/plan` 创建的 worktree 子目录作为项目/对话统计进看板和日报；默认不统计。 |
-| `LARK_CODEX_WELCOME_MESSAGE` | `I'm Lark Codex, a lightweight agent that helps you use lark to work perfectly with Codex!` | WebSocket 脚本启动时向已知 Lark 会话发送的欢迎语；为空则不发送。 |
+| `LARK2AGENT_STATE_FILE` | `.lark2agent_state.json` | 本地运行状态文件，用于保存已知 chat、运行面板状态和 Plan/子任务状态。 |
+| `LARK2AGENT_SHOW_ARCHIVED` | `0` | 是否在查询结果中显示已归档项目、普通对话和会话。 |
+| `LARK2AGENT_INCLUDE_PLAN_WORKTREES` | `0` | 是否把 `/plan` 创建的 worktree 子目录作为项目/对话统计进看板和日报；默认不统计。 |
+| `LARK2AGENT_WELCOME_MESSAGE` | `I'm Lark2Agent, a lightweight multi-agent bridge for Lark.` | WebSocket 脚本启动时向已知 Lark 会话发送的欢迎语；为空则不发送。 |
 | `SYNC_DESKTOP_SESSIONS` | `0` | 是否监听 Codex Desktop 会话更新。 |
 | `SESSION_WATCH_INTERVAL_SECONDS` | `3` | Codex Desktop 会话监听间隔。 |
 | `LARK_CARD_ENABLE_FORWARD` | `0` | 是否允许 Lark 卡片被转发。 |
-| `LOG_MESSAGE_CONTENT` | `0` | 是否在日志中记录 Lark 消息和 Codex prompt 内容片段。 |
+| `LOG_MESSAGE_CONTENT` | `0` | 是否在日志中记录 Lark 消息和 Agent prompt 内容片段。 |
 | `LOG_LEVEL` | `INFO` | 日志级别。 |
 
 ### macOS 保活
@@ -406,7 +425,7 @@ KEEP_AWAKE_DISABLE_SLEEP=1
 
 ```bash
 sudo pmset -a disablesleep 1
-python3 lark_codex_ws.py
+python3 lark2agent_ws.py
 ```
 
 用完后恢复：
@@ -417,7 +436,7 @@ sudo pmset -a disablesleep 0
 
 合盖运行有发热风险，不要把电脑放在包里或散热差的位置。
 
-## Codex 会话和客户端
+## Agent CLI、会话和客户端
 
 脚本使用标准 Codex CLI 创建和续写会话，session 文件会写入 `CODEX_SESSIONS_DIR`。Lark 中创建的会话通常来源为 `codex_exec` / `exec`，可被脚本继续续写，也可用 Codex CLI 打开：
 
@@ -426,6 +445,8 @@ codex resume --include-non-interactive <session_id>
 ```
 
 Codex Desktop 是否在主界面直接展示这类非交互会话，取决于客户端自己的过滤逻辑。
+
+Claude Code CLI 通过 `claude --print --output-format stream-json --verbose` 非交互模式运行。Bridge 会索引 `CLAUDE_PROJECTS_DIR` 下的 Claude 会话 JSONL，并在 Lark 看板里以 `claude:<session_id>` 形式展示，避免和 Codex session ID 冲突。续写 Claude 会话时会自动去掉 `claude:` 前缀并调用 `claude --resume <session_id>`。
 
 ## 常见问题
 
@@ -454,7 +475,7 @@ APPROVED_CODEX_SANDBOX_MODE=workspace-write
 Unable to create .git/index.lock: Operation not permitted
 ```
 
-通常是当前 Codex sandbox 权限不足。通过 `Codex 指令` 面板批准后，脚本会用批准后的 sandbox 配置单次重试。
+通常是当前 Codex sandbox 权限不足。通过 Agent 指令面板批准后，脚本会用批准后的 Codex sandbox 配置单次重试。
 
 ### 电脑仍然睡眠
 
@@ -465,6 +486,6 @@ Unable to create .git/index.lock: Operation not permitted
 
 ## 文件说明
 
-- `lark_codex_ws.py`：主程序，负责 Lark WebSocket、消息卡片、Codex 执行、审批、会话同步和 macOS 保活。
+- `lark2agent_ws.py`：主程序，负责 Lark WebSocket、消息卡片、Agent 执行、审批、会话同步和 macOS 保活。
 - `.env.example`：环境变量模板。
-- `.lark_codex_state.json`：运行时状态文件，本地生成，不提交。
+- `.lark2agent_state.json`：运行时状态文件，本地生成，不提交。

@@ -1,4 +1,7 @@
 .env
+.lark2agent_state.json
+.lark2agent_state.tmp
+.lark2agent/
 .lark_codex_state.json
 .lark_codex_state.tmp
 .lark-codex/
