@@ -359,11 +359,12 @@ lark2agent/<plan_id>-<task_id>
 | `QODER_BIN` | `qodercli` | Qoder CLI 命令路径。 |
 | `QODER_HOME` | `~/.qoder` | Qoder CLI home 目录。 |
 | `QODER_PROJECTS_DIR` | `$QODER_HOME/projects` | Qoder CLI 会话 JSONL 索引目录。 |
+| `QODER_PROCESS_HOME` | 空 | 启动 Qoder CLI 子进程时覆盖 `HOME`；为空时从 `QODER_HOME=~/.qoder` 自动推导。 |
 | `QODER_TIMEOUT_SECONDS` | `CODEX_TIMEOUT_SECONDS` | 单次 Qoder CLI 任务超时时间。 |
 | `QODER_QUEST_TIMEOUT_SECONDS` | `43200` | Qoder Quest 模式超时时间，默认 12 小时。 |
 | `QODER_MODEL` | 空 | 默认 Qoder 模型；为空时使用 Qoder CLI 自身配置。 |
-| `QODER_PERMISSION_MODE` | `dont_ask` | Qoder CLI `--permission-mode` 参数；Lark2Agent 默认不走本机终端弹窗。 |
-| `APPROVED_QODER_PERMISSION_MODE` | `accept_edits` | Lark 审批批准后，单次 Qoder CLI 重试使用的 `--permission-mode`。 |
+| `QODER_PERMISSION_MODE` | `dont_ask` | Qoder CLI `--permission-mode` 参数，可选 `default`、`accept_edits`、`bypass_permissions`、`dont_ask`、`auto`；如果误配为 `ask`，Bridge 会兼容映射为 `dont_ask`。 |
+| `APPROVED_QODER_PERMISSION_MODE` | `bypass_permissions` | Lark 审批批准后，单次 Qoder CLI 重试使用的 `--permission-mode`；批准后会启动新的 Qoder session，避免继承旧 session 的 `dont_ask` 拒写状态。 |
 | `QODER_EXTRA_ARGS` | 空 | 追加给 Qoder CLI 的额外参数，按 shell 规则解析。 |
 
 ### 访问控制
@@ -488,7 +489,7 @@ Qoder Quest 模式由 Bridge 向 Qoder prompt 前置 `/quest` 触发。可以直
 APPROVED_CODEX_APPROVAL_POLICY=on-request
 APPROVED_CODEX_SANDBOX_MODE=workspace-write
 APPROVED_CLAUDE_PERMISSION_MODE=acceptEdits
-APPROVED_QODER_PERMISSION_MODE=accept_edits
+APPROVED_QODER_PERMISSION_MODE=bypass_permissions
 ```
 
 ### Git 提交失败

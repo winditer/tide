@@ -86,8 +86,9 @@ CLAUDE_PERMISSION_MODE = os.getenv("CLAUDE_PERMISSION_MODE", "dontAsk")
 APPROVED_CLAUDE_PERMISSION_MODE = os.getenv("APPROVED_CLAUDE_PERMISSION_MODE", "acceptEdits")
 CLAUDE_EXTRA_ARGS = os.getenv("CLAUDE_EXTRA_ARGS", "")
 QODER_PERMISSION_MODE = os.getenv("QODER_PERMISSION_MODE", "dont_ask")
-APPROVED_QODER_PERMISSION_MODE = os.getenv("APPROVED_QODER_PERMISSION_MODE", "accept_edits")
+APPROVED_QODER_PERMISSION_MODE = os.getenv("APPROVED_QODER_PERMISSION_MODE", "bypass_permissions")
 QODER_EXTRA_ARGS = os.getenv("QODER_EXTRA_ARGS", "")
+QODER_PROCESS_HOME = os.getenv("QODER_PROCESS_HOME", "")
 DEFAULT_AGENT_ID = os.getenv("DEFAULT_AGENT_ID", "codex").strip().lower() or "codex"
 CODEX_PROJECTS_ROOT_VALUE = os.getenv("CODEX_PROJECTS_ROOT", "")
 CODEX_PROJECTS_ROOT = Path(CODEX_PROJECTS_ROOT_VALUE).expanduser() if CODEX_PROJECTS_ROOT_VALUE else DEFAULT_CWD.parent
@@ -535,12 +536,63 @@ def agent_model_label(agent_id: str, model: str = "") -> str:
     return model or adapter.default_model or "默认"
 
 
+QODER_PERMISSION_MODE_CHOICES = {"default", "accept_edits", "bypass_permissions", "dont_ask", "auto"}
+QODER_PERMISSION_MODE_ALIASES = {
+    "accept": "accept_edits",
+    "accept_edit": "accept_edits",
+    "accept-edits": "accept_edits",
+    "bypass": "bypass_permissions",
+    "bypass_permission": "bypass_permissions",
+    "bypass-permissions": "bypass_permissions",
+    "dontask": "dont_ask",
+    "dont-ask": "dont_ask",
+    "do_not_ask": "dont_ask",
+    "do-not-ask": "dont_ask",
+    # qodercli has no "ask" mode. In the bridge, dont_ask is the right first
+    # pass because it fails fast and lets Lark approval retry with the approved mode.
+    "ask": "dont_ask",
+}
+
+
+def normalize_qoder_permission_mode(value: str, env_name: str = "QODER_PERMISSION_MODE") -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    key = raw.lower()
+    normalized = QODER_PERMISSION_MODE_ALIASES.get(key, key.replace("-", "_"))
+    if normalized in QODER_PERMISSION_MODE_CHOICES:
+        if normalized != raw:
+            logger.warning("%s=%r is not a qodercli permission-mode choice; using %r", env_name, raw, normalized)
+        return normalized
+    choices = ", ".join(sorted(QODER_PERMISSION_MODE_CHOICES))
+    raise ValueError(f"{env_name}={raw!r} 不是 qodercli 支持的 permission mode；可选值：{choices}")
+
+
+def qoder_process_home() -> str:
+    if QODER_PROCESS_HOME:
+        return str(Path(QODER_PROCESS_HOME).expanduser())
+    if QODER_HOME.name == ".qoder":
+        return str(QODER_HOME.parent)
+    return ""
+
+
+def agent_process_env(agent_id: str) -> Optional[dict[str, str]]:
+    if normalize_agent_id(agent_id) != "qoder":
+        return None
+    home = qoder_process_home()
+    if not home:
+        return None
+    env = os.environ.copy()
+    env["HOME"] = home
+    return env
+
+
 def default_permission_mode(agent_id: str) -> str:
     agent_id = normalize_agent_id(agent_id)
     if agent_id == "claude":
         return CLAUDE_PERMISSION_MODE
     if agent_id == "qoder":
-        return QODER_PERMISSION_MODE
+        return normalize_qoder_permission_mode(QODER_PERMISSION_MODE, "QODER_PERMISSION_MODE")
     return ""
 
 
@@ -549,7 +601,14 @@ def approved_permission_mode(agent_id: str) -> str:
     if agent_id == "claude":
         return APPROVED_CLAUDE_PERMISSION_MODE
     if agent_id == "qoder":
-        return APPROVED_QODER_PERMISSION_MODE
+        mode = normalize_qoder_permission_mode(APPROVED_QODER_PERMISSION_MODE, "APPROVED_QODER_PERMISSION_MODE")
+        if mode == "auto":
+            logger.warning(
+                "APPROVED_QODER_PERMISSION_MODE=%r is ambiguous after Lark approval; using 'bypass_permissions'",
+                APPROVED_QODER_PERMISSION_MODE,
+            )
+            return "bypass_permissions"
+        return mode
     return ""
 
 
@@ -721,7 +780,7 @@ class QoderAdapter(AgentAdapter):
         model = task.model or QODER_MODEL
         if model:
             argv.extend(["--model", model])
-        permission_mode = task.permission_mode or QODER_PERMISSION_MODE
+        permission_mode = normalize_qoder_permission_mode(task.permission_mode or QODER_PERMISSION_MODE, "QODER_PERMISSION_MODE")
         if permission_mode:
             argv.extend(["--permission-mode", permission_mode])
         if task.session_id:
@@ -1890,20 +1949,18 @@ def apply_lark_reference_context(chat_id: str, context: LarkReferenceContext) ->
     switched = False
     conv = get_active_conversation(context.session_id)
     if conv:
-        runtime.active_session_id = conv.session_id
-        if conv.cwd:
-            runtime.cwd = conv.cwd
-            root = conversation_project_root(conv)
-            runtime.active_project_key = project_key(root) if root else ""
+        activate_conversation(chat_id, conv)
         switched = True
     elif context.cwd:
         try:
             cwd = Path(context.cwd).expanduser()
             if cwd.is_dir() and is_allowed_cwd(cwd):
                 runtime.cwd = cwd
+                runtime.task_cwd = str(cwd)
         except OSError:
             logger.exception("failed to apply referenced cwd: %s", context.cwd)
-    save_runtime(chat_id)
+    if not switched:
+        save_runtime(chat_id)
     return switched
 
 
@@ -5235,17 +5292,51 @@ def should_create_approval(text: str) -> bool:
         "operation not permitted",
         "permission denied",
         "permission was denied",
+        "permission mode",
         "auto-denied",
         "auto denied",
+        "automatically denied",
         "can't modify",
         "cannot modify",
         "denied by user",
         "unable to create",
         ".git/index.lock",
+        "dont_ask",
+        "don't ask",
+        "自动拒绝",
+        "权限模式",
         "终端权限",
         "权限弹窗",
     ]
     return any(signal in haystack for signal in signals)
+
+
+def qoder_permission_denial_output(text: str, task: Optional[CodexTaskRuntime]) -> bool:
+    if not task or task_agent_id(task) != "qoder" or task.approved_retry:
+        return False
+    haystack = str(text or "").lower()
+    signals = (
+        "the user has enabled the 'don't ask' permission mode",
+        "the user has enabled the dont ask permission mode",
+        "don't ask",
+        "dont_ask",
+        "dontask",
+        "automatically denied",
+        "auto-denied",
+        "auto denied",
+        "permission.resolved",
+        "write tool",
+        "edit tool",
+        "bash tool",
+        "permission mode",
+        "tool_result",
+        "is_error",
+    )
+    return any(signal in haystack for signal in signals)
+
+
+def failed_qoder_write_denial(text: str, code: Optional[int], task: Optional[CodexTaskRuntime]) -> bool:
+    return qoder_permission_denial_output(text, task)
 
 
 APPROVAL_RETRY_NOTE_RE = re.compile(
@@ -6337,7 +6428,18 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
     runtime.task_agent_id = agent_id
     runtime.task_session_id = task.session_id
     runtime.task_cwd = str(task.cwd)
-    argv = codex_task_command(task, last_message_path)
+    try:
+        argv = codex_task_command(task, last_message_path)
+    except Exception as e:
+        logger.exception("failed to build agent command: agent=%s", agent_id)
+        if last_message_path:
+            last_message_path.unlink(missing_ok=True)
+        if lock_acquired and run_lock:
+            run_lock.release()
+        text = f"构造 {adapter.label} 命令失败：{type(e).__name__}: {e}"
+        if not update_task_card(chat_id, status="失败", output=text, force=True, task_id=task.task_id):
+            send_msg(chat_id, text)
+        return
     selected_model = task.model or adapter.default_model
     selected_permission_mode = task.permission_mode or default_permission_mode(agent_id)
     runtime.next_approval_policy = ""
@@ -6358,6 +6460,7 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
         proc = subprocess.Popen(
             argv,
             cwd=str(cwd),
+            env=agent_process_env(agent_id),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -6405,6 +6508,7 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
     emitted_output = False
     last_agent_message = ""
     retry_after_approval = False
+    stop_for_approval = False
 
     try:
         assert proc.stdout is not None
@@ -6456,7 +6560,7 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
                     continue
                 if kind == "skip" or not text:
                     continue
-                maybe_create_pending_approval(chat_id, runtime, text, task)
+                approval_detected = maybe_create_pending_approval(chat_id, runtime, text, task)
                 if kind == "progress":
                     buffer.append(text)
                 elif kind in ("message", "complete", "text", "tool_output"):
@@ -6464,17 +6568,30 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
                     if kind in ("message", "complete"):
                         last_agent_message = text
                 emitted_output = True
+                if approval_detected and qoder_permission_denial_output(text, task):
+                    stop_for_approval = True
 
             if kind in ("progress", "tool_output") or time.time() - last_flush >= 2 or len("\n".join(buffer)) >= 500:
                 send_stream_update(chat_id, buffer, force=True, task_id=task.task_id)
                 last_flush = time.time()
+            if stop_for_approval:
+                logger.info(
+                    "terminating qoder run after permission denial to wait for Lark approval: chat_id=%s task_id=%s",
+                    chat_id,
+                    task.task_id,
+                )
+                proc.terminate()
+                break
 
         send_stream_update(chat_id, buffer, force=True, task_id=task.task_id)
         code = proc.wait(timeout=5)
+        fallback_agent_output = "\n".join(part for part in buffer[-8:] if part).strip()
         runtime.task_session_id = task.session_id
         last_agent_message, user_question = resolve_task_result(
             chat_id, runtime, cwd, start, execution_prompt, last_agent_message, last_message_path, agent_id, task
         )
+        if code != 0 and not last_agent_message and fallback_agent_output:
+            last_agent_message = fallback_agent_output
         if not task.one_shot_agent:
             task.session_id = runtime.task_session_id or task.session_id
         emitted_output = emitted_output or bool(last_agent_message)
@@ -6493,6 +6610,12 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
             user_question=user_question,
             task=task,
         )
+        if failed_qoder_write_denial(result_text, code, task):
+            result_text += (
+                "\n\n**权限诊断**\n"
+                "Qoder 当前 session 仍在 `dont_ask` 权限模式下，写入工具会被自动拒绝。"
+                "批准后将用新的 Qoder session 和批准后的 permission mode 重试，避免继续继承旧 session 权限。"
+            )
         approval_needed = bool(pending_approvals_for_chat(chat_id, task.task_id))
         if not approval_needed:
             approval_needed = maybe_create_pending_approval(chat_id, runtime, last_agent_message, task) or maybe_create_pending_approval(chat_id, runtime, result_text, task)
@@ -6711,6 +6834,11 @@ def approve_pending(chat_id: str, approval_id: str, approved: bool, notify: bool
             task.sandbox_mode = APPROVED_CODEX_SANDBOX_MODE if agent_id == "codex" else ""
             task.permission_mode = approved_permission_mode(agent_id) or task.permission_mode
             task.approved_retry = True
+            if agent_id == "qoder":
+                task.session_id = ""
+                runtime.task_session_id = ""
+                if not approval.one_shot_agent and normalize_agent_id(runtime.active_agent_id) == "qoder":
+                    runtime.active_session_id = ""
     approval.status = "approved" if approved else "rejected"
     updated = update_task_card(
         chat_id,

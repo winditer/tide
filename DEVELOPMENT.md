@@ -101,10 +101,10 @@ Lark 侧协议不区分具体 CLI：文本消息、卡片按钮、`message.creat
 APPROVED_CODEX_APPROVAL_POLICY=on-request
 APPROVED_CODEX_SANDBOX_MODE=workspace-write
 APPROVED_CLAUDE_PERMISSION_MODE=acceptEdits
-APPROVED_QODER_PERMISSION_MODE=accept_edits
+APPROVED_QODER_PERMISSION_MODE=bypass_permissions
 ```
 
-其中 Codex 使用 approval policy / sandbox mode，Claude Code 和 Qoder CLI 使用各自的 approved permission mode。对原任务做一次重试。等待审批时间由：
+其中 Codex 使用 approval policy / sandbox mode，Claude Code 和 Qoder CLI 使用各自的 approved permission mode。对原任务做一次重试。Qoder 批准重试默认使用 `bypass_permissions` 并启动新 session，避免旧 session 继续继承 `dontAsk` 拒写模式。等待审批时间由：
 
 ```env
 PENDING_APPROVAL_WAIT_SECONDS=300
