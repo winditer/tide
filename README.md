@@ -64,10 +64,12 @@ LARK_VERIFICATION_TOKEN=xxx
 CODEX_DEFAULT_CWD=/Users/haifeng/Documents/lark2codex
 ```
 
-确认 Codex CLI 可用：
+确认需要接入的 Agent CLI 可用：
 
 ```bash
 codex --help
+claude --help
+qodercli --help
 ```
 
 ## 运行
@@ -153,6 +155,7 @@ nohup python3 lark2agent_ws.py > lark2agent_ws.log 2>&1 &
 
 在机器人所在群聊中发送：
 
+- `/help`：查看可用指令列表。
 - `/panel`：打开 Lark2Agent 看板。
 - `/projects`：打开项目面板。
 - `/chats`：打开普通对话列表。
@@ -167,9 +170,10 @@ nohup python3 lark2agent_ws.py > lark2agent_ws.log 2>&1 &
 - `/daily`：输出项目进展日报。
 - `/daily=2026-06-01`：输出指定日期的项目进展日报，也支持 `/daily 2026-06-01`。
 - `/agent`：查看可用 Agent。
-- `/agent=claude`：把当前 Lark 会话默认 Agent 切换为 Claude Code；`/agent=codex` 切回 Codex。
-- `/agent=claude +<指令>`：使用 Claude Code CLI 执行一次。
+- `/agent=claude` / `/agent=qoder`：把当前 Lark 会话默认 Agent 切换为 Claude Code 或 Qoder CLI；`/agent=codex` 切回 Codex。
+- `/agent=claude +<指令>` / `/agent=qoder +<指令>`：使用指定 Agent 执行一次。
 - `/claude <指令>`：使用 Claude Code CLI 执行一次。
+- `/qoder <指令>`：使用 Qoder CLI 执行一次。
 - `/codex <指令>`：使用 Codex CLI 执行一次。
 - `/model=<模型名> +<指令>`：使用指定模型执行一次，例如 `/model=gpt-5.5 +修复 README`。
 - `/plan`：进入并行计划模式，下一条消息发送任务清单。
@@ -195,6 +199,8 @@ nohup python3 lark2agent_ws.py > lark2agent_ws.log 2>&1 &
 - 图片/文件消息：附件会下载到当前工作目录的 `.lark2agent/attachments` 下；如果这条消息没有文字，下一条普通指令会自动带上这些附件。
 - 回复/引用图片或文件消息下指令：当前 Agent 会结合被回复消息中的附件本地路径执行。
 - 其他文本：作为当前默认 Agent 指令执行。
+
+中文命令别名：常用指令支持中文写法，可省略 `/` 前缀。例如 `看板`=`/panel`、`项目`=`/projects`、`对话`=`/convos`、`普通对话`=`/chats`、`状态`=`/status`、`日报`=`/daily`、`帮助`=`/help`，以及 `停止`=`/stop`。
 
 待审批项会显示在 Agent 指令面板中，可直接点击“批准 / 拒绝”。审批处理后，面板的 `最新结果` 会更新为当前审批信息。
 
@@ -244,7 +250,7 @@ LARK2AGENT_SHOW_ARCHIVED=1
 /model=gpt-5.5 +修复 README 中的安装说明
 ```
 
-这个前缀只对当前这次任务生效，不会改写 `.env` 或 Codex 全局配置。`/plan` 也支持同样的前缀：
+这个前缀只对当前这次任务生效，不会改写 `.env` 或对应 Agent 的全局配置。`/plan` 也支持同样的前缀：
 
 ```text
 /model=gpt-5.5 +/plan
@@ -335,11 +341,11 @@ lark2agent/<plan_id>-<task_id>
 | `APPROVED_CODEX_SANDBOX_MODE` | `workspace-write` | Lark 审批批准后，单次重试使用的 sandbox 模式。 |
 | `CODEX_ALLOWED_ROOTS` | `CODEX_PROJECTS_ROOT` 和 `CODEX_DEFAULT_CWD` | 允许 Codex 执行、`/cd`、项目创建和 Plan worktree 运行的目录范围，多个路径用 `:` 或 `,` 分隔。 |
 
-### Agent 和 Claude Code
+### Agent、Claude Code 和 Qoder CLI
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `DEFAULT_AGENT_ID` | `codex` | 当前 Lark chat 未显式指定时使用的默认 Agent，可设为 `codex` 或 `claude`。 |
+| `DEFAULT_AGENT_ID` | `codex` | 当前 Lark chat 未显式指定时使用的默认 Agent，可设为 `codex`、`claude` 或 `qoder`。 |
 | `CLAUDE_BIN` | `claude` | Claude Code CLI 命令路径。 |
 | `CLAUDE_HOME` | `~/.claude` | Claude Code home 目录。 |
 | `CLAUDE_PROJECTS_DIR` | `$CLAUDE_HOME/projects` | Claude Code 会话 JSONL 索引目录。 |
@@ -348,6 +354,14 @@ lark2agent/<plan_id>-<task_id>
 | `CLAUDE_PERMISSION_MODE` | `dontAsk` | Claude Code `--permission-mode` 参数；Lark2Agent 默认不走本机终端弹窗。 |
 | `APPROVED_CLAUDE_PERMISSION_MODE` | `acceptEdits` | Lark 审批批准后，单次 Claude Code 重试使用的 `--permission-mode`。 |
 | `CLAUDE_EXTRA_ARGS` | 空 | 追加给 Claude Code CLI 的额外参数，按 shell 规则解析。 |
+| `QODER_BIN` | `qodercli` | Qoder CLI 命令路径。 |
+| `QODER_HOME` | `~/.qoder` | Qoder CLI home 目录。 |
+| `QODER_PROJECTS_DIR` | `$QODER_HOME/projects` | Qoder CLI 会话 JSONL 索引目录。 |
+| `QODER_TIMEOUT_SECONDS` | `CODEX_TIMEOUT_SECONDS` | 单次 Qoder CLI 任务超时时间。 |
+| `QODER_MODEL` | 空 | 默认 Qoder 模型；为空时使用 Qoder CLI 自身配置。 |
+| `QODER_PERMISSION_MODE` | `dont_ask` | Qoder CLI `--permission-mode` 参数；Lark2Agent 默认不走本机终端弹窗。 |
+| `APPROVED_QODER_PERMISSION_MODE` | `accept_edits` | Lark 审批批准后，单次 Qoder CLI 重试使用的 `--permission-mode`。 |
+| `QODER_EXTRA_ARGS` | 空 | 追加给 Qoder CLI 的额外参数，按 shell 规则解析。 |
 
 ### 访问控制
 
@@ -375,6 +389,7 @@ lark2agent/<plan_id>-<task_id>
 | `LARK_ATTACHMENT_MAX_BYTES` | `52428800` | 单个附件最大下载字节数。 |
 | `LARK_PENDING_ATTACHMENT_TTL_SECONDS` | `900` | 只有附件、没有文字的消息可被下一条指令自动消费的暂存时间。 |
 | `MAX_LARK_ATTACHMENTS_PER_MESSAGE` | `8` | 单条 Lark 消息最多处理的附件数量。 |
+| `MAX_LARK_MESSAGE_REFS` | `1000` | 缓存的 Lark 消息引用（用于回复/引用找回附件）上限；超过后按更新时间裁剪，小于等于 0 表示不限制。 |
 | `TASK_CARD_REFRESH_INTERVAL_SECONDS` | `15` | Agent 指令面板自动刷新间隔。 |
 | `PLAN_MAX_PARALLEL` | `3` | `/plan` 并行执行的最大子任务数。 |
 | `PLAN_TASK_OUTPUT_MAX_CHARS` | `1200` | Plan 面板中每个子任务输出的最大展示长度。 |
@@ -448,6 +463,8 @@ Codex Desktop 是否在主界面直接展示这类非交互会话，取决于客
 
 Claude Code CLI 通过 `claude --print --output-format stream-json --verbose` 非交互模式运行。Bridge 会索引 `CLAUDE_PROJECTS_DIR` 下的 Claude 会话 JSONL，并在 Lark 看板里以 `claude:<session_id>` 形式展示，避免和 Codex session ID 冲突。续写 Claude 会话时会自动去掉 `claude:` 前缀并调用 `claude --resume <session_id>`。
 
+Qoder CLI 通过 `qodercli --print --output-format stream-json --cwd <目录>` 非交互模式运行。Bridge 会索引 `QODER_PROJECTS_DIR` 下的 Qoder 会话 JSONL，并在 Lark 看板里以 `qoder:<session_id>` 形式展示；续写时会自动调用 `qodercli --resume <session_id>`。
+
 ## 常见问题
 
 ### 收不到 Lark 消息
@@ -465,6 +482,8 @@ Claude Code CLI 通过 `claude --print --output-format stream-json --verbose` �
 ```env
 APPROVED_CODEX_APPROVAL_POLICY=on-request
 APPROVED_CODEX_SANDBOX_MODE=workspace-write
+APPROVED_CLAUDE_PERMISSION_MODE=acceptEdits
+APPROVED_QODER_PERMISSION_MODE=accept_edits
 ```
 
 ### Git 提交失败

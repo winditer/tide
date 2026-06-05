@@ -66,16 +66,26 @@ CLAUDE_HOME = Path(os.getenv("CLAUDE_HOME", Path.home() / ".claude")).expanduser
 CLAUDE_PROJECTS_DIR = Path(
     os.getenv("CLAUDE_PROJECTS_DIR", CLAUDE_HOME / "projects")
 ).expanduser()
+QODER_HOME = Path(os.getenv("QODER_HOME", Path.home() / ".qoder")).expanduser()
+QODER_PROJECTS_DIR = Path(
+    os.getenv("QODER_PROJECTS_DIR", QODER_HOME / "projects")
+).expanduser()
 DEFAULT_CWD = Path(os.getenv("CODEX_DEFAULT_CWD", os.getcwd())).expanduser().resolve()
 CODEX_BIN = os.getenv("CODEX_BIN", "codex")
 CLAUDE_BIN = os.getenv("CLAUDE_BIN", "claude")
+QODER_BIN = os.getenv("QODER_BIN", "qodercli")
 CODEX_TIMEOUT_SECONDS = int(os.getenv("CODEX_TIMEOUT_SECONDS", "1800"))
 CLAUDE_TIMEOUT_SECONDS = int(os.getenv("CLAUDE_TIMEOUT_SECONDS", str(CODEX_TIMEOUT_SECONDS)))
+QODER_TIMEOUT_SECONDS = int(os.getenv("QODER_TIMEOUT_SECONDS", str(CODEX_TIMEOUT_SECONDS)))
 CODEX_MODEL = os.getenv("CODEX_MODEL", "")
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "")
+QODER_MODEL = os.getenv("QODER_MODEL", "")
 CLAUDE_PERMISSION_MODE = os.getenv("CLAUDE_PERMISSION_MODE", "dontAsk")
 APPROVED_CLAUDE_PERMISSION_MODE = os.getenv("APPROVED_CLAUDE_PERMISSION_MODE", "acceptEdits")
 CLAUDE_EXTRA_ARGS = os.getenv("CLAUDE_EXTRA_ARGS", "")
+QODER_PERMISSION_MODE = os.getenv("QODER_PERMISSION_MODE", "dont_ask")
+APPROVED_QODER_PERMISSION_MODE = os.getenv("APPROVED_QODER_PERMISSION_MODE", "accept_edits")
+QODER_EXTRA_ARGS = os.getenv("QODER_EXTRA_ARGS", "")
 DEFAULT_AGENT_ID = os.getenv("DEFAULT_AGENT_ID", "codex").strip().lower() or "codex"
 CODEX_PROJECTS_ROOT_VALUE = os.getenv("CODEX_PROJECTS_ROOT", "")
 CODEX_PROJECTS_ROOT = Path(CODEX_PROJECTS_ROOT_VALUE).expanduser() if CODEX_PROJECTS_ROOT_VALUE else DEFAULT_CWD.parent
@@ -248,6 +258,7 @@ class CodexTaskRuntime:
     guidance_messages: list[str] = field(default_factory=list)
     cancel_requested: bool = False
     attachments: list[dict[str, Any]] = field(default_factory=list)
+    one_shot_agent: bool = False
 
 
 @dataclass
@@ -301,6 +312,7 @@ class PendingApproval:
     resume_prompt: str = ""
     status: str = "pending"
     created_at: float = field(default_factory=time.time)
+    one_shot_agent: bool = False
 
 
 @dataclass
@@ -393,6 +405,9 @@ def normalize_agent_id(agent_id: str = "") -> str:
         "claudecode": "claude",
         "claudecli": "claude",
         "claude-cli": "claude",
+        "qoder": "qoder",
+        "qoder-cli": "qoder",
+        "qodercli": "qoder",
     }
     value = aliases.get(value, value)
     return value if value in AGENT_ADAPTERS else "codex"
@@ -450,6 +465,35 @@ def task_agent_id(task: Optional[CodexTaskRuntime], runtime: Optional[ChatRuntim
 def agent_model_label(agent_id: str, model: str = "") -> str:
     adapter = AGENT_ADAPTERS[normalize_agent_id(agent_id)]
     return model or adapter.default_model or "默认"
+
+
+def default_permission_mode(agent_id: str) -> str:
+    agent_id = normalize_agent_id(agent_id)
+    if agent_id == "claude":
+        return CLAUDE_PERMISSION_MODE
+    if agent_id == "qoder":
+        return QODER_PERMISSION_MODE
+    return ""
+
+
+def approved_permission_mode(agent_id: str) -> str:
+    agent_id = normalize_agent_id(agent_id)
+    if agent_id == "claude":
+        return APPROVED_CLAUDE_PERMISSION_MODE
+    if agent_id == "qoder":
+        return APPROVED_QODER_PERMISSION_MODE
+    return ""
+
+
+def approved_retry_text(agent_id: str, label: str = "") -> str:
+    agent_id = normalize_agent_id(agent_id)
+    label = label or agent_label(agent_id)
+    if agent_id == "codex":
+        return f"批准后会用 `{APPROVED_CODEX_SANDBOX_MODE}` / `{APPROVED_CODEX_APPROVAL_POLICY}` 单次重试；"
+    permission_mode = approved_permission_mode(agent_id)
+    if permission_mode:
+        return f"批准后会用 {label} 适配器和 `{permission_mode}` permission mode 重试原任务；"
+    return f"批准后会用 {label} 适配器单次重试原任务；"
 
 
 class AgentAdapter:
@@ -597,9 +641,88 @@ class ClaudeAdapter(AgentAdapter):
         return bool(conv and conv.agent_id == self.id and conv.session_id)
 
 
+class QoderAdapter(AgentAdapter):
+    id = "qoder"
+    label = "Qoder CLI"
+    bin_name = QODER_BIN
+    default_model = QODER_MODEL
+    timeout_seconds = QODER_TIMEOUT_SECONDS
+
+    def build_command(self, task: CodexTaskRuntime, last_message_file: Optional[Path] = None) -> list[str]:
+        argv = [QODER_BIN, "--print", "--output-format", "stream-json", "--cwd", str(task.cwd)]
+        model = task.model or QODER_MODEL
+        if model:
+            argv.extend(["--model", model])
+        permission_mode = task.permission_mode or QODER_PERMISSION_MODE
+        if permission_mode:
+            argv.extend(["--permission-mode", permission_mode])
+        if task.session_id:
+            argv.extend(["--resume", self.raw_session_id(task.session_id)])
+        if QODER_EXTRA_ARGS:
+            for _a in shlex.split(QODER_EXTRA_ARGS):
+                if re.match(r'--?[\w][\w\-=./]*$', _a):
+                    argv.append(_a)
+                else:
+                    logger.warning('QODER_EXTRA_ARGS skipping unsafe arg: %r', _a)
+        argv.append(task.prompt)
+        return argv
+
+    def parse_events(self, line: str) -> list[tuple[str, str]]:
+        return parse_qoder_json_event(line)
+
+    def is_resumable(self, conv: Optional[ConversationInfo]) -> bool:
+        return bool(conv and conv.agent_id == self.id and conv.session_id)
+
+
+def parse_qoder_json_event(line: str) -> list[tuple[str, str]]:
+    raw = line.strip()
+    if not raw:
+        return [("skip", "")]
+    try:
+        obj = json.loads(raw)
+    except json.JSONDecodeError:
+        return [("text", raw)]
+
+    events: list[tuple[str, str]] = []
+    session_id = obj.get("session_id") or obj.get("sessionId")
+    if session_id:
+        events.append(("session_id", str(session_id)))
+
+    typ = str(obj.get("type") or "")
+    if typ == "system":
+        subtype = obj.get("subtype") or obj.get("event") or "init"
+        if subtype not in ("init", "ready"):
+            content = extract_claude_text_content(obj.get("content"))
+            events.append(("progress", content or f"Qoder 系统事件：{subtype}"))
+    elif typ == "assistant":
+        text = extract_claude_text_content(obj.get("message") or obj.get("content"))
+        if text:
+            events.append(("message", text))
+    elif typ == "user":
+        text = extract_claude_text_content(obj.get("message") or obj.get("content"))
+        if text and "tool_result" in raw:
+            events.append(("tool_output", text))
+    elif typ == "result":
+        result = obj.get("result") or obj.get("message") or ""
+        errors = obj.get("errors") or []
+        error = obj.get("error") or obj.get("is_error") or bool(errors)
+        text = extract_claude_text_content(result)
+        if not text and errors:
+            text = "\n".join(str(item) for item in errors if item)
+        text = text or short_text(raw, 1200)
+        events.append(("tool_output" if error else "complete", text))
+    elif typ in ("tool_use", "tool_result"):
+        events.append(("tool_output", extract_claude_text_content(obj)))
+    else:
+        text = extract_claude_text_content(obj.get("message") or obj.get("content") or obj.get("result"))
+        events.append(("message", text) if text else ("skip", ""))
+    return events or [("skip", "")]
+
+
 AGENT_ADAPTERS: dict[str, AgentAdapter] = {
     "codex": CodexAdapter(),
     "claude": ClaudeAdapter(),
+    "qoder": QoderAdapter(),
 }
 
 
@@ -2055,6 +2178,14 @@ def iter_claude_session_files(report_date=None) -> list[Path]:
     return files[:MAX_SESSION_FILES]
 
 
+def iter_qoder_session_files(report_date=None) -> list[Path]:
+    if not QODER_PROJECTS_DIR.exists():
+        return []
+    files = list(QODER_PROJECTS_DIR.glob("**/*.jsonl"))
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return files[:MAX_SESSION_FILES]
+
+
 def parse_report_date(value: str = ""):
     text = str(value or "").strip()
     if not text:
@@ -2312,6 +2443,100 @@ def parse_claude_conversation(path: Path, report_date=None) -> Optional[Conversa
     return info
 
 
+def parse_qoder_conversation(path: Path, report_date=None) -> Optional[ConversationInfo]:
+    info = ConversationInfo(session_id="", file=path, agent_id="qoder", updated_at=path.stat().st_mtime)
+    fallback_id = path.stem
+    meaningful_users: list[str] = []
+    assistant_messages: list[str] = []
+    report_date = report_date or datetime.now().date()
+    today_user_fingerprints: set[str] = set()
+    today_failure_fingerprints: set[str] = set()
+
+    def record_today_activity(ts: float):
+        if event_date(ts) == report_date:
+            info.today_activity_count += 1
+
+    def record_today_user(text: str, ts: float):
+        if event_date(ts) != report_date:
+            return
+        key = re.sub(r"\s+", " ", text).strip()
+        if not key:
+            return
+        fingerprint = hashlib.sha1(key.encode("utf-8")).hexdigest()
+        if fingerprint in today_user_fingerprints:
+            return
+        today_user_fingerprints.add(fingerprint)
+        info.today_turns += 1
+
+    def record_today_result(text: str, ts: float):
+        if event_date(ts) != report_date or not text:
+            return
+        key = re.sub(r"\s+", " ", text).strip()
+        fingerprint = hashlib.sha1(key.encode("utf-8")).hexdigest()
+        if looks_failed(text) and fingerprint not in today_failure_fingerprints:
+            today_failure_fingerprints.add(fingerprint)
+            info.today_failed_count += 1
+
+    try:
+        with path.open("r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if obj.get("isMeta"):
+                    continue
+                raw_session_id = obj.get("sessionId") or obj.get("session_id")
+                if raw_session_id:
+                    info.session_id = conversation_key("qoder", str(raw_session_id))
+                ts = parse_event_timestamp(obj.get("timestamp"))
+                if ts:
+                    record_today_activity(ts)
+                if not info.created_at and obj.get("timestamp"):
+                    info.created_at = str(obj.get("timestamp"))
+                if obj.get("cwd") and not info.cwd:
+                    info.cwd = Path(str(obj.get("cwd")))
+                info.originator = "qoder_cli"
+                info.source = "qoder"
+                typ = obj.get("type")
+                if typ == "user":
+                    text = extract_claude_text_content(obj.get("message") or obj.get("content"))
+                    if not text or text.startswith("<"):
+                        continue
+                    meaningful_users.append(text)
+                    info.last_user = text
+                    info.last_user_at = ts
+                    record_today_user(text, ts)
+                elif typ == "assistant":
+                    text = extract_claude_text_content(obj.get("message") or obj.get("content"))
+                    if not text:
+                        continue
+                    assistant_messages.append(text)
+                    info.last_assistant = text
+                    info.last_assistant_at = ts
+                    if event_date(ts) == report_date:
+                        info.today_assistant_messages.append(text)
+                        record_today_result(text, ts)
+                elif typ == "system" and obj.get("subtype") == "error":
+                    text = extract_claude_text_content(obj.get("content"))
+                    if looks_failed(text):
+                        info.status = "有错误"
+                        record_today_result(text, ts)
+    except OSError:
+        return None
+
+    if not info.session_id:
+        info.session_id = conversation_key("qoder", fallback_id)
+    if meaningful_users:
+        info.title = short_text(meaningful_users[0], 70)
+        info.turns = len(meaningful_users)
+    elif assistant_messages:
+        info.title = short_text(assistant_messages[0], 70)
+    if info.status == "未知":
+        info.status = "有记录"
+    return info
+
+
 def build_index(report_date=None) -> tuple[list[ProjectInfo], dict[str, ConversationInfo]]:
     projects: dict[str, ProjectInfo] = {}
     conversations: dict[str, ConversationInfo] = {}
@@ -2353,6 +2578,9 @@ def build_index(report_date=None) -> tuple[list[ProjectInfo], dict[str, Conversa
 
     for path in iter_claude_session_files(report_date=report_date):
         add_conversation(parse_claude_conversation(path, report_date=metric_date))
+
+    for path in iter_qoder_session_files(report_date=report_date):
+        add_conversation(parse_qoder_conversation(path, report_date=metric_date))
 
     for project in projects.values():
         project.conversations.sort(key=lambda c: c.updated_at, reverse=True)
@@ -2635,7 +2863,7 @@ def parse_agent_prefix(content: str) -> tuple[str, str]:
             return "", content
         rest = strip_command_separator(match.group(2) or "")
         return agent_id, rest
-    match = re.match(r"^/(codex|claude)(?:\s+(.*)|$)", text, flags=re.IGNORECASE | re.DOTALL)
+    match = re.match(r"^/(codex|claude|qoder)(?:\s+(.*)|$)", text, flags=re.IGNORECASE | re.DOTALL)
     if match:
         return normalize_agent_id(match.group(1)), strip_command_separator(match.group(2) or "")
     return "", content
@@ -2648,7 +2876,7 @@ def agent_options_text(current_agent_id: str = "") -> str:
         default_model = adapter.default_model or "默认"
         current = "（当前）" if agent_id == current_agent_id else ""
         lines.append(f"- `{agent_id}`：{adapter.label}，默认模型：{default_model}{current}")
-    lines.append("用法：`/agent=claude +指令`、`/claude 指令`、`/codex 指令`。")
+    lines.append("用法：`/agent=qoder +指令`、`/qoder 指令`、`/claude 指令`、`/codex 指令`。")
     return "\n".join(lines)
 
 
@@ -3564,11 +3792,7 @@ def build_task_card(chat_id: str, status: str = "", output: str = "", detail: st
                     ]
                 ),
                 note(
-                    (
-                        f"批准后会用 `{APPROVED_CODEX_SANDBOX_MODE}` / `{APPROVED_CODEX_APPROVAL_POLICY}` 单次重试；"
-                        if shown_agent_id == "codex"
-                        else f"批准后会用 {shown_agent_label} 适配器和 `{APPROVED_CLAUDE_PERMISSION_MODE}` permission mode 重试原任务；"
-                    )
+                    approved_retry_text(shown_agent_id, shown_agent_label)
                     + f"{format_duration(PENDING_APPROVAL_WAIT_SECONDS)} 内未处理会按当前 Agent 默认配置继续。"
                     f"按钮不可用时，发送 /approve {approval.approval_id} 或 /reject {approval.approval_id}。"
                 ),
@@ -3600,6 +3824,7 @@ def send_task_card(
     force_ordinary: bool = False,
     source_message_id: str = "",
     attachments: Optional[list[dict[str, Any]]] = None,
+    one_shot_agent: bool = False,
 ) -> str:
     runtime = get_runtime(chat_id)
     agent_id = normalize_agent_id(agent_id or runtime.active_agent_id or DEFAULT_AGENT_ID)
@@ -3618,16 +3843,18 @@ def send_task_card(
         session_id=session_id,
         approval_policy=runtime.next_approval_policy,
         sandbox_mode=runtime.next_sandbox_mode,
-        permission_mode=CLAUDE_PERMISSION_MODE if agent_id == "claude" else "",
+        permission_mode=default_permission_mode(agent_id),
         force_ordinary=force_ordinary,
         source_message_id=source_message_id,
         attachments=normalize_attachment_dicts(attachments or []),
+        one_shot_agent=one_shot_agent,
     )
     with LOCK:
         TASKS[task_id] = task
     runtime.task_prompt = prompt
-    runtime.active_agent_id = agent_id
-    runtime.active_session_id = session_id
+    if not one_shot_agent:
+        runtime.active_agent_id = agent_id
+        runtime.active_session_id = session_id
     runtime.task_agent_id = agent_id
     runtime.task_model = model
     runtime.task_session_id = task.session_id
@@ -4617,6 +4844,24 @@ def conversation_matches_run(conv: ConversationInfo, cwd: Path, started_at: floa
     return conv.updated_at >= started_at - 10
 
 
+def agent_session_parser(agent_id: str):
+    agent_id = normalize_agent_id(agent_id)
+    if agent_id == "claude":
+        return parse_claude_conversation
+    if agent_id == "qoder":
+        return parse_qoder_conversation
+    return parse_conversation
+
+
+def agent_session_files(agent_id: str) -> list[Path]:
+    agent_id = normalize_agent_id(agent_id)
+    if agent_id == "claude":
+        return iter_claude_session_files()
+    if agent_id == "qoder":
+        return iter_qoder_session_files()
+    return iter_session_files()
+
+
 def find_conversation_for_run(runtime: ChatRuntime, cwd: Path, started_at: float, prompt: str, agent_id: str = "") -> Optional[ConversationInfo]:
     agent_id = normalize_agent_id(agent_id or runtime.task_agent_id or runtime.active_agent_id)
     cutoff = started_at - 10
@@ -4626,8 +4871,8 @@ def find_conversation_for_run(runtime: ChatRuntime, cwd: Path, started_at: float
 
     fallback: Optional[ConversationInfo] = None
     normalized_prompt = prompt.strip()
-    parser = parse_claude_conversation if agent_id == "claude" else parse_conversation
-    paths = iter_claude_session_files() if agent_id == "claude" else iter_session_files()
+    parser = agent_session_parser(agent_id)
+    paths = agent_session_files(agent_id)
     for path in paths:
         try:
             if path.stat().st_mtime < cutoff:
@@ -4657,7 +4902,7 @@ def refresh_task_latest_reply(chat_id: str, task: CodexTaskRuntime) -> bool:
                 task.session_id = conv.session_id
                 runtime.task_session_id = conv.session_id
                 runtime.task_agent_id = agent_id
-                if runtime.active_session_id != conv.session_id:
+                if not task.one_shot_agent and runtime.active_session_id != conv.session_id:
                     runtime.active_session_id = conv.session_id
                     runtime.active_agent_id = agent_id
             if conv.last_assistant_at >= max(task.started_at - 1, conv.last_user_at):
@@ -4703,6 +4948,7 @@ def resolve_task_result(
     last_agent_message: str,
     last_message_file: Optional[Path],
     agent_id: str = "",
+    task: Optional[CodexTaskRuntime] = None,
 ) -> tuple[str, str]:
     agent_id = normalize_agent_id(agent_id or runtime.task_agent_id or runtime.active_agent_id)
     file_message = read_last_message_file(last_message_file)
@@ -4717,9 +4963,11 @@ def resolve_task_result(
         conv = find_conversation_for_run(runtime, cwd, started_at, prompt, agent_id)
         if conv:
             if conv.session_id and runtime.task_session_id != conv.session_id:
+                if task:
+                    task.session_id = conv.session_id
                 runtime.task_session_id = conv.session_id
                 runtime.task_agent_id = agent_id
-                if runtime.active_session_id != conv.session_id:
+                if not (task and task.one_shot_agent) and runtime.active_session_id != conv.session_id:
                     runtime.active_session_id = conv.session_id
                     runtime.active_agent_id = agent_id
                 save_runtime(chat_id)
@@ -4825,6 +5073,10 @@ def should_create_approval(text: str) -> bool:
         "operation not permitted",
         "permission denied",
         "permission was denied",
+        "auto-denied",
+        "auto denied",
+        "can't modify",
+        "cannot modify",
         "denied by user",
         "unable to create",
         ".git/index.lock",
@@ -4834,7 +5086,20 @@ def should_create_approval(text: str) -> bool:
     return any(signal in haystack for signal in signals)
 
 
+APPROVAL_RETRY_NOTE_RE = re.compile(
+    r"\s*审批结果：用户已在 Lark 批准审批 [0-9a-f]+。"
+    r"请继续执行原始任务，必要时重试刚才因权限、审批或 sandbox 限制失败的操作。\s*",
+    flags=re.IGNORECASE,
+)
+
+
+def strip_approval_retry_notes(prompt: str) -> str:
+    return APPROVAL_RETRY_NOTE_RE.sub("\n\n", str(prompt or "")).strip()
+
+
 def maybe_create_pending_approval(chat_id: str, runtime: ChatRuntime, text: str, task: Optional[CodexTaskRuntime] = None) -> bool:
+    if task and task.approved_retry:
+        return False
     if not should_create_approval(text):
         return False
     task_id = task.task_id if task else ""
@@ -4869,6 +5134,7 @@ def create_pending_approval(chat_id: str, runtime: ChatRuntime, text: str, task:
             "用户已在 Lark 审批通过。请继续执行刚才等待审批的操作；"
             "如果无法自动继续，请给出用户需要在本机执行的准确命令。"
         ),
+        one_shot_agent=bool(task and task.one_shot_agent),
     )
     with LOCK:
         PENDING_APPROVALS[approval_id] = approval
@@ -5832,7 +6098,7 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
         )
         update_task_card(chat_id, status="准备中", detail=notice, force=True, task_id=task.task_id)
         task.session_id = ""
-        if runtime.active_session_id == task_session_id:
+        if not task.one_shot_agent and runtime.active_session_id == task_session_id:
             runtime.active_session_id = ""
         save_runtime(chat_id)
 
@@ -5885,16 +6151,18 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
     runtime.task_cwd = str(task.cwd)
     argv = codex_task_command(task, last_message_path)
     selected_model = task.model or adapter.default_model
+    selected_permission_mode = task.permission_mode or default_permission_mode(agent_id)
     runtime.next_approval_policy = ""
     runtime.next_sandbox_mode = ""
     runtime.next_model = ""
     save_runtime(chat_id)
     logger.info(
-        "starting agent: agent=%s chat_id=%s cwd=%s model=%s resume=%s prompt=%r",
+        "starting agent: agent=%s chat_id=%s cwd=%s model=%s permission_mode=%s resume=%s prompt=%r",
         agent_id,
         chat_id,
         cwd,
         selected_model or "default",
+        selected_permission_mode or "-",
         bool(task.session_id),
         short_text(prompt, 120) if LOG_MESSAGE_CONTENT else f"<hidden len={len(prompt)}>",
     )
@@ -5913,7 +6181,8 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
             last_message_path.unlink(missing_ok=True)
         if lock_acquired and run_lock:
             run_lock.release()
-        env_name = "CODEX_BIN" if agent_id == "codex" else "CLAUDE_BIN"
+        env_names = {"codex": "CODEX_BIN", "claude": "CLAUDE_BIN", "qoder": "QODER_BIN"}
+        env_name = env_names.get(agent_id, "AGENT_BIN")
         text = f"找不到 {adapter.label} 命令：{adapter.bin_name}\n请设置 {env_name} 或确认命令在 PATH 中。"
         if not update_task_card(chat_id, status="失败", output=text, force=True, task_id=task.task_id):
             send_msg(chat_id, text)
@@ -5946,6 +6215,7 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
     start = time.time()
     emitted_output = False
     last_agent_message = ""
+    retry_after_approval = False
 
     try:
         assert proc.stdout is not None
@@ -5954,7 +6224,7 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
                 proc.kill()
                 send_stream_update(chat_id, buffer, force=True, task_id=task.task_id)
                 last_agent_message, user_question = resolve_task_result(
-                    chat_id, runtime, cwd, start, prompt, last_agent_message, last_message_path, agent_id
+                    chat_id, runtime, cwd, start, prompt, last_agent_message, last_message_path, agent_id, task
                 )
                 text = task_end_text(
                     runtime,
@@ -5983,8 +6253,9 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
                     session_key = conversation_key(agent_id, text)
                     task.session_id = session_key
                     runtime.task_session_id = session_key
-                    runtime.active_session_id = session_key
-                    runtime.active_agent_id = agent_id
+                    if not task.one_shot_agent:
+                        runtime.active_session_id = session_key
+                        runtime.active_agent_id = agent_id
                     if task.force_ordinary:
                         def mutate(config: dict[str, Any]):
                             sessions = set(str(item) for item in config.get("ordinary_sessions", []) if item)
@@ -6013,9 +6284,10 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
         code = proc.wait(timeout=5)
         runtime.task_session_id = task.session_id
         last_agent_message, user_question = resolve_task_result(
-            chat_id, runtime, cwd, start, prompt, last_agent_message, last_message_path, agent_id
+            chat_id, runtime, cwd, start, prompt, last_agent_message, last_message_path, agent_id, task
         )
-        task.session_id = runtime.task_session_id or task.session_id
+        if not task.one_shot_agent:
+            task.session_id = runtime.task_session_id or task.session_id
         emitted_output = emitted_output or bool(last_agent_message)
         logger.info("agent exited: agent=%s chat_id=%s pid=%s code=%s emitted_output=%s", agent_id, chat_id, proc.pid, code, emitted_output)
         result_status = "完成" if code == 0 else "失败"
@@ -6042,6 +6314,7 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
             logger.info("Lark approval wait finished: chat_id=%s decision=%s", chat_id, decision)
             if decision in ("approved", "rejected"):
                 record_task_lark_refs(task, result_text)
+                retry_after_approval = decision == "approved"
                 return
         update_existing_task_card(chat_id, status=result_status, output=result_text, task_id=task.task_id)
         record_task_lark_refs(task, result_text)
@@ -6062,6 +6335,8 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
             last_message_path.unlink(missing_ok=True)
         task.last_message_path = ""
         save_runtime(chat_id)
+        if retry_after_approval:
+            threading.Thread(target=run_codex, args=(chat_id, task.prompt, False, task.task_id), daemon=True).start()
 
 
 def latest_running_task_for_chat(chat_id: str) -> Optional[CodexTaskRuntime]:
@@ -6118,7 +6393,6 @@ def approve_pending(chat_id: str, approval_id: str, approved: bool, notify: bool
             send_msg(chat_id, text)
         return False
 
-    approval.status = "approved" if approved else "rejected"
     status_text = f"审批 {approval_id} 已{'批准' if approved else '拒绝'}。"
     result_text = "\n".join(
         [
@@ -6137,16 +6411,57 @@ def approve_pending(chat_id: str, approval_id: str, approved: bool, notify: bool
                 f"将使用 `{APPROVED_CODEX_SANDBOX_MODE}` / `{APPROVED_CODEX_APPROVAL_POLICY}` 单次重试原始任务。"
             )
         else:
+            permission_mode = approved_permission_mode(approval.agent_id)
+            permission_text = f"`{permission_mode}` permission mode" if permission_mode else "默认权限模式"
             result_text += (
                 f"\n\n将使用 {agent_label(approval.agent_id)} 适配器单次重试原始任务；"
-                f"Claude permission mode：`{APPROVED_CLAUDE_PERMISSION_MODE}`。"
+                f"{permission_text}。"
             )
     else:
         result_text += "\n\n用户已拒绝，本次任务不会继续执行待审批操作。"
 
+    runtime = get_runtime(chat_id)
+    task = find_task(approval.task_id)
+    agent_id = normalize_agent_id(approval.agent_id or (task.agent_id if task else "") or runtime.task_agent_id)
+    if approved and approval.session_id:
+        runtime.task_session_id = approval.session_id
+        if not approval.one_shot_agent:
+            runtime.active_session_id = approval.session_id
+        if task:
+            task.session_id = approval.session_id
+    if approved:
+        prompt = strip_approval_retry_notes(approval.original_prompt) or approval.resume_prompt or strip_approval_retry_notes(runtime.task_prompt)
+        model = approval.model or runtime.task_model
+        prompt = (
+            f"{prompt}\n\n"
+            f"审批结果：用户已在 Lark 批准审批 {approval_id}。"
+            "请继续执行原始任务，必要时重试刚才因权限、审批或 sandbox 限制失败的操作。"
+        )
+        runtime.task_prompt = prompt
+        if not approval.one_shot_agent:
+            runtime.active_agent_id = agent_id
+        runtime.task_agent_id = agent_id
+        runtime.task_model = model
+        runtime.task_cwd = approval.cwd or runtime.task_cwd
+        runtime.task_status = "已批准，继续执行"
+        runtime.next_approval_policy = APPROVED_CODEX_APPROVAL_POLICY if agent_id == "codex" else ""
+        runtime.next_sandbox_mode = APPROVED_CODEX_SANDBOX_MODE if agent_id == "codex" else ""
+        runtime.next_model = model
+        if task:
+            task.agent_id = agent_id
+            task.prompt = prompt
+            task.model = model
+            task.cwd = Path(approval.cwd).expanduser() if approval.cwd else task.cwd
+            task.one_shot_agent = approval.one_shot_agent
+            task.status = "已批准，继续执行"
+            task.approval_policy = APPROVED_CODEX_APPROVAL_POLICY if agent_id == "codex" else ""
+            task.sandbox_mode = APPROVED_CODEX_SANDBOX_MODE if agent_id == "codex" else ""
+            task.permission_mode = approved_permission_mode(agent_id) or task.permission_mode
+            task.approved_retry = True
+    approval.status = "approved" if approved else "rejected"
     updated = update_task_card(
         chat_id,
-        status="已批准" if approved else "已拒绝",
+        status="已批准，继续执行" if approved else "已拒绝",
         output=result_text,
         detail=status_text,
         force=True,
@@ -6154,47 +6469,7 @@ def approve_pending(chat_id: str, approval_id: str, approved: bool, notify: bool
     )
     if not updated and notify:
         send_msg(chat_id, status_text)
-
-    if not approved:
-        return updated
-
-    runtime = get_runtime(chat_id)
-    task = find_task(approval.task_id)
-    agent_id = normalize_agent_id(approval.agent_id or (task.agent_id if task else "") or runtime.task_agent_id)
-    if approval.session_id:
-        runtime.task_session_id = approval.session_id
-        runtime.active_session_id = approval.session_id
-        if task:
-            task.session_id = approval.session_id
-    prompt = approval.original_prompt.strip() or approval.resume_prompt or runtime.task_prompt.strip()
-    model = approval.model or runtime.task_model
-    prompt = (
-        f"{prompt}\n\n"
-        f"审批结果：用户已在 Lark 批准审批 {approval_id}。"
-        "请继续执行原始任务，必要时重试刚才因权限、审批或 sandbox 限制失败的操作。"
-    )
-    runtime.task_prompt = prompt
-    runtime.active_agent_id = agent_id
-    runtime.task_agent_id = agent_id
-    runtime.task_model = model
-    runtime.task_cwd = approval.cwd or runtime.task_cwd
-    runtime.task_status = "已批准，继续执行"
-    runtime.next_approval_policy = APPROVED_CODEX_APPROVAL_POLICY if agent_id == "codex" else ""
-    runtime.next_sandbox_mode = APPROVED_CODEX_SANDBOX_MODE if agent_id == "codex" else ""
-    runtime.next_model = model
-    if task:
-        task.agent_id = agent_id
-        task.prompt = prompt
-        task.model = model
-        task.cwd = Path(approval.cwd).expanduser() if approval.cwd else task.cwd
-        task.status = "已批准，继续执行"
-        task.approval_policy = APPROVED_CODEX_APPROVAL_POLICY if agent_id == "codex" else ""
-        task.sandbox_mode = APPROVED_CODEX_SANDBOX_MODE if agent_id == "codex" else ""
-        task.permission_mode = APPROVED_CLAUDE_PERMISSION_MODE if agent_id == "claude" else task.permission_mode
-        task.approved_retry = True
-    continued_updated = update_task_card(chat_id, status="已批准，继续执行", output=result_text, force=True, task_id=approval.task_id)
-    threading.Thread(target=run_codex, args=(chat_id, prompt, False, approval.task_id), daemon=True).start()
-    return updated or continued_updated
+    return updated
 
 
 # ===================== 状态和日报 =====================
@@ -6680,8 +6955,16 @@ def handle_cd(chat_id: str, path_text: str):
     runtime.cwd = path
     root = find_project_root(path)
     runtime.active_project_key = project_key(root or path)
+    runtime.active_session_id = ""
+    runtime.task_session_id = ""
+    runtime.task_cwd = ""
+    runtime.task_message_id = ""
+    runtime.task_prompt = ""
+    runtime.task_status = ""
+    runtime.task_output = ""
     save_runtime(chat_id)
-    send_msg(chat_id, f"已切换目录：{path}")
+    project_text = f"\n项目：`{root}`" if root and root != path else ""
+    send_msg(chat_id, f"已切换目录：`{path}`{project_text}\n后续新指令会在该目录启动新的会话。")
 
 
 def mark_project_path(chat_id: str, path_text: str = ""):
@@ -6941,9 +7224,10 @@ def send_help(chat_id: str):
                 "/status 查看当前项目状态",
                 "/daily 输出项目进展日报",
                 "/daily=YYYY-MM-DD 输出指定日期项目进展日报",
-                "/agent 查看可用 Agent；/agent=claude 切换默认 Agent",
+                "/agent 查看可用 Agent；/agent=qoder 切换默认 Agent",
                 "/codex <指令> 使用 Codex CLI 执行一次",
                 "/claude <指令> 使用 Claude Code CLI 执行一次",
+                "/qoder <指令> 使用 Qoder CLI 执行一次",
                 "/model=<模型名> +<指令> 使用指定模型执行一次，例如 /model=gpt-5.5 +修复 README",
                 "/plan 进入并行计划模式；也可发送 /plan 后跟任务清单直接执行",
                 "/plan status 刷新最近的计划面板",
@@ -7023,6 +7307,7 @@ def on_text(
         return
     selected_model, content = parse_model_prefix(content)
     selected_agent, content = parse_agent_prefix(content)
+    one_shot_agent = bool(selected_agent and content)
     second_model, content = parse_model_prefix(content)
     selected_model = selected_model or second_model
     if selected_model and not content:
@@ -7252,6 +7537,7 @@ def on_text(
         "等待启动",
         selected_model,
         agent_id=selected_agent or runtime.active_agent_id,
+        one_shot_agent=one_shot_agent,
         source_message_id=meta.get("message_id", ""),
         attachments=prompt_attachments,
     )
@@ -7631,15 +7917,13 @@ def handle_card_action(action: dict[str, Any], meta: Optional[dict[str, str]] = 
             plan = find_plan(action.get("plan_id", ""))
             return action_card(build_plan_card(plan), "已跳过提交") if plan else action_toast("已跳过提交")
         elif name == "approve":
-            task_id = action.get("task_id", "")
-            if approve_pending(chat_id, action.get("approval_id", ""), True, notify=False):
-                return action_toast("已批准")
-            return action_card(build_task_card(chat_id, task_id=task_id), "已批准")
+            approval_id = action.get("approval_id", "")
+            threading.Thread(target=approve_pending, args=(chat_id, approval_id, True, True), daemon=True).start()
+            return action_toast("已收到批准，正在处理")
         elif name == "reject":
-            task_id = action.get("task_id", "")
-            if approve_pending(chat_id, action.get("approval_id", ""), False, notify=False):
-                return action_toast("已拒绝")
-            return action_card(build_task_card(chat_id, task_id=task_id), "已拒绝")
+            approval_id = action.get("approval_id", "")
+            threading.Thread(target=approve_pending, args=(chat_id, approval_id, False, True), daemon=True).start()
+            return action_toast("已收到拒绝，正在处理")
         else:
             return action_toast("未知卡片操作。", "error")
     except Exception:
@@ -7873,6 +8157,7 @@ def main():
     print(f"默认目录：{DEFAULT_CWD}")
     print(f"Codex 会话目录：{CODEX_SESSIONS_DIR}")
     print(f"Claude 会话目录：{CLAUDE_PROJECTS_DIR}")
+    print(f"Qoder 会话目录：{QODER_PROJECTS_DIR}")
     print("Lark 卡片回调：使用 WebSocket 长连接事件 card.action.trigger")
     send_startup_welcome()
     cli.start()

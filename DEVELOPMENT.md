@@ -41,6 +41,7 @@ Lark2Agent bridge 的目标是把 Lark 群聊变成多 Agent 远程控制台：
 
 - `codex`：使用 `codex exec --json`，会话来自 `CODEX_SESSIONS_DIR`。
 - `claude`：使用 `claude --print --output-format stream-json --verbose`，会话来自 `CLAUDE_PROJECTS_DIR`。
+- `qoder`：使用 `qodercli --print --output-format stream-json --cwd <目录>`，会话来自 `QODER_PROJECTS_DIR`。
 
 Lark 侧协议不区分具体 CLI：文本消息、卡片按钮、`message.create`、`message.patch` 和 `card.action.trigger` 都复用同一套结构。按钮回调仍以 `task_id` 定位任务，任务运行态再用 `agent_id` 找到对应 adapter。
 
@@ -92,9 +93,11 @@ Lark 侧协议不区分具体 CLI：文本消息、卡片按钮、`message.creat
 ```env
 APPROVED_CODEX_APPROVAL_POLICY=on-request
 APPROVED_CODEX_SANDBOX_MODE=workspace-write
+APPROVED_CLAUDE_PERMISSION_MODE=acceptEdits
+APPROVED_QODER_PERMISSION_MODE=accept_edits
 ```
 
-对原任务做一次重试。等待审批时间由：
+其中 Codex 使用 approval policy / sandbox mode，Claude Code 和 Qoder CLI 使用各自的 approved permission mode。对原任务做一次重试。等待审批时间由：
 
 ```env
 PENDING_APPROVAL_WAIT_SECONDS=300
@@ -287,9 +290,11 @@ TASK_CARD_REFRESH_INTERVAL_SECONDS=15
 
 ```env
 CODEX_MODEL=
+CLAUDE_MODEL=
+QODER_MODEL=
 ```
 
-若为空，则使用 Codex CLI 自身默认配置。
+若为空，则使用对应 Agent CLI 自身默认配置。
 
 ## [已完成] Lark 图片和文件附件
 
@@ -500,7 +505,7 @@ lark2agent/<plan_id>-<task_id>
 - 权限问题：`Operation not permitted`、`permission denied`。
 - Lark API：消息发送失败、卡片更新失败、权限 scope 不足。
 - 审批超时：等待用户处理超过 `PENDING_APPROVAL_WAIT_SECONDS`。
-- Codex 超时：超过 `CODEX_TIMEOUT_SECONDS`。
+- Agent 超时：超过 `CODEX_TIMEOUT_SECONDS`、`CLAUDE_TIMEOUT_SECONDS` 或 `QODER_TIMEOUT_SECONDS`。
 - 测试失败：`PLAN_TEST_COMMAND` 返回非零。
 - worktree 失败：创建 worktree 或分支失败。
 

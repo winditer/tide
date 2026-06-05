@@ -113,6 +113,8 @@ Lark2Agent bridge 是一个本地运行的 Lark WebSocket 客户端：
 - `/status`：查看当前项目状态。
 - `/daily`：生成项目进展日报。
 - `/plan`：进入并行计划模式。
+- `/agent`：查看和切换 Codex、Claude Code、Qoder CLI。
+- `/codex`、`/claude`、`/qoder`：指定单次任务使用的 Agent。
 - 普通文本：直接作为 Agent 指令执行。
 
 交互原则：
