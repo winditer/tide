@@ -5,6 +5,7 @@ import logging
 import os
 import queue
 import re
+import signal
 import shlex
 import shutil
 import subprocess
@@ -77,6 +78,7 @@ QODER_BIN = os.getenv("QODER_BIN", "qodercli")
 CODEX_TIMEOUT_SECONDS = int(os.getenv("CODEX_TIMEOUT_SECONDS", "1800"))
 CLAUDE_TIMEOUT_SECONDS = int(os.getenv("CLAUDE_TIMEOUT_SECONDS", str(CODEX_TIMEOUT_SECONDS)))
 QODER_TIMEOUT_SECONDS = int(os.getenv("QODER_TIMEOUT_SECONDS", str(CODEX_TIMEOUT_SECONDS)))
+QODER_QUEST_TIMEOUT_SECONDS = int(os.getenv("QODER_QUEST_TIMEOUT_SECONDS", str(12 * 60 * 60)))
 CODEX_MODEL = os.getenv("CODEX_MODEL", "")
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "")
 QODER_MODEL = os.getenv("QODER_MODEL", "")
@@ -259,6 +261,14 @@ class CodexTaskRuntime:
     cancel_requested: bool = False
     attachments: list[dict[str, Any]] = field(default_factory=list)
     one_shot_agent: bool = False
+    agent_mode: str = ""
+    pause_started_at: float = 0
+    paused_seconds: float = 0
+    stop_requested: bool = False
+    stop_status: str = ""
+    stop_detail: str = ""
+    card_update_failed: bool = False
+    result_refresh_until: float = 0
 
 
 @dataclass
@@ -313,6 +323,7 @@ class PendingApproval:
     status: str = "pending"
     created_at: float = field(default_factory=time.time)
     one_shot_agent: bool = False
+    fingerprint: str = ""
 
 
 @dataclass
@@ -460,6 +471,63 @@ def task_agent_id(task: Optional[CodexTaskRuntime], runtime: Optional[ChatRuntim
     if runtime:
         return normalize_agent_id(runtime.task_agent_id or runtime.active_agent_id)
     return normalize_agent_id(DEFAULT_AGENT_ID)
+
+
+def normalize_agent_mode(agent_id: str, mode: str = "") -> str:
+    agent_id = normalize_agent_id(agent_id)
+    value = str(mode or "").strip().lower().lstrip("/")
+    if agent_id == "qoder" and value == "quest":
+        return "quest"
+    return ""
+
+
+def task_agent_mode(task: Optional[CodexTaskRuntime]) -> str:
+    if not task:
+        return ""
+    return normalize_agent_mode(task_agent_id(task), task.agent_mode)
+
+
+def is_qoder_quest_task(task: Optional[CodexTaskRuntime]) -> bool:
+    return bool(task and task_agent_id(task) == "qoder" and task_agent_mode(task) == "quest")
+
+
+def task_mode_label(task: Optional[CodexTaskRuntime]) -> str:
+    if is_qoder_quest_task(task):
+        return "Quest"
+    return ""
+
+
+def qoder_task_prompt(task: CodexTaskRuntime) -> str:
+    prompt = str(task.prompt or "").strip()
+    if is_qoder_quest_task(task) and not re.match(r"^/quest(?:\s|$)", prompt, flags=re.IGNORECASE):
+        return f"/quest {prompt}".strip()
+    return prompt
+
+
+def task_execution_prompt(task: CodexTaskRuntime) -> str:
+    if task_agent_id(task) == "qoder":
+        return qoder_task_prompt(task)
+    return task.prompt
+
+
+def task_timeout_seconds(task: Optional[CodexTaskRuntime], adapter: Any) -> int:
+    if is_qoder_quest_task(task):
+        return QODER_QUEST_TIMEOUT_SECONDS
+    return adapter.timeout_seconds
+
+
+def task_pause_elapsed(task: Optional[CodexTaskRuntime], now: Optional[float] = None) -> float:
+    if not task:
+        return 0
+    total = float(task.paused_seconds or 0)
+    if task.pause_started_at:
+        total += (now or time.time()) - task.pause_started_at
+    return max(0, total)
+
+
+def task_runtime_elapsed(task: Optional[CodexTaskRuntime], started_at: float, now: Optional[float] = None) -> float:
+    now = now or time.time()
+    return max(0, now - started_at - task_pause_elapsed(task, now))
 
 
 def agent_model_label(agent_id: str, model: str = "") -> str:
@@ -664,7 +732,7 @@ class QoderAdapter(AgentAdapter):
                     argv.append(_a)
                 else:
                     logger.warning('QODER_EXTRA_ARGS skipping unsafe arg: %r', _a)
-        argv.append(task.prompt)
+        argv.append(qoder_task_prompt(task))
         return argv
 
     def parse_events(self, line: str) -> list[tuple[str, str]]:
@@ -2869,6 +2937,26 @@ def parse_agent_prefix(content: str) -> tuple[str, str]:
     return "", content
 
 
+def parse_qoder_quest_agent_prefix(content: str) -> tuple[str, str, str]:
+    text = content.strip()
+    match = re.match(r"^/qoder\s*=\s*quest(?:\s+(.*)|$)", text, flags=re.IGNORECASE | re.DOTALL)
+    if not match:
+        match = re.match(r"^/qoder\s+quest(?:\s+(.*)|$)", text, flags=re.IGNORECASE | re.DOTALL)
+    if not match:
+        return "", "", content
+    return "qoder", "quest", strip_command_separator(match.group(1) or "")
+
+
+def parse_agent_mode_prefix(content: str, agent_id: str) -> tuple[str, str]:
+    text = content.strip()
+    if normalize_agent_id(agent_id) != "qoder":
+        return "", content
+    match = re.match(r"^/quest(?:\s+(.*)|$)", text, flags=re.IGNORECASE | re.DOTALL)
+    if not match:
+        return "", content
+    return "quest", strip_command_separator(match.group(1) or "")
+
+
 def agent_options_text(current_agent_id: str = "") -> str:
     current_agent_id = normalize_agent_id(current_agent_id or DEFAULT_AGENT_ID)
     lines = [f"当前 Agent：`{current_agent_id}`（{agent_label(current_agent_id)}）", "", "可用 Agent："]
@@ -2876,7 +2964,7 @@ def agent_options_text(current_agent_id: str = "") -> str:
         default_model = adapter.default_model or "默认"
         current = "（当前）" if agent_id == current_agent_id else ""
         lines.append(f"- `{agent_id}`：{adapter.label}，默认模型：{default_model}{current}")
-    lines.append("用法：`/agent=qoder +指令`、`/qoder 指令`、`/claude 指令`、`/codex 指令`。")
+    lines.append("用法：`/agent=qoder +指令`、`/qoder 指令`、`/qoder=quest 指令`、`/claude 指令`、`/codex 指令`。")
     return "\n".join(lines)
 
 
@@ -3048,7 +3136,7 @@ def task_end_text(
     user_question: str = "",
     task: Optional[CodexTaskRuntime] = None,
 ) -> str:
-    result = "成功" if code == 0 else "失败" if code is not None else "未完成"
+    result = task.stop_status if task and task.stop_requested and task.stop_status else ("成功" if code == 0 else "失败" if code is not None else "未完成")
     agent_id = task_agent_id(task, runtime)
     adapter = AGENT_ADAPTERS[agent_id]
     task_model = task.model if task else runtime.task_model
@@ -3058,11 +3146,14 @@ def task_end_text(
         "",
         f"**结果**：{result}" + (f"（退出码 `{code}`）" if code not in (None, 0) else ""),
         f"**完成时间**：{datetime.now().strftime('%m-%d %H:%M')}",
-        f"**耗时**：{format_duration(time.time() - started_at)}",
+        f"**耗时**：{format_duration(task_runtime_elapsed(task, started_at) if task else time.time() - started_at)}",
         f"**目录**：`{cwd}`",
         f"**Agent**：{adapter.label}",
         f"**模型**：`{agent_model_label(agent_id, task_model)}`",
     ]
+    mode_label = task_mode_label(task)
+    if mode_label:
+        lines.append(f"**模式**：{mode_label}")
     if task_session_id:
         lines.append(f"**Session**：`{task_session_id}`")
     if detail:
@@ -3127,10 +3218,52 @@ def project_agent_counts_text(project: ProjectInfo) -> str:
 
 
 def pending_approvals_for_chat(chat_id: str, task_id: str = "") -> list[PendingApproval]:
-    return [
+    approvals = [
         a for a in PENDING_APPROVALS.values()
         if a.chat_id == chat_id and a.status == "pending" and (not task_id or a.task_id == task_id)
     ]
+    seen: set[str] = set()
+    deduped: list[PendingApproval] = []
+    for approval in sorted(approvals, key=lambda a: a.created_at, reverse=True):
+        key = approval.fingerprint or approval.approval_id
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(approval)
+    return deduped
+
+
+def normalize_approval_text(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "")).strip()
+
+
+def approval_fingerprint(
+    chat_id: str,
+    task_id: str,
+    session_id: str,
+    cwd: str,
+    text: str,
+) -> str:
+    payload = "\n".join(
+        [
+            str(chat_id or ""),
+            str(task_id or ""),
+            str(session_id or ""),
+            str(cwd or ""),
+            normalize_approval_text(text),
+        ]
+    )
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+
+
+def find_approval_by_fingerprint(fingerprint: str) -> Optional[PendingApproval]:
+    if not fingerprint:
+        return None
+    with LOCK:
+        for approval in PENDING_APPROVALS.values():
+            if approval.fingerprint == fingerprint:
+                return approval
+    return None
 
 
 def pending_approval_status_for_chat(chat_id: str, task_id: str = "") -> str:
@@ -3708,6 +3841,7 @@ def build_task_card(chat_id: str, status: str = "", output: str = "", detail: st
     runtime, task = task_card_state(chat_id, task_id)
     shown_agent_id = task_agent_id(task, runtime)
     shown_agent_label = agent_label(shown_agent_id)
+    shown_mode_label = task_mode_label(task)
     if task_id and not task:
         return base_card(
             f"{APP_NAME} 指令",
@@ -3737,15 +3871,29 @@ def build_task_card(chat_id: str, status: str = "", output: str = "", detail: st
     task_session_conv = get_active_conversation(task_session_id)
     task_session_title = task_session_conv.title if task_session_conv else ""
 
+    task_elapsed = (
+        task_runtime_elapsed(task, task_started_at)
+        if task and task_started_at
+        else format_duration(time.time() - task_started_at) if task_started_at else "-"
+    )
+    if isinstance(task_elapsed, (int, float)):
+        task_elapsed_text = format_duration(task_elapsed)
+    else:
+        task_elapsed_text = task_elapsed
+    task_fields = [
+        ("状态", current_status),
+        ("Agent", shown_agent_label),
+        ("目录", short_text(str(task_cwd), 42)),
+        ("模型", agent_model_label(shown_agent_id, task_model)),
+        ("耗时", task_elapsed_text),
+    ]
+    if shown_mode_label:
+        task_fields.insert(2, ("模式", shown_mode_label))
+        task_fields.append(("超时", format_duration(task_timeout_seconds(task, AGENT_ADAPTERS[shown_agent_id]))))
+
     elements: list[dict[str, Any]] = [
         fields(
-            [
-                ("状态", current_status),
-                ("Agent", shown_agent_label),
-                ("目录", short_text(str(task_cwd), 42)),
-                ("模型", agent_model_label(shown_agent_id, task_model)),
-                ("耗时", format_duration(time.time() - task_started_at) if task_started_at else "-"),
-            ]
+            task_fields
         ),
         md(f"**指令**\n{short_text(task_prompt, 900) or '无'}"),
     ]
@@ -3809,7 +3957,13 @@ def build_task_card(chat_id: str, status: str = "", output: str = "", detail: st
         actions.append(compact_button("引导", "task_guide", {"chat_id": chat_id, "task_id": shown_task_id}))
     if task_can_cancel(task):
         actions.append(compact_button("取消", "task_cancel", {"chat_id": chat_id, "task_id": shown_task_id}, "danger"))
-    if running:
+    if running and is_qoder_quest_task(task):
+        if task and task.pause_started_at:
+            actions.append(compact_button("继续", "quest_resume", {"chat_id": chat_id, "task_id": shown_task_id}, "primary"))
+        else:
+            actions.append(compact_button("暂停", "quest_pause", {"chat_id": chat_id, "task_id": shown_task_id}))
+        actions.append(compact_button("终止", "quest_terminate", {"chat_id": chat_id, "task_id": shown_task_id}, "danger"))
+    elif running:
         actions.append(compact_button("停止", "stop", {"chat_id": chat_id, "task_id": shown_task_id}, "danger"))
     elements.append(action_row(actions))
     return base_card(f"{shown_agent_label} 指令", elements, template)
@@ -3825,9 +3979,11 @@ def send_task_card(
     source_message_id: str = "",
     attachments: Optional[list[dict[str, Any]]] = None,
     one_shot_agent: bool = False,
+    agent_mode: str = "",
 ) -> str:
     runtime = get_runtime(chat_id)
     agent_id = normalize_agent_id(agent_id or runtime.active_agent_id or DEFAULT_AGENT_ID)
+    agent_mode = normalize_agent_mode(agent_id, agent_mode)
     active_session = runtime.active_session_id if normalize_agent_id(runtime.active_agent_id) == agent_id else ""
     active_conv = get_active_conversation(active_session)
     session_id = active_session if active_conv and normalize_agent_id(active_conv.agent_id) == agent_id else ""
@@ -3848,6 +4004,7 @@ def send_task_card(
         source_message_id=source_message_id,
         attachments=normalize_attachment_dicts(attachments or []),
         one_shot_agent=one_shot_agent,
+        agent_mode=agent_mode,
     )
     with LOCK:
         TASKS[task_id] = task
@@ -3890,6 +4047,8 @@ def update_task_card(chat_id: str, status: str = "", output: str = "", detail: s
         output_text = final_reply_text(output, 5000)
         if task:
             task.output = output_text
+            if "没有捕获到流式输出" not in output_text:
+                task.result_refresh_until = 0
         runtime.task_output = output_text
     elif force and task:
         refresh_task_latest_reply(chat_id, task)
@@ -3914,6 +4073,8 @@ def update_task_card(chat_id: str, status: str = "", output: str = "", detail: s
         save_runtime(chat_id)
         return False
     updated = update_card(message_id, card)
+    if task:
+        task.card_update_failed = not updated
     if not updated:
         logger.warning(
             "task card update failed; keeping message_id for retry: chat_id=%s task_id=%s message_id=%s",
@@ -4917,6 +5078,7 @@ def refresh_task_latest_reply(chat_id: str, task: CodexTaskRuntime) -> bool:
         return False
 
     task.output = output_text
+    task.result_refresh_until = 0
     runtime.task_output = output_text
     logger.info(
         "task latest reply refreshed: chat_id=%s task_id=%s source=%s",
@@ -5103,29 +5265,48 @@ def maybe_create_pending_approval(chat_id: str, runtime: ChatRuntime, text: str,
     if not should_create_approval(text):
         return False
     task_id = task.task_id if task else ""
+    session_id = (task.session_id if task else "") or runtime.task_session_id or runtime.active_session_id
+    cwd = str(task.cwd if task else runtime_task_cwd(runtime))
+    fingerprint = approval_fingerprint(chat_id, task_id, session_id, cwd, text)
+    existing = find_approval_by_fingerprint(fingerprint)
+    if existing:
+        logger.info(
+            "approval already exists for fingerprint: chat_id=%s task_id=%s approval_id=%s status=%s",
+            chat_id,
+            task_id,
+            existing.approval_id,
+            existing.status,
+        )
+        return existing.status == "pending"
     existing_pending = pending_approvals_for_chat(chat_id, task_id)
     if existing_pending:
         return True
-    fingerprint = hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
-    if runtime.last_approval_fingerprint == fingerprint:
-        logger.info("approval fingerprint matched but no pending approval exists; recreating approval: chat_id=%s", chat_id)
-    runtime.last_approval_fingerprint = fingerprint
+    runtime.last_approval_fingerprint = fingerprint[:16]
     save_runtime(chat_id)
-    create_pending_approval(chat_id, runtime, text, task)
+    create_pending_approval(chat_id, runtime, text, task, fingerprint=fingerprint)
     return True
 
 
-def create_pending_approval(chat_id: str, runtime: ChatRuntime, text: str, task: Optional[CodexTaskRuntime] = None) -> PendingApproval:
-    approval_id = hashlib.sha1(f"{chat_id}:{time.time()}:{text}".encode()).hexdigest()[:10]
+def create_pending_approval(
+    chat_id: str,
+    runtime: ChatRuntime,
+    text: str,
+    task: Optional[CodexTaskRuntime] = None,
+    fingerprint: str = "",
+) -> PendingApproval:
     agent_id = task_agent_id(task, runtime)
     adapter = AGENT_ADAPTERS[agent_id]
+    session_id = (task.session_id if task else "") or runtime.task_session_id or runtime.active_session_id
+    cwd = str(task.cwd if task else runtime_task_cwd(runtime))
+    fingerprint = fingerprint or approval_fingerprint(chat_id, task.task_id if task else "", session_id, cwd, text)
+    approval_id = hashlib.sha1(f"approval:{fingerprint}".encode("utf-8")).hexdigest()[:10]
     approval = PendingApproval(
         approval_id=approval_id,
         chat_id=chat_id,
         task_id=task.task_id if task else "",
         agent_id=agent_id,
-        session_id=(task.session_id if task else "") or runtime.task_session_id or runtime.active_session_id,
-        cwd=str(task.cwd if task else runtime_task_cwd(runtime)),
+        session_id=session_id,
+        cwd=cwd,
         command=short_text(text, 1000),
         reason=f"{adapter.label} 输出中检测到需要人工批准的内容",
         model=(task.model if task else "") or runtime.task_model,
@@ -5135,6 +5316,7 @@ def create_pending_approval(chat_id: str, runtime: ChatRuntime, text: str, task:
             "如果无法自动继续，请给出用户需要在本机执行的准确命令。"
         ),
         one_shot_agent=bool(task and task.one_shot_agent),
+        fingerprint=fingerprint,
     )
     with LOCK:
         PENDING_APPROVALS[approval_id] = approval
@@ -6143,8 +6325,14 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
 
     task.queued_for_session = False
     task.guidance_requested = False
+    task.pause_started_at = 0
+    task.paused_seconds = 0
+    task.stop_requested = False
+    task.stop_status = ""
+    task.stop_detail = ""
     apply_guidance_to_task_prompt(task)
     prompt = task.prompt
+    execution_prompt = task_execution_prompt(task)
     runtime.task_prompt = task.prompt
     runtime.task_agent_id = agent_id
     runtime.task_session_id = task.session_id
@@ -6164,7 +6352,7 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
         selected_model or "default",
         selected_permission_mode or "-",
         bool(task.session_id),
-        short_text(prompt, 120) if LOG_MESSAGE_CONTENT else f"<hidden len={len(prompt)}>",
+        short_text(execution_prompt, 120) if LOG_MESSAGE_CONTENT else f"<hidden len={len(execution_prompt)}>",
     )
     try:
         proc = subprocess.Popen(
@@ -6203,6 +6391,7 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
         runtime.process = proc
 
     logger.info("agent started: agent=%s chat_id=%s pid=%s", agent_id, chat_id, proc.pid)
+    timeout_seconds = task_timeout_seconds(task, adapter)
     update_task_card(
         chat_id,
         status="运行中",
@@ -6220,11 +6409,11 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
     try:
         assert proc.stdout is not None
         while True:
-            if time.time() - start > adapter.timeout_seconds:
+            if task_runtime_elapsed(task, start) > timeout_seconds:
                 proc.kill()
                 send_stream_update(chat_id, buffer, force=True, task_id=task.task_id)
                 last_agent_message, user_question = resolve_task_result(
-                    chat_id, runtime, cwd, start, prompt, last_agent_message, last_message_path, agent_id, task
+                    chat_id, runtime, cwd, start, execution_prompt, last_agent_message, last_message_path, agent_id, task
                 )
                 text = task_end_text(
                     runtime,
@@ -6233,7 +6422,7 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
                     start,
                     emitted_output or bool(last_agent_message),
                     last_agent_message,
-                    detail=f"超过 {format_duration(adapter.timeout_seconds)}，进程已终止。",
+                    detail=f"超过 {format_duration(timeout_seconds)}，进程已终止。",
                     user_question=user_question,
                     task=task,
                 )
@@ -6284,13 +6473,15 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
         code = proc.wait(timeout=5)
         runtime.task_session_id = task.session_id
         last_agent_message, user_question = resolve_task_result(
-            chat_id, runtime, cwd, start, prompt, last_agent_message, last_message_path, agent_id, task
+            chat_id, runtime, cwd, start, execution_prompt, last_agent_message, last_message_path, agent_id, task
         )
         if not task.one_shot_agent:
             task.session_id = runtime.task_session_id or task.session_id
         emitted_output = emitted_output or bool(last_agent_message)
+        if not last_agent_message:
+            task.result_refresh_until = time.time() + max(120, TASK_CARD_REFRESH_INTERVAL_SECONDS * 4)
         logger.info("agent exited: agent=%s chat_id=%s pid=%s code=%s emitted_output=%s", agent_id, chat_id, proc.pid, code, emitted_output)
-        result_status = "完成" if code == 0 else "失败"
+        result_status = task.stop_status if task.stop_requested and task.stop_status else ("完成" if code == 0 else "失败")
         result_text = task_end_text(
             runtime,
             cwd,
@@ -6298,6 +6489,7 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
             start,
             emitted_output,
             last_agent_message,
+            detail=task.stop_detail if task.stop_requested else "",
             user_question=user_question,
             task=task,
         )
@@ -6329,6 +6521,9 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
                 task.process = None
             if runtime.process is proc:
                 runtime.process = None
+        if task.pause_started_at:
+            task.paused_seconds += max(0, time.time() - task.pause_started_at)
+            task.pause_started_at = 0
         if lock_acquired and run_lock:
             run_lock.release()
         if last_message_path:
@@ -6351,7 +6546,7 @@ def latest_running_task_for_chat(chat_id: str) -> Optional[CodexTaskRuntime]:
     return max(tasks, key=lambda task: task.started_at)
 
 
-def stop_codex(chat_id: str, task_id: str = "") -> bool:
+def stop_codex(chat_id: str, task_id: str = "", final_status: str = "已停止", action_label: str = "停止") -> bool:
     runtime = get_runtime(chat_id)
     task = find_task(task_id) if task_id else latest_running_task_for_chat(chat_id)
     with LOCK:
@@ -6363,6 +6558,18 @@ def stop_codex(chat_id: str, task_id: str = "") -> bool:
             send_msg(chat_id, text)
         return updated
 
+    if task:
+        if task.pause_started_at:
+            task.paused_seconds += max(0, time.time() - task.pause_started_at)
+            task.pause_started_at = 0
+            if hasattr(signal, "SIGCONT"):
+                try:
+                    proc.send_signal(signal.SIGCONT)
+                except OSError:
+                    logger.exception("failed to continue paused process before stopping: task_id=%s", task.task_id)
+        task.stop_requested = True
+        task.stop_status = final_status
+        task.stop_detail = f"用户已从 Lark 面板{action_label}该任务。"
     proc.terminate()
     try:
         proc.wait(timeout=10)
@@ -6374,10 +6581,56 @@ def stop_codex(chat_id: str, task_id: str = "") -> bool:
     if runtime.process is proc:
         runtime.process = None
     label = agent_label(task_agent_id(task, runtime))
-    updated = update_task_card(chat_id, status="已停止", detail=f"已停止当前 {label} 任务。", force=True, task_id=task.task_id if task else task_id)
+    updated = update_task_card(chat_id, status=final_status, detail=f"已{action_label}当前 {label} 任务。", force=True, task_id=task.task_id if task else task_id)
     if not updated:
-        send_msg(chat_id, f"已停止当前 {label} 任务。")
+        send_msg(chat_id, f"已{action_label}当前 {label} 任务。")
     return updated
+
+
+def pause_qoder_quest(chat_id: str, task_id: str) -> tuple[bool, str]:
+    task = find_task(task_id)
+    if not task or task.chat_id != chat_id:
+        return False, "找不到这条 Quest 任务。"
+    if not is_qoder_quest_task(task):
+        return False, "只有 Qoder Quest 任务支持暂停。"
+    proc = task.process
+    if proc is None or proc.poll() is not None:
+        return False, "这条 Quest 任务当前不在运行。"
+    if task.pause_started_at:
+        return True, "这条 Quest 任务已经暂停。"
+    if not hasattr(signal, "SIGSTOP"):
+        return False, "当前系统不支持 SIGSTOP，无法暂停本地进程。"
+    proc.send_signal(signal.SIGSTOP)
+    task.pause_started_at = time.time()
+    update_task_card(chat_id, status="已暂停", detail="已暂停 Qoder Quest 任务；可在面板点击继续或终止。", force=True, task_id=task.task_id)
+    return True, "已暂停 Quest。"
+
+
+def resume_qoder_quest(chat_id: str, task_id: str) -> tuple[bool, str]:
+    task = find_task(task_id)
+    if not task or task.chat_id != chat_id:
+        return False, "找不到这条 Quest 任务。"
+    if not is_qoder_quest_task(task):
+        return False, "只有 Qoder Quest 任务支持继续。"
+    proc = task.process
+    if proc is None or proc.poll() is not None:
+        return False, "这条 Quest 任务当前不在运行。"
+    if not task.pause_started_at:
+        return True, "这条 Quest 任务没有暂停。"
+    if not hasattr(signal, "SIGCONT"):
+        return False, "当前系统不支持 SIGCONT，无法继续本地进程。"
+    task.paused_seconds += max(0, time.time() - task.pause_started_at)
+    task.pause_started_at = 0
+    proc.send_signal(signal.SIGCONT)
+    update_task_card(chat_id, status="运行中", detail="已继续 Qoder Quest 任务。", force=True, task_id=task.task_id)
+    return True, "已继续 Quest。"
+
+
+def terminate_qoder_quest(chat_id: str, task_id: str) -> bool:
+    task = find_task(task_id)
+    if not task or task.chat_id != chat_id or not is_qoder_quest_task(task):
+        return False
+    return stop_codex(chat_id, task_id, final_status="已终止", action_label="终止")
 
 
 def approve_pending(chat_id: str, approval_id: str, approved: bool, notify: bool = True) -> bool:
@@ -6871,8 +7124,14 @@ def should_auto_refresh_task_card(runtime: ChatRuntime, now: float) -> bool:
 def should_auto_refresh_codex_task(task: CodexTaskRuntime, now: float) -> bool:
     if TASK_CARD_REFRESH_INTERVAL_SECONDS <= 0 or not task.message_id:
         return False
+    if task.card_update_failed:
+        return now - task.last_card_update_at >= min(5, TASK_CARD_REFRESH_INTERVAL_SECONDS)
+    if task.result_refresh_until and now <= task.result_refresh_until:
+        return now - task.last_card_update_at >= TASK_CARD_REFRESH_INTERVAL_SECONDS
+    if task.result_refresh_until and now > task.result_refresh_until:
+        task.result_refresh_until = 0
     running = task.process is not None and task.process.poll() is None
-    pending_statuses = {"等待启动", "准备中", "等待审批", "已批准，继续执行"}
+    pending_statuses = {"等待启动", "准备中", "等待审批", "已批准，继续执行", "已暂停"}
     waiting = task.status in pending_statuses or "审批" in task.status
     if not running and not waiting:
         return False
@@ -7228,6 +7487,8 @@ def send_help(chat_id: str):
                 "/codex <指令> 使用 Codex CLI 执行一次",
                 "/claude <指令> 使用 Claude Code CLI 执行一次",
                 "/qoder <指令> 使用 Qoder CLI 执行一次",
+                "/qoder=quest <指令> 使用 Qoder Quest 模式执行一次",
+                "/quest <指令> 当前默认 Agent 为 Qoder 时，使用 Quest 模式执行",
                 "/model=<模型名> +<指令> 使用指定模型执行一次，例如 /model=gpt-5.5 +修复 README",
                 "/plan 进入并行计划模式；也可发送 /plan 后跟任务清单直接执行",
                 "/plan status 刷新最近的计划面板",
@@ -7306,14 +7567,29 @@ def on_text(
     if not content:
         return
     selected_model, content = parse_model_prefix(content)
-    selected_agent, content = parse_agent_prefix(content)
-    one_shot_agent = bool(selected_agent and content)
+    agent_mode = ""
+    selected_agent, agent_mode, content = parse_qoder_quest_agent_prefix(content)
+    quest_agent_selected = bool(selected_agent)
+    if not quest_agent_selected:
+        selected_agent, content = parse_agent_prefix(content)
+    else:
+        one_shot_agent = True
+    if not quest_agent_selected:
+        one_shot_agent = bool(selected_agent and content)
+    else:
+        one_shot_agent = bool(content)
     second_model, content = parse_model_prefix(content)
     selected_model = selected_model or second_model
     if selected_model and not content:
         send_msg(chat_id, "用法：`/model=<模型名> +具体指令`，例如 `/model=gpt-5.5 +修复 README`。")
         return
     runtime = get_runtime(chat_id)
+    if not agent_mode:
+        mode_agent = selected_agent or active_agent_id(runtime)
+        agent_mode, content = parse_agent_mode_prefix(content, mode_agent)
+    if agent_mode and not content:
+        send_msg(chat_id, "用法：`/qoder=quest <指令>`，或先 `/agent=qoder` 后发送 `/quest <指令>`。")
+        return
     if selected_agent and not content:
         set_runtime_agent(runtime, selected_agent)
         save_runtime(chat_id)
@@ -7538,6 +7814,7 @@ def on_text(
         selected_model,
         agent_id=selected_agent or runtime.active_agent_id,
         one_shot_agent=one_shot_agent,
+        agent_mode=agent_mode,
         source_message_id=meta.get("message_id", ""),
         attachments=prompt_attachments,
     )
@@ -7670,6 +7947,9 @@ CARD_ADMIN_ACTIONS = {
     "plan_merge_fix",
     "plan_merge_abort",
     "stop",
+    "quest_pause",
+    "quest_resume",
+    "quest_terminate",
     "plan_stop",
     "restart",
     "restart_confirm",
@@ -7783,6 +8063,19 @@ def handle_card_action(action: dict[str, Any], meta: Optional[dict[str, str]] = 
             if stop_codex(chat_id, task_id):
                 return action_toast("已停止")
             return action_card(build_task_card(chat_id, task_id=task_id), "已停止")
+        elif name == "quest_pause":
+            task_id = action.get("task_id", "")
+            ok, message = pause_qoder_quest(chat_id, task_id)
+            return action_card(build_task_card(chat_id, task_id=task_id), message, "success" if ok else "error")
+        elif name == "quest_resume":
+            task_id = action.get("task_id", "")
+            ok, message = resume_qoder_quest(chat_id, task_id)
+            return action_card(build_task_card(chat_id, task_id=task_id), message, "success" if ok else "error")
+        elif name == "quest_terminate":
+            task_id = action.get("task_id", "")
+            if terminate_qoder_quest(chat_id, task_id):
+                return action_toast("已终止")
+            return action_card(build_task_card(chat_id, task_id=task_id), "终止失败", "error")
         elif name == "restart":
             request_restart_confirmation(chat_id, requester_type="card_action")
             restart = pending_restart_for_chat(chat_id)

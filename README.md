@@ -174,6 +174,8 @@ nohup python3 lark2agent_ws.py > lark2agent_ws.log 2>&1 &
 - `/agent=claude +<指令>` / `/agent=qoder +<指令>`：使用指定 Agent 执行一次。
 - `/claude <指令>`：使用 Claude Code CLI 执行一次。
 - `/qoder <指令>`：使用 Qoder CLI 执行一次。
+- `/qoder=quest <指令>`：使用 Qoder Quest 模式执行一次；任务卡支持“暂停 / 继续 / 终止”，默认超时 12 小时。
+- `/quest <指令>`：当前默认 Agent 为 Qoder 时，使用 Qoder Quest 模式执行。
 - `/codex <指令>`：使用 Codex CLI 执行一次。
 - `/model=<模型名> +<指令>`：使用指定模型执行一次，例如 `/model=gpt-5.5 +修复 README`。
 - `/plan`：进入并行计划模式，下一条消息发送任务清单。
@@ -358,6 +360,7 @@ lark2agent/<plan_id>-<task_id>
 | `QODER_HOME` | `~/.qoder` | Qoder CLI home 目录。 |
 | `QODER_PROJECTS_DIR` | `$QODER_HOME/projects` | Qoder CLI 会话 JSONL 索引目录。 |
 | `QODER_TIMEOUT_SECONDS` | `CODEX_TIMEOUT_SECONDS` | 单次 Qoder CLI 任务超时时间。 |
+| `QODER_QUEST_TIMEOUT_SECONDS` | `43200` | Qoder Quest 模式超时时间，默认 12 小时。 |
 | `QODER_MODEL` | 空 | 默认 Qoder 模型；为空时使用 Qoder CLI 自身配置。 |
 | `QODER_PERMISSION_MODE` | `dont_ask` | Qoder CLI `--permission-mode` 参数；Lark2Agent 默认不走本机终端弹窗。 |
 | `APPROVED_QODER_PERMISSION_MODE` | `accept_edits` | Lark 审批批准后，单次 Qoder CLI 重试使用的 `--permission-mode`。 |
@@ -464,6 +467,8 @@ Codex Desktop 是否在主界面直接展示这类非交互会话，取决于客
 Claude Code CLI 通过 `claude --print --output-format stream-json --verbose` 非交互模式运行。Bridge 会索引 `CLAUDE_PROJECTS_DIR` 下的 Claude 会话 JSONL，并在 Lark 看板里以 `claude:<session_id>` 形式展示，避免和 Codex session ID 冲突。续写 Claude 会话时会自动去掉 `claude:` 前缀并调用 `claude --resume <session_id>`。
 
 Qoder CLI 通过 `qodercli --print --output-format stream-json --cwd <目录>` 非交互模式运行。Bridge 会索引 `QODER_PROJECTS_DIR` 下的 Qoder 会话 JSONL，并在 Lark 看板里以 `qoder:<session_id>` 形式展示；续写时会自动调用 `qodercli --resume <session_id>`。
+
+Qoder Quest 模式由 Bridge 向 Qoder prompt 前置 `/quest` 触发。可以直接发送 `/qoder=quest <指令>`，也可以先 `/agent=qoder`，再发送 `/quest <指令>`。Quest 任务使用 `QODER_QUEST_TIMEOUT_SECONDS` 单独控制超时，任务卡上提供“暂停 / 继续 / 终止”按钮。
 
 ## 常见问题
 

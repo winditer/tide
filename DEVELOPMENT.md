@@ -43,6 +43,13 @@ Lark2Agent bridge 的目标是把 Lark 群聊变成多 Agent 远程控制台：
 - `claude`：使用 `claude --print --output-format stream-json --verbose`，会话来自 `CLAUDE_PROJECTS_DIR`。
 - `qoder`：使用 `qodercli --print --output-format stream-json --cwd <目录>`，会话来自 `QODER_PROJECTS_DIR`。
 
+Qoder 额外支持 Quest 子模式：
+
+- `/qoder=quest <指令>`：一次性使用 Qoder Quest 模式执行。
+- 默认 Agent 为 Qoder 时，`/quest <指令>` 使用 Quest 模式执行。
+- Quest 模式由 Bridge 向 Qoder prompt 前置 `/quest` 触发，超时由 `QODER_QUEST_TIMEOUT_SECONDS` 单独控制，默认 12 小时。
+- Quest 任务卡提供“暂停 / 继续 / 终止”按钮；暂停和继续通过本地子进程 `SIGSTOP` / `SIGCONT` 实现，终止复用任务停止流程。
+
 Lark 侧协议不区分具体 CLI：文本消息、卡片按钮、`message.create`、`message.patch` 和 `card.action.trigger` 都复用同一套结构。按钮回调仍以 `task_id` 定位任务，任务运行态再用 `agent_id` 找到对应 adapter。
 
 每条 Lark 指令都会创建一个 `CodexTaskRuntime`，并生成独立 `task_id`。任务运行态绑定：
@@ -434,16 +441,19 @@ lark2agent/<plan_id>-<task_id>
 
 - 排队中
 - 运行中
+- 已暂停
 - 等待审批
 - 已完成
 - 失败
 - 已停止
+- 已终止
 
 计划能力：
 
 - 按状态筛选任务。
 - 查看任务详情、原始 prompt、目录、模型、session、耗时、日志摘要。
 - 停止运行中的任务。
+- 对 Qoder Quest 任务支持暂停、继续和终止。
 - 重试失败任务。
 - 处理审批。
 - 查看任务关联的 Plan、worktree、diff 和提交记录。
