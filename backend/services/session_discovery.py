@@ -1,0 +1,551 @@
+"""会话发现服务 - 从本地 Agent 会话文件提供历史会话/任务数据。
+
+复用 ``project_discovery.py`` 的扫描能力，提供 *会话* 级别（而非项目级别）的视图，
+使后端 ``/api/tasks`` 与 ``/api/sessions`` 能够补充 SQLite 中尚未记录的历史数据，
+从而与 Lark 端 ``/tasks``、``/chats``、``/convos`` 展示保持一致。
+
+关键点：
+- 仅 peek 文件首部若干行提取 cwd / session_id / 首条用户消息（不完整解析整个文件）
+- 30s TTL 内存缓存，避免每次请求都扫盘
+- 每个 Agent 最多扫描 ``MAX_SESSION_FILES`` 个文件（按 mtime 倒序）
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+import threading
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+logger = logging.getLogger("lark2agent.session_discovery")
+
+from backend.services.project_discovery import (
+    CLAUDE_PROJECTS_DIR,
+    CODEX_SESSIONS_DIR,
+    PEEK_MAX_LINES,
+    PROJECT_DISCOVERY_TTL,
+    QODER_PROJECTS_DIR,
+    _list_jsonl,
+    _normalize_path,
+    find_project_root,
+)
+
+# ---------- 数据提取 ----------
+
+# 摘要标题最大长度
+TITLE_MAX_LEN = 120
+
+# 测试/无意义会话标题集合（小写）
+# 这些通常是用户测试桥接链路时的随手输入，不构成有意义的工作会话
+_JUNK_TITLES = {
+    "hi", "hello", "hey", "yo",
+    "x", "y", "n", "a", "b", "c",
+    "ok", "okay", "yes", "no",
+    "test", "测试", "pwd", "ls", "echo",
+    "在", "在吗", "你好",
+}
+
+
+def _truncate(text: str, limit: int = TITLE_MAX_LEN) -> str:
+    text = (text or "").strip().replace("\n", " ").replace("\r", " ")
+    if len(text) > limit:
+        return text[: limit - 1] + "…"
+    return text
+
+
+def _extract_text(content) -> str:
+    """从 Claude/Codex/Qoder 的 message.content 中抽取纯文本。"""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: List[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                t = item.get("text") or item.get("content")
+                if isinstance(t, str):
+                    parts.append(t)
+            elif isinstance(item, str):
+                parts.append(item)
+        return "\n".join(parts)
+    if isinstance(content, dict):
+        t = content.get("text") or content.get("content")
+        if isinstance(t, str):
+            return t
+    return ""
+
+
+def _peek_session_meta(
+    path: Path, agent_id: str
+) -> Tuple[Optional[Path], Optional[str], Optional[str], Optional[str], bool, Optional[str]]:
+    """读取前若干行，提取 cwd, session_id, title (首个用户 prompt), created_at, is_sub_session, session_source。"""
+    cwd: Optional[Path] = None
+    session_id: Optional[str] = None
+    title: Optional[str] = None
+    created_at: Optional[str] = None
+    is_sub_session: bool = False
+    session_source: Optional[str] = None
+
+    try:
+        with path.open("r", encoding="utf-8", errors="ignore") as f:
+            for i, line in enumerate(f):
+                if i >= PEEK_MAX_LINES:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+
+                if agent_id == "codex":
+                    typ = obj.get("type")
+                    payload = obj.get("payload") or {}
+                    if typ == "session_meta":
+                        if not session_id:
+                            session_id = payload.get("id") or session_id
+                        if not created_at:
+                            created_at = (
+                                payload.get("timestamp")
+                                or obj.get("timestamp")
+                                or None
+                            )
+                        c = payload.get("cwd")
+                        if c and not cwd:
+                            cwd = Path(str(c))
+                        # 提取 session source（exec/cli/vscode）
+                        raw_source = payload.get("source")
+                        if isinstance(raw_source, str) and not session_source:
+                            session_source = raw_source
+                        # 子会话判断：仅当 cwd 在 worktrees 目录下才视为子会话
+                        # source="exec" 不再作为过滤条件（用户通过 Lark 发起的也是 exec）
+                        cwd_str = payload.get("cwd", "")
+                        if ".lark-codex/worktrees" in cwd_str:
+                            is_sub_session = True
+                        elif isinstance(raw_source, dict) and "subagent" in str(raw_source):
+                            is_sub_session = True
+                        continue
+                    if typ == "turn_context":
+                        c = payload.get("cwd")
+                        if c and not cwd:
+                            cwd = Path(str(c))
+                        continue
+                    # 首个用户消息作为 title
+                    if not title:
+                        if typ == "event_msg" and payload.get("type") == "user_message":
+                            msg = payload.get("message") or ""
+                            if msg and not msg.startswith("<"):
+                                title = _truncate(msg)
+                        elif typ == "response_item" and payload.get("type") == "message":
+                            if payload.get("role") == "user":
+                                text = _extract_text(payload.get("content"))
+                                if text and not text.startswith("<"):
+                                    title = _truncate(text)
+                else:
+                    # Claude / Qoder：每行 JSON 直接含 cwd / sessionId / message
+                    if obj.get("isMeta"):
+                        continue
+                    raw_sid = obj.get("sessionId") or obj.get("session_id")
+                    if raw_sid and not session_id:
+                        session_id = str(raw_sid)
+                    c = obj.get("cwd")
+                    if c and not cwd:
+                        cwd = Path(str(c))
+                    if not created_at:
+                        ts = obj.get("timestamp") or obj.get("created_at")
+                        if isinstance(ts, str):
+                            created_at = ts
+                    if not title:
+                        msg = obj.get("message")
+                        if isinstance(msg, dict) and msg.get("role") == "user":
+                            text = _extract_text(msg.get("content"))
+                            if text and not text.startswith("<"):
+                                title = _truncate(text)
+                        elif obj.get("type") == "user":
+                            text = _extract_text(obj.get("content") or obj.get("message"))
+                            if text and not text.startswith("<"):
+                                title = _truncate(text)
+
+                if cwd and session_id and title:
+                    break
+    except OSError:
+        return None, None, None, None, False, None
+
+    # Plan 步骤子任务检测：title 仅为 "p1"/"p2"/"P3" 等 plan 步骤标识符
+    # 这些是 /plan 功能自动拆分执行的，不是真实用户对话
+    if agent_id == "codex" and title and re.match(r'^[Pp]\d+$', title.strip()):
+        is_sub_session = True
+
+    # 测试/无意义会话过滤：用户测试桥接链路时的单字符或问候语输入
+    # 这些会话不是有意义的工作会话（如 "hi"/"x"/"test"/"pwd" 等）
+    # 对所有 agent (codex/claude/qoder) 统一生效
+    if title:
+        normalized = title.strip().lower()
+        if normalized in _JUNK_TITLES or len(normalized) <= 1:
+            is_sub_session = True
+
+    return cwd, session_id, title, created_at, is_sub_session, session_source
+
+
+# ---------- 时间工具 ----------
+
+
+def _ts_to_iso(ts: float) -> Optional[str]:
+    if not ts:
+        return None
+    try:
+        return datetime.fromtimestamp(ts).isoformat()
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+# ---------- 缓存 ----------
+
+_cache_lock = threading.Lock()
+_cache: Dict[str, object] = {"ts": 0.0, "data": []}
+
+
+def _scan_all() -> List[Dict]:
+    """扫描所有 Agent 的会话文件，返回会话字典列表（未过滤）。"""
+    results: List[Dict] = []
+
+    scan_targets = (
+        ("codex", CODEX_SESSIONS_DIR),
+        ("claude", CLAUDE_PROJECTS_DIR),
+        ("qoder", QODER_PROJECTS_DIR),
+    )
+
+    for agent_id, directory in scan_targets:
+        for path in _list_jsonl(directory):
+            # 跳过 subagents 子目录中的文件（它们是子 agent 会话，不是顶层会话）
+            if "/subagents/" in str(path) or "\\subagents\\" in str(path):
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            mtime = stat.st_mtime
+            ctime = stat.st_ctime
+            cwd, sid, title, created_at_iso, is_sub, session_source = _peek_session_meta(path, agent_id)
+            # 跳过子会话（codex exec/subagent）
+            if is_sub:
+                continue
+            if not sid:
+                sid = path.stem
+            project_root = find_project_root(cwd) if cwd else None
+            project_name = project_root.name if project_root else None
+            cwd_str = str(_normalize_path(cwd)) if cwd else None
+            project_root_str = str(project_root) if project_root else None
+
+            results.append(
+                {
+                    "id": sid,
+                    "session_id": sid,
+                    "agent_id": agent_id,
+                    "cwd": cwd_str,
+                    "project_root": project_root_str,
+                    "project_name": project_name,
+                    "title": title or path.stem,
+                    "status": "completed",
+                    "last_active": _ts_to_iso(mtime),
+                    "last_active_ts": mtime,
+                    "created_at": created_at_iso or _ts_to_iso(ctime),
+                    "file": str(path),
+                    "source": "file",
+                    "session_source": session_source or ("cli" if agent_id != "codex" else None),
+                }
+            )
+
+    results.sort(key=lambda r: r.get("last_active_ts") or 0.0, reverse=True)
+    logger.debug(
+        "session_discovery scanned %d sessions: codex=%d claude=%d qoder=%d",
+        len(results),
+        sum(1 for r in results if r.get("agent_id") == "codex"),
+        sum(1 for r in results if r.get("agent_id") == "claude"),
+        sum(1 for r in results if r.get("agent_id") == "qoder"),
+    )
+    return results
+
+
+def _load(force: bool = False) -> List[Dict]:
+    now = time.time()
+    with _cache_lock:
+        cached_ts = float(_cache.get("ts", 0))
+        if not force and cached_ts and (now - cached_ts) < PROJECT_DISCOVERY_TTL:
+            return list(_cache.get("data", []))  # type: ignore[arg-type]
+
+    data = _scan_all()
+    with _cache_lock:
+        _cache["ts"] = now
+        _cache["data"] = data
+    return list(data)
+
+
+
+def _session_references_project(file_path: str, project_cwd: str, max_chars: int = 100000) -> bool:
+    """
+    检查会话文件是否包含对指定项目的引用。
+    用于处理 project_root=None 但会话内容涉及项目的情况（如 CLI 会话）。
+    
+    Args:
+        file_path: 会话文件路径
+        project_cwd: 目标项目路径
+        max_chars: 最多扫描的字符数（避免读取超大文件）
+    
+    Returns:
+        True 如果文件内容包含项目路径引用
+    """
+    try:
+        project_name = Path(project_cwd).name  # e.g., "lark2codex"
+        # 需要匹配的路径模式
+        patterns = [
+            project_cwd,  # 完整路径
+            f"/{project_name}",  # 末尾匹配
+            f"Documents/{project_name}",  # 常见父目录
+        ]
+        
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read(max_chars)
+            for pattern in patterns:
+                if pattern in content:
+                    logger.debug(f"Session {Path(file_path).stem} references {project_name} via pattern '{pattern}'")
+                    return True
+        return False
+    except Exception as e:
+        logger.debug(f"Error checking session file {file_path} for project reference: {e}")
+        return False
+
+# ---------- 公开 API ----------
+
+
+def discover_sessions(
+    project_cwd: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    limit: Optional[int] = None,
+    offset: int = 0,
+    force: bool = False,
+) -> List[Dict]:
+    """发现所有会话，可选按项目 cwd（项目根或子目录）和 agent_id 过滤。
+
+    返回字段：
+      id, session_id, agent_id, cwd, project_root, project_name, title,
+      status, last_active, created_at, file, source="file"
+    """
+    items = _load(force=force)
+
+    if project_cwd:
+        try:
+            target = str(_normalize_path(Path(project_cwd)))
+        except OSError:
+            target = project_cwd
+        # 去除末尾斜杠以便前缀匹配
+        target = target.rstrip("/")
+        
+        filtered_items = []
+        for it in items:
+            # 主过滤逻辑：通过 project_root 或 cwd 匹配
+            if (
+                it.get("project_root")
+                and (
+                    it["project_root"].rstrip("/") == target
+                    or it["project_root"].rstrip("/").startswith(target + "/")
+                )
+            ) or (
+                it.get("cwd")
+                and (
+                    it["cwd"].rstrip("/") == target
+                    or it["cwd"].rstrip("/").startswith(target + "/")
+                )
+            ):
+                filtered_items.append(it)
+            # 备选逻辑：如果 project_root 为 None，扫描文件内容中是否有项目引用
+            # 这处理了 CLI 会话（cwd=/Users/haifeng）但操作 lark2codex 项目的情况
+            elif (
+                not it.get("project_root")
+                and it.get("file")
+                and _session_references_project(it["file"], target)
+            ):
+                logger.info(
+                    f"Matching session {it.get('id')[:8]} via content reference: "
+                    f"title='{it.get('title')[:60]}' cwd={it.get('cwd')}"
+                )
+                filtered_items.append(it)
+        
+        items = filtered_items
+
+    if agent_id:
+        items = [it for it in items if it.get("agent_id") == agent_id]
+
+    if offset:
+        items = items[offset:]
+    if limit is not None:
+        items = items[:limit]
+
+    # 移除内部排序辅助字段
+    return [{k: v for k, v in it.items() if k != "last_active_ts"} for it in items]
+
+
+def discover_chats(
+    agent_id: Optional[str] = None,
+    limit: Optional[int] = None,
+    offset: int = 0,
+    force: bool = False,
+) -> List[Dict]:
+    """发现不绑定项目的普通对话（Chat）。
+
+    Chat 判定：``project_root`` 为 None（不绑定任何项目）。
+    复用 ``_load()`` 的 TTL 缓存，不会重复扫描。
+
+    Returns:
+        与 ``discover_sessions`` 同结构的字典列表。
+    """
+    items = _load(force=force)
+
+    # 仅保留 project_root 为空的会话
+    items = [it for it in items if not it.get("project_root")]
+
+    if agent_id:
+        items = [it for it in items if it.get("agent_id") == agent_id]
+
+    if offset:
+        items = items[offset:]
+    if limit is not None:
+        items = items[:limit]
+
+    # 移除内部排序辅助字段
+    return [{k: v for k, v in it.items() if k != "last_active_ts"} for it in items]
+
+
+def clear_cache() -> None:
+    with _cache_lock:
+        _cache["ts"] = 0.0
+        _cache["data"] = []
+
+
+# ---------- 单会话查找 ----------
+
+
+def find_session(session_id: str, force: bool = False) -> Optional[Dict]:
+    """按 session_id 在已扫描的会话中查找单条记录。
+
+    返回字段同 ``discover_sessions``（含 file 路径），未命中时返回 None。
+    """
+    if not session_id:
+        return None
+    items = _load(force=force)
+    for it in items:
+        if it.get("session_id") == session_id or it.get("id") == session_id:
+            return {k: v for k, v in it.items() if k != "last_active_ts"}
+    return None
+
+
+# ---------- 消息抽取 ----------
+
+MAX_MESSAGES = 1000
+
+
+def _coerce_iso(ts) -> Optional[str]:
+    if not ts:
+        return None
+    if isinstance(ts, str):
+        return ts
+    if isinstance(ts, (int, float)):
+        try:
+            # 毫秒/秒兼容
+            value = float(ts)
+            if value > 1e12:
+                value = value / 1000.0
+            return datetime.fromtimestamp(value).isoformat()
+        except (OverflowError, OSError, ValueError):
+            return None
+    return None
+
+
+def _parse_codex_line(obj: Dict) -> Optional[Dict]:
+    typ = obj.get("type")
+    payload = obj.get("payload") or {}
+    ts = obj.get("timestamp") or payload.get("timestamp")
+    if typ == "event_msg":
+        sub = payload.get("type")
+        if sub == "user_message":
+            msg = payload.get("message") or ""
+            if msg and not msg.startswith("<"):
+                return {"role": "user", "content": str(msg), "timestamp": _coerce_iso(ts)}
+        if sub == "agent_message":
+            msg = payload.get("message") or ""
+            if msg:
+                return {"role": "assistant", "content": str(msg), "timestamp": _coerce_iso(ts)}
+        if sub == "agent_reasoning":
+            text = payload.get("text") or payload.get("message") or ""
+            if text:
+                return {"role": "assistant", "content": str(text), "timestamp": _coerce_iso(ts), "kind": "reasoning"}
+    if typ == "response_item" and payload.get("type") == "message":
+        role = payload.get("role")
+        content = _extract_text(payload.get("content"))
+        if content and role in ("user", "assistant", "system") and not content.startswith("<"):
+            return {"role": role, "content": content, "timestamp": _coerce_iso(ts)}
+    return None
+
+
+def _parse_claude_line(obj: Dict) -> Optional[Dict]:
+    if obj.get("isMeta"):
+        return None
+    ts = obj.get("timestamp") or obj.get("created_at")
+    msg = obj.get("message")
+    if isinstance(msg, dict):
+        role = msg.get("role")
+        content = _extract_text(msg.get("content"))
+        if content and role in ("user", "assistant", "system") and not content.startswith("<"):
+            return {"role": role, "content": content, "timestamp": _coerce_iso(ts)}
+    typ = obj.get("type")
+    if typ in ("user", "assistant", "system"):
+        content = _extract_text(obj.get("content") or obj.get("message"))
+        if content and not content.startswith("<"):
+            return {"role": typ, "content": content, "timestamp": _coerce_iso(ts)}
+    return None
+
+
+def read_session_messages(
+    file_path: str, agent_id: str, limit: int = MAX_MESSAGES
+) -> List[Dict]:
+    """解析 JSONL 会话文件，返回标准化的消息列表。
+
+    返回元素：``{role, content, timestamp, kind?}``
+    无法读取或文件不存在时返回 []。
+    """
+    p = Path(file_path)
+    if not p.exists() or not p.is_file():
+        return []
+    out: List[Dict] = []
+    try:
+        with p.open("r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+                msg: Optional[Dict] = None
+                if agent_id == "codex":
+                    msg = _parse_codex_line(obj)
+                else:
+                    msg = _parse_claude_line(obj)
+                if msg:
+                    out.append(msg)
+                    if len(out) >= limit:
+                        break
+    except OSError:
+        return []
+    return out

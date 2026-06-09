@@ -1,0 +1,1 @@
+{"version":3,"file":"NodePalette.d.ts","sourceRoot":"","sources":["../../src/workflows/NodePalette.tsx"],"names":[],"mappings":"AAEA,OAAO,KAAK,EAAE,gBAAgB,EAAE,MAAM,kBAAkB,CAAC;AA8EzD,UAAU,gBAAgB;IACxB,SAAS,CAAC,EAAE,CAAC,IAAI,EAAE,gBAAgB,KAAK,IAAI,CAAC;CAC9C;AAED,wBAAgB,WAAW,CAAC,EAAE,SAAS,EAAE,EAAE,gBAAgB,+BAyE1D"}

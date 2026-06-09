@@ -1,0 +1,208 @@
+-- actors 统一身份表
+CREATE TABLE IF NOT EXISTS actors (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL CHECK(type IN ('member', 'agent', 'lark_user')),
+    name TEXT NOT NULL,
+    avatar_url TEXT,
+    metadata TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- workspaces 工作空间
+CREATE TABLE IF NOT EXISTS workspaces (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    slug TEXT UNIQUE NOT NULL,
+    owner_id TEXT REFERENCES actors(id),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- tasks 统一任务表
+CREATE TABLE IF NOT EXISTS tasks (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+    plan_id TEXT,
+    workflow_run_id TEXT,
+    workflow_node_id TEXT,
+    assignee_id TEXT REFERENCES actors(id),
+    assignee_type TEXT NOT NULL DEFAULT 'agent',
+    chat_id TEXT,
+    parent_task_id TEXT REFERENCES tasks(id),
+    prompt TEXT NOT NULL,
+    cwd TEXT,
+    model TEXT,
+    agent_id TEXT,
+    session_id TEXT,
+    status TEXT NOT NULL DEFAULT 'queued',
+    result TEXT,
+    attachments TEXT,
+    output_path TEXT,
+    worktree_path TEXT,
+    branch_name TEXT,
+    diff_summary TEXT,
+    test_result TEXT,
+    commit_hash TEXT,
+    commit_message TEXT,
+    merge_status TEXT,
+    priority INTEGER DEFAULT 0,
+    labels TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    duration_ms INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_workspace ON tasks(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(workspace_id, status);
+CREATE INDEX IF NOT EXISTS idx_tasks_plan ON tasks(plan_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee_id);
+
+-- task_events 任务事件日志
+CREATE TABLE IF NOT EXISTS task_events (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id),
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+    actor_id TEXT REFERENCES actors(id),
+    event_type TEXT NOT NULL,
+    payload TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_events_task ON task_events(task_id);
+CREATE INDEX IF NOT EXISTS idx_events_time ON task_events(workspace_id, created_at);
+
+-- plans Plan定义
+CREATE TABLE IF NOT EXISTS plans (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+    chat_id TEXT,
+    cwd TEXT,
+    model TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    max_parallel INTEGER DEFAULT 3,
+    definition TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP
+);
+
+-- plan_tasks Plan子任务关联
+CREATE TABLE IF NOT EXISTS plan_tasks (
+    plan_id TEXT NOT NULL REFERENCES plans(id),
+    task_id TEXT NOT NULL REFERENCES tasks(id),
+    task_index INTEGER NOT NULL,
+    phase INTEGER DEFAULT 0,
+    depends_on TEXT,
+    PRIMARY KEY (plan_id, task_id)
+);
+
+-- approvals 审批
+CREATE TABLE IF NOT EXISTS approvals (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id),
+    plan_id TEXT,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+    chat_id TEXT,
+    type TEXT NOT NULL DEFAULT 'unknown',
+    detail TEXT DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'pending',
+    operator_id TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    resolved_at TEXT,
+    FOREIGN KEY (task_id) REFERENCES tasks(id)
+);
+CREATE INDEX IF NOT EXISTS idx_approvals_task ON approvals(task_id);
+CREATE INDEX IF NOT EXISTS idx_approvals_workspace_status ON approvals(workspace_id, status);
+
+-- schedules 定时任务
+CREATE TABLE IF NOT EXISTS schedules (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+    name TEXT NOT NULL,
+    description TEXT,
+    trigger_type TEXT NOT NULL CHECK(trigger_type IN ('cron', 'interval', 'date')),
+    trigger_config TEXT NOT NULL,
+    task_type TEXT NOT NULL CHECK(task_type IN ('agent', 'plan', 'status', 'custom')),
+    task_config TEXT NOT NULL,
+    enabled INTEGER DEFAULT 1,
+    last_run_at TIMESTAMP,
+    next_run_at TIMESTAMP,
+    run_count INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- schedule_runs 定时任务执行记录
+CREATE TABLE IF NOT EXISTS schedule_runs (
+    id TEXT PRIMARY KEY,
+    schedule_id TEXT NOT NULL REFERENCES schedules(id),
+    task_id TEXT REFERENCES tasks(id),
+    status TEXT NOT NULL DEFAULT 'running',
+    trigger_type TEXT,
+    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP,
+    result TEXT,
+    error TEXT
+);
+
+-- workflows 工作流定义
+CREATE TABLE IF NOT EXISTS workflows (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+    name TEXT NOT NULL,
+    description TEXT,
+    definition TEXT NOT NULL,
+    version INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- workflow_runs 工作流运行实例
+CREATE TABLE IF NOT EXISTS workflow_runs (
+    id TEXT PRIMARY KEY,
+    workflow_id TEXT NOT NULL REFERENCES workflows(id),
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+    status TEXT NOT NULL DEFAULT 'running',
+    current_node_ids TEXT,
+    context TEXT,
+    trigger_type TEXT DEFAULT 'manual',
+    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP
+);
+
+-- workflow_node_runs 工作流节点执行记录
+CREATE TABLE IF NOT EXISTS workflow_node_runs (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES workflow_runs(id),
+    node_id TEXT NOT NULL,
+    task_id TEXT REFERENCES tasks(id),
+    status TEXT NOT NULL DEFAULT 'pending',
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    output TEXT,
+    error TEXT
+);
+
+-- conversations 会话管理
+CREATE TABLE IF NOT EXISTS conversations (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    chat_id TEXT,                    -- Lark chat_id（可为空，Web 端不需要）
+    agent_id TEXT DEFAULT 'codex',   -- 当前使用的 Agent
+    model TEXT DEFAULT '',           -- 当前使用的模型
+    session_id TEXT,                 -- 最近一次 Agent session ID
+    cwd TEXT,                        -- 工作目录
+    status TEXT DEFAULT 'active',    -- active, idle, closed
+    last_active_at TEXT DEFAULT (datetime('now')),
+    created_at TEXT DEFAULT (datetime('now')),
+    metadata TEXT DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_conversations_workspace ON conversations(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_conversations_chat ON conversations(chat_id);
+CREATE INDEX IF NOT EXISTS idx_conversations_status ON conversations(workspace_id, status);
+
+-- 默认工作空间和 Agent actors（初始数据）
+INSERT OR IGNORE INTO actors (id, type, name, metadata) VALUES
+    ('agent-codex', 'agent', 'Codex', '{"agent_id": "codex"}'),
+    ('agent-claude', 'agent', 'Claude', '{"agent_id": "claude"}'),
+    ('agent-qoder', 'agent', 'Qoder', '{"agent_id": "qoder"}');
+
+INSERT OR IGNORE INTO workspaces (id, name, slug) VALUES
+    ('default', 'Default Workspace', 'default');

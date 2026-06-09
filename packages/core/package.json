@@ -1,0 +1,32 @@
+{
+  "name": "@lark2codex/core",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./api/client": "./src/api/client.ts",
+    "./api/tasks": "./src/api/tasks.ts",
+    "./api/dashboard": "./src/api/dashboard.ts",
+    "./hooks/use-tasks": "./src/hooks/use-tasks.ts",
+    "./hooks/use-dashboard": "./src/hooks/use-dashboard.ts",
+    "./api/schedules": "./src/api/schedules.ts",
+    "./hooks/use-schedules": "./src/hooks/use-schedules.ts",
+    "./api/kanban": "./src/api/kanban.ts",
+    "./hooks/use-kanban": "./src/hooks/use-kanban.ts",
+    "./providers/query-provider": "./src/providers/query-provider.tsx",
+    "./providers/ws-provider": "./src/providers/ws-provider.tsx",
+    "./types": "./src/types/index.ts"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.62.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.7.0"
+  }
+}

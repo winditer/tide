@@ -1,0 +1,22 @@
+schema_version: 1
+module_path: ""
+title: Lark 多智能体桥接与任务编排引擎
+scope:
+    - .gitignore
+    - PPT_OUTLINE.md
+    - README.md
+    - lark2agent_ws.py
+    - ppt_outline_deck.html
+    - .env
+    - .env.example
+    - .lark2agent_state.json
+    - .lark_codex_state.json
+    - DEVELOPMENT.md
+    - lark2agent.log
+    - lark2agent_ws.log
+    - lark_codex_ws.log
+    - nohup.out
+    - output.log
+source_files: []
+depends_on: []
+related_to: []

@@ -1,0 +1,1 @@
+{"version":3,"file":"connection-status.d.ts","sourceRoot":"","sources":["../../src/components/connection-status.tsx"],"names":[],"mappings":"AAIA,KAAK,QAAQ,GAAG,YAAY,GAAG,WAAW,GAAG,cAAc,CAAC;AAE5D,MAAM,WAAW,qBAAqB;IACpC,MAAM,EAAE,QAAQ,CAAC;IACjB,SAAS,CAAC,EAAE,MAAM,CAAC;CACpB;AAoBD,wBAAgB,gBAAgB,CAAC,EAAE,MAAM,EAAE,SAAS,EAAE,EAAE,qBAAqB,+BAe5E"}

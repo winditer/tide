@@ -1,0 +1,10 @@
+{
+  "name": "lark2codex",
+  "private": true,
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev": "yarn workspace @lark2codex/web dev",
+    "build": "yarn workspace @lark2codex/web build",
+    "lint": "yarn workspace @lark2codex/web lint"
+  }
+}

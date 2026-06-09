@@ -390,6 +390,73 @@ KEEP_AWAKE_DISABLE_SLEEP=1
 
 注意：MacBook 合盖运行受硬件、系统设置和外设影响。稳定方案仍是接电源、外接显示器、键盘和鼠标。
 
+## Web 工作台开发环境
+
+### 前置要求
+
+- Node.js >= 18
+- Python >= 3.10
+- yarn
+
+### 安装步骤
+
+#### 后端
+
+```bash
+cd /path/to/lark2codex
+pip install -r backend/requirements.txt
+```
+
+#### 前端
+
+```bash
+cd /path/to/lark2codex
+yarn install
+```
+
+### 开发服务器启动
+
+分别在两个终端运行：
+
+```bash
+# 终端 1：后端（端口 8000）
+cd /path/to/lark2codex && uvicorn backend.main:app --reload --port 8000
+
+# 终端 2：前端（端口 3000）
+yarn dev
+```
+
+启动后访问：
+
+- 前端：http://localhost:3000
+- 后端 API：http://localhost:8000
+- API 文档：http://localhost:8000/docs
+
+### 运行测试
+
+```bash
+python -m pytest backend/tests/ -v
+```
+
+### 项目结构
+
+```
+lark2codex/
+├── apps/
+│   └── web/            # Next.js 15 前端（App Router + TanStack Query + Tailwind CSS）
+├── packages/
+│   ├── core/           # Headless 逻辑：Zustand stores、React Query hooks、API client、TypeScript 类型
+│   ├── ui/             # shadcn/ui 原子组件
+│   └── views/          # 业务组件
+├── backend/            # FastAPI 后端
+│   ├── api/            # REST + WebSocket 路由
+│   ├── services/       # 业务逻辑
+│   ├── models/         # Pydantic schemas
+│   ├── db/             # SQLite + SQLAlchemy 配置
+│   └── runtime/        # Agent 适配器、任务运行时
+└── lark2agent_ws.py    # 现有 Lark Bridge（保留）
+```
+
 ## 开发路线图
 
 ### [已完成] 1. 隔离式 `/plan` 并行任务
@@ -563,3 +630,31 @@ lark2agent/<plan_id>-<task_id>
 - `[部分完成]` Plan 子任务依赖关系：已支持轻量阶段和 `depends:`；前置条件 UI 和失败策略尚未实现。
 - `[计划]` 更完整日报：持久记录每次任务的开始、结束、状态、审批和耗时。
 - `[部分完成]` project/chat/convos 创建和归档已实现；归档恢复命令尚未实现。
+
+---
+
+## P5-P10 新功能
+
+### Plan DAG 视图 (P5)
+- 路由: /plans, /plans/[id]
+- 功能: React Flow DAG 可视化 + ELK.js 自动布局 + Monaco Diff 视图 + Gantt 时间线
+
+### Kanban 四维看板 (P6)
+- 路由: /kanban
+- 功能: 项目/会话/Agent/工作流 四种看板视图，@hello-pangea/dnd 拖拽
+
+### 定时调度 (P7)
+- 路由: /schedules, /schedules/[id]
+- 功能: Cron 调度管理，APScheduler 后端集成
+
+### Workflow 引擎 (P8)
+- 后端 DAG 执行引擎，支持 8 种节点类型
+- 节点: start/end/agent/approval/condition/parallel/parallel_join/delay
+
+### Workflow 可视化编辑器 (P9)
+- 路由: /workflows, /workflows/[id], /workflows/[id]/runs/[rid]
+- 功能: React Flow 拖拽式编辑器 + 运行时状态视图
+
+### Lark 双通道联动 (P10)
+- API: POST /api/lark/notify, GET /api/lark/status
+- 功能: Web↔Lark 双向同步，通过内部 HTTP API 松耦合

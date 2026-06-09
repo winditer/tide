@@ -1,0 +1,31 @@
+{
+  "name": "@lark2codex/views",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./dashboard/*": "./src/dashboard/*.tsx",
+    "./kanban/*": "./src/kanban/*.tsx",
+    "./layout/*": "./src/layout/*.tsx",
+    "./plans/*": "./src/plans/*.tsx",
+    "./schedules/*": "./src/schedules/*.tsx",
+    "./tasks/*": "./src/tasks/*.tsx",
+    "./workflows/*": "./src/workflows/*.tsx",
+    "./workflows/nodes": "./src/workflows/nodes/index.ts",
+    "./workflows/nodes/*": "./src/workflows/nodes/*.tsx"
+  },
+  "dependencies": {
+    "@lark2codex/core": "*",
+    "@lark2codex/ui": "*",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "@hello-pangea/dnd": "^18.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.7.0"
+  }
+}

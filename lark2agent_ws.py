@@ -1,3 +1,19 @@
+"""
+╔══════════════════════════════════════════════════════════════════════╗
+║  DEPRECATED - 本文件已废弃，请勿继续修改                              ║
+║                                                                      ║
+║  所有功能已迁移到 FastAPI 统一后端：                                    ║
+║    backend/runtime/    - 执行器、适配器、Git 工具、配置                 ║
+║    backend/services/   - 业务逻辑（任务、计划、审批、会话等）            ║
+║    backend/api/        - REST API 路由                                ║
+║                                                                      ║
+║  启动方式：uvicorn backend.main:app --host 0.0.0.0 --port 8000       ║
+║  环境变量：LARK_APP_ID + LARK_APP_SECRET（可选，启用 Lark 集成）       ║
+║                                                                      ║
+║  保留本文件仅作为迁移参考，后续版本将删除。                              ║
+╚══════════════════════════════════════════════════════════════════════╝
+"""
+
 import atexit
 import hashlib
 import json
