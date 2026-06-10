@@ -14,7 +14,7 @@ from backend.runtime.adapters import AGENT_ADAPTERS, approved_permission_mode, s
 from backend.runtime.config import APPROVED_CODEX_APPROVAL_POLICY, APPROVED_CODEX_SANDBOX_MODE
 from backend.runtime.task_runtime import CodexTaskRuntime
 
-logger = logging.getLogger("lark2agent.executor")
+logger = logging.getLogger("tide.executor")
 
 
 @dataclass

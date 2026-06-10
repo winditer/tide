@@ -1,6 +1,6 @@
 "use client";
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
-import { Badge } from "@lark2codex/ui";
+import { Badge } from "@tide/ui";
 const STATUS_VARIANT = {
     success: "secondary",
     failed: "destructive",

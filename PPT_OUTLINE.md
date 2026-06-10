@@ -1,6 +1,6 @@
-# Lark2Agent Bridge PPT Outline
+# Tide Bridge PPT Outline
 
-本文档把 Lark2Agent bridge 当前实现整理成一份可直接用于制作 PPT 的大纲，并补充它与 OpenClaw、Hermes 的定位差异。
+本文档把 Tide bridge 当前实现整理成一份可直接用于制作 PPT 的大纲，并补充它与 OpenClaw、Hermes 的定位差异。
 
 外部对比依据核验日期：2026-06-02。
 
@@ -9,13 +9,13 @@
 当前大纲已覆盖本次要求的四类主题：
 
 - 想法：见第 2、3 节，说明为什么要把 Agent CLI 接入 Lark，以及产品机会在哪里。
-- 开源项目对比：见第 12 节，对比 Lark2Agent bridge、OpenClaw、Hermes Agent。
+- 开源项目对比：见第 12 节，对比 Tide bridge、OpenClaw、Hermes Agent。
 - 项目主要功能和特性：见第 6 到第 11 节，覆盖功能入口、任务模型、Plan、审批、安全、日报和会话管理。
 - 后续规划：见第 14 节，并在第 15 节给出推荐 PPT 页结构。
 
 ## 1. 标题页
 
-标题：Lark2Agent Bridge
+标题：Tide Bridge
 
 副标题：把飞书 / Lark 群聊变成多 Agent 的远程工程操作台。
 
@@ -43,11 +43,11 @@
 - 多个任务同时推进时，任务状态容易混在一起。
 - 多个 Agent session、项目目录、普通对话之间缺少一个轻量管理面板。
 
-Lark2Agent 的目标不是重做一个通用 agent 平台，而是把已有 Agent CLI 工作流接入团队协作入口。
+Tide 的目标不是重做一个通用 agent 平台，而是把已有 Agent CLI 工作流接入团队协作入口。
 
 ## 4. 产品定位
 
-Lark2Agent bridge 是一个本地运行的 Lark WebSocket 客户端：
+Tide bridge 是一个本地运行的 Lark WebSocket 客户端：
 
 - 面向 Codex、Claude Code 等 Agent CLI，而不是自建完整 agent runtime。
 - 面向 Lark 群聊和卡片，而不是多平台全渠道网关。
@@ -63,7 +63,7 @@ Lark2Agent bridge 是一个本地运行的 Lark WebSocket 客户端：
 
 ## 5. 当前实现概览
 
-当前仓库的主实现是 `lark2agent_ws.py`，核心模块包括：
+当前仓库的主实现是 `tide_ws.py`，核心模块包括：
 
 - Lark WebSocket 事件接收。
 - 文本指令解析。
@@ -75,8 +75,8 @@ Lark2Agent bridge 是一个本地运行的 Lark WebSocket 客户端：
 
 运行方式：
 
-- 前台运行：`python3 lark2agent_ws.py`
-- 后台运行：`nohup python3 lark2agent_ws.py > lark2agent_ws.log 2>&1 &`
+- 前台运行：`python3 tide_ws.py`
+- 后台运行：`nohup python3 tide_ws.py > tide_ws.log 2>&1 &`
 - Lark 内重启：`/restart`
 
 ## 6. 项目主要功能和特性
@@ -217,9 +217,9 @@ Lark2Agent bridge 是一个本地运行的 Lark WebSocket 客户端：
 - `/project=archive [编号或目录]` 归档项目。
 - `/mark-project` 和 `/mark-chat` 手动修正项目/普通对话识别。
 
-## 12. 开源项目对比：Lark2Agent、OpenClaw、Hermes
+## 12. 开源项目对比：Tide、OpenClaw、Hermes
 
-| 维度 | Lark2Agent bridge | OpenClaw | Hermes Agent |
+| 维度 | Tide bridge | OpenClaw | Hermes Agent |
 | --- | --- | --- | --- |
 | 核心定位 | Lark 到 Agent CLI 的本地桥接和远程操作台 | 自托管、多渠道 AI agent 网关 | 自改进、带记忆和技能系统的 agent runtime |
 | 主要入口 | Lark 群聊、Lark 卡片、文本指令 | 多个聊天渠道、Web 控制台、移动节点 | CLI/TUI、多平台消息网关、技能和记忆系统 |
@@ -233,7 +233,7 @@ Lark2Agent bridge 是一个本地运行的 Lark WebSocket 客户端：
 
 结论：
 
-- Lark2Agent bridge 的差异化不在“最大最全的 agent 平台”，而在“最短路径把 Agent CLI 变成 Lark 里的工程执行助手”。
+- Tide bridge 的差异化不在“最大最全的 agent 平台”，而在“最短路径把 Agent CLI 变成 Lark 里的工程执行助手”。
 - OpenClaw 更像多渠道 agent 网关。
 - Hermes 更像自带学习、技能和记忆闭环的完整 agent runtime。
 - 当前项目应继续聚焦 Lark 协作入口、Agent 工程任务、卡片状态、审批和并行计划。
@@ -242,7 +242,7 @@ PPT 中建议这样讲差异：
 
 - OpenClaw 解决的是“一个 agent 接多个消息渠道”的问题。
 - Hermes 解决的是“agent 长期学习、记忆、技能沉淀”的问题。
-- Lark2Agent 解决的是“让 Agent CLI 可以在 Lark 里远程执行、跟踪、审批”的问题。
+- Tide 解决的是“让 Agent CLI 可以在 Lark 里远程执行、跟踪、审批”的问题。
 
 ## 13. 适合强调的卖点
 
@@ -293,7 +293,7 @@ PPT 中建议这样讲差异：
 
 建议控制在 12 到 14 页：
 
-1. 标题页：Lark2Agent Bridge。
+1. 标题页：Tide Bridge。
 2. 项目想法：让 Lark 成为多 Agent 的远程工程入口。
 3. 问题背景：本地执行与协作入口割裂。
 4. 产品定位：不是通用 agent 平台，而是 Agent CLI 的 Lark 操作台。
@@ -303,7 +303,7 @@ PPT 中建议这样讲差异：
 8. Plan 并行：任务拆分、worktree、分支、提交审批。
 9. 审批与安全：Agent CLI sandbox + Lark 卡片审批。
 10. 日报和状态：总指令数、审批、失败、更新、修复。
-11. 开源项目对比：Lark2Agent vs OpenClaw vs Hermes。
+11. 开源项目对比：Tide vs OpenClaw vs Hermes。
 12. 当前边界：持久化、历史统计、合并清理、多用户部署。
 13. 后续规划：短期修复、中期增强、长期产品化。
 14. 结论：做窄，但把 Lark + Agent CLI 的工程流打通。

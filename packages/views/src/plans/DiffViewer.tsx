@@ -2,8 +2,8 @@
 
 import { useMemo, useState } from "react";
 import dynamic from "next/dynamic";
-import { usePlanTasks } from "@lark2codex/core";
-import { useTaskQuery } from "@lark2codex/core";
+import { usePlanTasks } from "@tide/core";
+import { useTaskQuery } from "@tide/core";
 
 const MonacoDiffEditor = dynamic(
   () => import("@monaco-editor/react").then((m) => m.DiffEditor),

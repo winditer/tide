@@ -2,9 +2,9 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Button } from "@lark2codex/ui";
-import { useWorkflows } from "@lark2codex/core";
-import { WorkflowList, WorkflowCreateForm } from "@lark2codex/views";
+import { Button } from "@tide/ui";
+import { useWorkflows } from "@tide/core";
+import { WorkflowList, WorkflowCreateForm } from "@tide/views";
 
 export default function WorkflowsPage() {
   const router = useRouter();

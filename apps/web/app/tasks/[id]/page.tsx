@@ -7,13 +7,13 @@ import {
   Badge,
   Card,
   CardContent,
-} from "@lark2codex/ui";
+} from "@tide/ui";
 import {
   useTaskQuery,
   useStopTaskMutation,
   useRetryTaskMutation,
-} from "@lark2codex/core";
-import { ApprovalPanel } from "@lark2codex/views";
+} from "@tide/core";
+import { ApprovalPanel } from "@tide/views";
 
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   queued: "secondary",

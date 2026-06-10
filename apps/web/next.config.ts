@@ -2,7 +2,7 @@ import type { NextConfig } from "next";
 import path from "path";
 
 const nextConfig: NextConfig = {
-  transpilePackages: ["@lark2codex/core", "@lark2codex/ui", "@lark2codex/views"],
+  transpilePackages: ["@tide/core", "@tide/ui", "@tide/views"],
   outputFileTracingRoot: path.join(__dirname, "../.."),
 };
 

@@ -19,7 +19,7 @@ from sqlalchemy import text
 from backend.db.engine import async_session_factory
 from backend.services.event_emitter import event_emitter
 
-logger = logging.getLogger("lark2agent.approval_service")
+logger = logging.getLogger("tide.approval_service")
 
 
 def _now_iso() -> str:

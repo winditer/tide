@@ -1,9 +1,9 @@
 "use client";
 
-import { AgentPanel } from "@lark2codex/views/dashboard/AgentPanel";
-import { QuickInput } from "@lark2codex/views/dashboard/QuickInput";
-import { RecentTasks } from "@lark2codex/views/dashboard/RecentTasks";
-import { StatCards } from "@lark2codex/views/dashboard/StatCards";
+import { AgentPanel } from "@tide/views/dashboard/AgentPanel";
+import { QuickInput } from "@tide/views/dashboard/QuickInput";
+import { RecentTasks } from "@tide/views/dashboard/RecentTasks";
+import { StatCards } from "@tide/views/dashboard/StatCards";
 
 export default function DashboardPage() {
   return (

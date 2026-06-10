@@ -30,7 +30,7 @@ from backend.services.card_builder import build_task_card
 from backend.services.event_emitter import EventTypes
 from backend.services.ws_hub import ws_hub
 
-logger = logging.getLogger("lark2agent.lark_bridge")
+logger = logging.getLogger("tide.lark_bridge")
 
 
 class LarkBridge:
@@ -85,7 +85,7 @@ class LarkBridge:
         return self._client
 
     def register_message_id(self, task_id: str, message_id: str) -> None:
-        """外部注入 task_id → message_id 映射（lark2agent_ws.py 调用）。"""
+        """外部注入 task_id → message_id 映射（tide_ws.py 调用）。"""
         if task_id and message_id:
             self._task_message_ids[task_id] = message_id
 
@@ -378,7 +378,7 @@ class LarkBridge:
     # ── Lark → Web ───────────────────────────────────────
 
     async def on_lark_task_created(self, task_data: dict) -> None:
-        """lark2agent_ws.py 创建任务后调用，广播到 WebSocket。"""
+        """tide_ws.py 创建任务后调用，广播到 WebSocket。"""
         task_id = task_data.get("task_id") or task_data.get("id") or ""
         workspace_id = task_data.get("workspace_id") or "default"
         event = {
@@ -397,7 +397,7 @@ class LarkBridge:
             logger.warning("lark_bridge.on_lark_task_created failed err=%s", exc)
 
     async def on_lark_task_updated(self, task_id: str, updates: dict) -> None:
-        """lark2agent_ws.py 任务状态变更后调用，广播到 WebSocket。"""
+        """tide_ws.py 任务状态变更后调用，广播到 WebSocket。"""
         event = {
             "type": EventTypes.TASK_STATUS_CHANGED,
             "task_id": task_id,
@@ -449,7 +449,7 @@ class LarkBridge:
             return None
 
 
-# ── 模块级辅助：response 解析（参考 lark2agent_ws.py） ──────
+# ── 模块级辅助：response 解析（参考 tide_ws.py） ──────
 
 def _response_ok(resp: Any) -> bool:
     success = getattr(resp, "success", None)

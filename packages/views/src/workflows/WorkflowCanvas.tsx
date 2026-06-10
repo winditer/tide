@@ -28,14 +28,14 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
-import { Button } from "@lark2codex/ui";
+import { Button } from "@tide/ui";
 import type {
   WorkflowDefinition,
   WorkflowNode,
   WorkflowEdge,
   WorkflowNodeType,
   WorkflowNodeRun,
-} from "@lark2codex/core";
+} from "@tide/core";
 
 import { workflowNodeTypes } from "./nodes";
 import { NodePalette } from "./NodePalette";

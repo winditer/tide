@@ -1,4 +1,4 @@
-# Lark2Agent 后端
+# Tide 后端
 
 FastAPI 后端，SQLite 数据库，WebSocket 实时推送。
 
@@ -6,7 +6,7 @@ FastAPI 后端，SQLite 数据库，WebSocket 实时推送。
 
 ```bash
 pip install -r backend/requirements.txt
-cd /path/to/lark2codex && uvicorn backend.main:app --reload --port 8000
+cd /path/to/tide && uvicorn backend.main:app --reload --port 8000
 ```
 
 启动后访问：
@@ -147,7 +147,7 @@ cd /path/to/lark2codex && uvicorn backend.main:app --reload --port 8000
 | `workflow_runs` | 工作流运行实例 |
 | `workflow_node_runs` | 工作流节点执行记录 |
 
-数据库文件：`lark2agent.db`（SQLite WAL 模式）
+数据库文件：`tide.db`（SQLite WAL 模式）
 
 初始化 SQL：`backend/db/init.sql`
 

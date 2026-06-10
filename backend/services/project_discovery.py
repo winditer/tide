@@ -1,6 +1,6 @@
 """项目发现服务 - 通过扫描本地 Agent 会话文件发现项目
 
-复用 lark2agent_ws.py 的发现逻辑：
+复用 tide_ws.py 的发现逻辑：
 1. 扫描 ~/.codex/sessions, ~/.claude/projects, ~/.qoder/projects 下的 .jsonl
 2. 仅 peek 文件首部以获取 cwd 元数据
 3. 通过 find_project_root（查找 PROJECT_MARKERS）定位项目根
@@ -23,7 +23,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-# Agent 会话目录（保持与 lark2agent_ws.py 一致的环境变量约定）
+# Agent 会话目录（保持与 tide_ws.py 一致的环境变量约定）
 CODEX_HOME = Path(os.getenv("CODEX_HOME", Path.home() / ".codex")).expanduser()
 CODEX_SESSIONS_DIR = Path(
     os.getenv("CODEX_SESSIONS_DIR", CODEX_HOME / "sessions")
@@ -64,18 +64,19 @@ GENERIC_DIRS = {
 
 # 工作树目录片段：Plan 执行时会在该目录下创建 git worktree，
 # 这些目录不应被识别为独立项目。
-WORKTREE_PATH_FRAGMENT = ".lark-codex/worktrees"
+# 兼容旧命名 .lark-codex/worktrees 与新命名 .tide/worktrees。
+WORKTREE_PATH_FRAGMENTS = (".tide/worktrees", ".lark-codex/worktrees")
 
 
 def is_worktree_path(path) -> bool:
-    """判断给定路径是否位于 .lark-codex/worktrees/ 下。"""
+    """判断给定路径是否位于 worktrees 目录下（兼容 .tide 和 .lark-codex 命名）。"""
     if not path:
         return False
     try:
-        s = str(path)
+        s = str(path).replace("\\", "/")
     except Exception:
         return False
-    return WORKTREE_PATH_FRAGMENT in s.replace("\\", "/")
+    return any(fragment in s for fragment in WORKTREE_PATH_FRAGMENTS)
 
 
 @dataclass
@@ -247,7 +248,7 @@ def _scan_qoder_sessions() -> List[SessionRecord]:
 def _aggregate(records: List[SessionRecord]) -> List[DiscoveredProject]:
     projects: Dict[str, DiscoveredProject] = {}
     for rec in records:
-        # 排除位于 .lark-codex/worktrees/ 下的会话（Plan 执行的临时工作树）
+        # 排除位于 .tide/worktrees/ 下的会话（Plan 执行的临时工作树）
         if is_worktree_path(rec.cwd):
             continue
         root = find_project_root(rec.cwd)

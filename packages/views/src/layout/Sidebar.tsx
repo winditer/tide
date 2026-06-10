@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { cn } from "@lark2codex/ui";
+import { cn } from "@tide/ui";
 
 interface NavItem {
   label: string;
@@ -54,7 +54,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         {/* Logo */}
         <div className="flex h-14 items-center gap-2 border-b px-4">
           <span className="text-xl">🤖</span>
-          <span className="text-base font-bold tracking-tight">Lark2Agent</span>
+          <span className="text-base font-bold tracking-tight">Tide</span>
         </div>
 
         {/* Navigation */}

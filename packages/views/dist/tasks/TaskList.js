@@ -1,8 +1,8 @@
 "use client";
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { useRouter } from "next/navigation";
-import { Badge } from "@lark2codex/ui";
-import { Button } from "@lark2codex/ui";
+import { Badge } from "@tide/ui";
+import { Button } from "@tide/ui";
 const STATUS_VARIANT = {
     queued: "secondary",
     running: "default",

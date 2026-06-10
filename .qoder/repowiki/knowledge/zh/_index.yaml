@@ -6,21 +6,21 @@ exported_at: "2026-06-09T12:54:01Z"
 modules:
     "":
         dir_name: Lark 多智能体桥接与任务编排引擎
-        title: Lark 多智能体桥接与任务编排引擎
+        title: Tide 多智能体桥接与任务编排引擎
         scope:
             - .gitignore
             - PPT_OUTLINE.md
             - README.md
-            - lark2agent_ws.py
+            - tide_ws.py
             - ppt_outline_deck.html
             - .env
             - .env.example
-            - .lark2agent_state.json
-            - .lark_codex_state.json
+            - .tide_state.json
+            - .tide_state.json
             - DEVELOPMENT.md
-            - lark2agent.log
-            - lark2agent_ws.log
-            - lark_codex_ws.log
+            - tide.log
+            - tide_ws.log
+            - tide_ws.log
             - nohup.out
             - output.log
         source_files: []

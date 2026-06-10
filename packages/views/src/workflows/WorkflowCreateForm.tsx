@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { Button, Input } from "@lark2codex/ui";
-import { useCreateWorkflow } from "@lark2codex/core";
-import type { WorkflowDefinition } from "@lark2codex/core";
+import { Button, Input } from "@tide/ui";
+import { useCreateWorkflow } from "@tide/core";
+import type { WorkflowDefinition } from "@tide/core";
 
 const STARTER_DEFINITION: WorkflowDefinition = {
   nodes: [

@@ -1,8 +1,8 @@
 "use client";
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { useState, useEffect } from "react";
-import { Button, Input, Select } from "@lark2codex/ui";
-import { useCreateScheduleMutation, useUpdateScheduleMutation, } from "@lark2codex/core";
+import { Button, Input, Select } from "@tide/ui";
+import { useCreateScheduleMutation, useUpdateScheduleMutation, } from "@tide/core";
 const TASK_TYPE_OPTIONS = [
     { label: "任务 (Task)", value: "task" },
     { label: "计划 (Plan)", value: "plan" },

@@ -2,8 +2,8 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { useMemo, useState } from "react";
 import dynamic from "next/dynamic";
-import { usePlanTasks } from "@lark2codex/core";
-import { useTaskQuery } from "@lark2codex/core";
+import { usePlanTasks } from "@tide/core";
+import { useTaskQuery } from "@tide/core";
 const MonacoDiffEditor = dynamic(() => import("@monaco-editor/react").then((m) => m.DiffEditor), { ssr: false, loading: () => _jsx(DiffSkeleton, {}) });
 function DiffSkeleton() {
     return (_jsx("div", { className: "flex h-full items-center justify-center font-mono text-xs tracking-widest text-zinc-500", children: "\u25D0 LOADING MONACO\u2026" }));

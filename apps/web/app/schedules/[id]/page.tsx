@@ -2,20 +2,20 @@
 
 import { use } from "react";
 import { useRouter } from "next/navigation";
-import { Badge, Button } from "@lark2codex/ui";
+import { Badge, Button } from "@tide/ui";
 import {
   Card,
   CardContent,
   CardHeader,
   CardTitle,
-} from "@lark2codex/ui";
+} from "@tide/ui";
 import {
   useScheduleQuery,
   useScheduleRunsQuery,
   useToggleScheduleMutation,
   useTriggerScheduleMutation,
-} from "@lark2codex/core";
-import { ScheduleForm, ScheduleRunHistory } from "@lark2codex/views";
+} from "@tide/core";
+import { ScheduleForm, ScheduleRunHistory } from "@tide/views";
 
 function formatTime(iso: string | null) {
   if (!iso) return "—";

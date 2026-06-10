@@ -1,7 +1,7 @@
 "use client";
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { useRouter } from "next/navigation";
-import { Button } from "@lark2codex/ui";
+import { Button } from "@tide/ui";
 const STATUS_TONE = {
     active: { dot: "bg-amber-500", label: "ACTIVE" },
     running: { dot: "bg-amber-500", label: "RUNNING" },

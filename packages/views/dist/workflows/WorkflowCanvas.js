@@ -14,7 +14,7 @@ import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { useCallback, useEffect, useMemo, useRef, useState, } from "react";
 import { ReactFlow, ReactFlowProvider, useReactFlow, Background, BackgroundVariant, Controls, MiniMap, addEdge, applyEdgeChanges, applyNodeChanges, } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Button } from "@lark2codex/ui";
+import { Button } from "@tide/ui";
 import { workflowNodeTypes } from "./nodes";
 import { NodePalette } from "./NodePalette";
 import { PropertyPanel } from "./PropertyPanel";

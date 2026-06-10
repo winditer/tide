@@ -1,16 +1,16 @@
 "use client";
 
 import { useState } from "react";
-import { Button } from "@lark2codex/ui";
+import { Button } from "@tide/ui";
 import {
   Card,
   CardContent,
   CardHeader,
   CardTitle,
-} from "@lark2codex/ui";
-import { useSchedulesQuery } from "@lark2codex/core";
-import { ScheduleList, ScheduleForm } from "@lark2codex/views";
-import type { Schedule } from "@lark2codex/core";
+} from "@tide/ui";
+import { useSchedulesQuery } from "@tide/core";
+import { ScheduleList, ScheduleForm } from "@tide/views";
+import type { Schedule } from "@tide/core";
 
 export default function SchedulesPage() {
   const [showDialog, setShowDialog] = useState(false);

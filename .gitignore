@@ -1,12 +1,9 @@
 .env
-.lark2agent_state.json
-.lark2agent_state.tmp
-.lark2agent_archived.json
-.lark2agent_archived.json.tmp
-.lark2agent/
-.lark_codex_state.json
-.lark_codex_state.tmp
-.lark-codex/
+.tide_state.json
+.tide_state.tmp
+.tide_archived.json
+.tide_archived.json.tmp
+.tide/
 __pycache__/
 *.py[cod]
 *.tsbuildinfo

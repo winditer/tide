@@ -1,4 +1,4 @@
-import type { PlanDAGNodeData } from "@lark2codex/core";
+import type { PlanDAGNodeData } from "@tide/core";
 interface PlanDetailPanelProps {
     taskId: string | null;
     nodeData?: PlanDAGNodeData | null;

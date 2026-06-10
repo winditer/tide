@@ -14,7 +14,7 @@ from sqlalchemy import text
 from backend.db.engine import async_session_factory
 from backend.services.conversation_service import conversation_service
 
-DEFAULT_CWD = str(Path.home() / "Documents" / "lark2codex")
+DEFAULT_CWD = str(Path.home() / "Documents" / "tide")
 
 
 @dataclass

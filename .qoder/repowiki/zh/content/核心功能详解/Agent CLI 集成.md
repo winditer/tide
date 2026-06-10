@@ -2,7 +2,7 @@
 
 <cite>
 **本文档引用的文件**
-- [lark2agent_ws.py](file://lark2agent_ws.py)
+- [tide_ws.py](file://tide_ws.py)
 - [README.md](file://README.md)
 </cite>
 
@@ -19,7 +19,7 @@
 
 ## 简介
 
-Lark2Agent 是一个将飞书/Lark 群聊消息转换为多种 AI Agent CLI 任务的桥接系统。本文档专注于 Agent CLI 集成功能，深入解释 Codex CLI、Claude Code CLI、Qoder CLI 的集成方式和适配器模式的实现原理。
+Tide 是一个将飞书/Lark 群聊消息转换为多种 AI Agent CLI 任务的桥接系统。本文档专注于 Agent CLI 集成功能，深入解释 Codex CLI、Claude Code CLI、Qoder CLI 的集成方式和适配器模式的实现原理。
 
 该系统通过适配器模式实现了对不同 Agent CLI 的统一抽象，使得开发者可以轻松添加新的 Agent 集成而无需修改核心业务逻辑。每个 Agent 都有自己的适配器实现，负责命令构建、事件解析和会话管理等特定功能。
 
@@ -30,7 +30,7 @@ Lark2Agent 是一个将飞书/Lark 群聊消息转换为多种 AI Agent CLI 任�
 ```mermaid
 graph TB
 subgraph "核心模块"
-A[lark2agent_ws.py<br/>主程序入口]
+A[tide_ws.py<br/>主程序入口]
 B[AgentAdapter<br/>抽象基类]
 C[CodexAdapter<br/>Codex 适配器]
 D[ClaudeAdapter<br/>Claude 适配器]
@@ -59,10 +59,10 @@ A --> K
 ```
 
 **图表来源**
-- [lark2agent_ws.py:626-853](file://lark2agent_ws.py#L626-L853)
+- [tide_ws.py:626-853](file://tide_ws.py#L626-L853)
 
 **章节来源**
-- [lark2agent_ws.py:1-50](file://lark2agent_ws.py#L1-L50)
+- [tide_ws.py:1-50](file://tide_ws.py#L1-L50)
 - [README.md:1-50](file://README.md#L1-L50)
 
 ## 核心组件
@@ -106,7 +106,7 @@ AgentAdapter <|-- QoderAdapter
 ```
 
 **图表来源**
-- [lark2agent_ws.py:626-801](file://lark2agent_ws.py#L626-L801)
+- [tide_ws.py:626-801](file://tide_ws.py#L626-L801)
 
 ### 适配器注册与管理
 
@@ -124,10 +124,10 @@ G --> |不存在| I[回退到 codex]
 ```
 
 **图表来源**
-- [lark2agent_ws.py:849-853](file://lark2agent_ws.py#L849-L853)
+- [tide_ws.py:849-853](file://tide_ws.py#L849-L853)
 
 **章节来源**
-- [lark2agent_ws.py:626-853](file://lark2agent_ws.py#L626-L853)
+- [tide_ws.py:626-853](file://tide_ws.py#L626-L853)
 
 ## 架构概览
 
@@ -151,8 +151,8 @@ Adapter->>Handler : 返回审批状态
 ```
 
 **图表来源**
-- [lark2agent_ws.py:4029-4091](file://lark2agent_ws.py#L4029-L4091)
-- [lark2agent_ws.py:5427-5447](file://lark2agent_ws.py#L5427-L5447)
+- [tide_ws.py:4029-4091](file://tide_ws.py#L4029-L4091)
+- [tide_ws.py:5427-5447](file://tide_ws.py#L5427-L5447)
 
 ## 详细组件分析
 
@@ -175,7 +175,7 @@ G --> H
 ```
 
 **图表来源**
-- [lark2agent_ws.py:655-672](file://lark2agent_ws.py#L655-L672)
+- [tide_ws.py:655-672](file://tide_ws.py#L655-L672)
 
 #### 事件解析流程
 
@@ -198,11 +198,11 @@ I --> J
 ```
 
 **图表来源**
-- [lark2agent_ws.py:5207-5254](file://lark2agent_ws.py#L5207-L5254)
+- [tide_ws.py:5207-5254](file://tide_ws.py#L5207-L5254)
 
 **章节来源**
-- [lark2agent_ws.py:648-681](file://lark2agent_ws.py#L648-L681)
-- [lark2agent_ws.py:5207-5254](file://lark2agent_ws.py#L5207-L5254)
+- [tide_ws.py:648-681](file://tide_ws.py#L648-L681)
+- [tide_ws.py:5207-5254](file://tide_ws.py#L5207-L5254)
 
 ### ClaudeAdapter 实现
 
@@ -230,14 +230,14 @@ J --> K
 ```
 
 **图表来源**
-- [lark2agent_ws.py:709-726](file://lark2agent_ws.py#L709-L726)
+- [tide_ws.py:709-726](file://tide_ws.py#L709-L726)
 
 #### 事件解析机制
 
 ClaudeAdapter 的事件解析支持多种 Claude 特有的事件类型：
 
 **章节来源**
-- [lark2agent_ws.py:702-769](file://lark2agent_ws.py#L702-L769)
+- [tide_ws.py:702-769](file://tide_ws.py#L702-L769)
 
 ### QoderAdapter 实现
 
@@ -267,15 +267,15 @@ N --> O
 ```
 
 **图表来源**
-- [lark2agent_ws.py:778-795](file://lark2agent_ws.py#L778-L795)
+- [tide_ws.py:778-795](file://tide_ws.py#L778-L795)
 
 #### Quest 模式的特殊处理
 
 QoderAdapter 实现了独特的 Quest 模式，支持暂停、继续和终止操作：
 
 **章节来源**
-- [lark2agent_ws.py:771-801](file://lark2agent_ws.py#L771-L801)
-- [lark2agent_ws.py:501-511](file://lark2agent_ws.py#L501-L511)
+- [tide_ws.py:771-801](file://tide_ws.py#L771-L801)
+- [tide_ws.py:501-511](file://tide_ws.py#L501-L511)
 
 ### 事件解析机制
 
@@ -304,10 +304,10 @@ E --> N
 ```
 
 **图表来源**
-- [lark2agent_ws.py:797-846](file://lark2agent_ws.py#L797-L846)
+- [tide_ws.py:797-846](file://tide_ws.py#L797-L846)
 
 **章节来源**
-- [lark2agent_ws.py:797-846](file://lark2agent_ws.py#L797-L846)
+- [tide_ws.py:797-846](file://tide_ws.py#L797-L846)
 
 ## 依赖关系分析
 
@@ -354,12 +354,12 @@ M --> N
 ```
 
 **图表来源**
-- [lark2agent_ws.py:1-50](file://lark2agent_ws.py#L1-L50)
-- [lark2agent_ws.py:849-853](file://lark2agent_ws.py#L849-L853)
+- [tide_ws.py:1-50](file://tide_ws.py#L1-L50)
+- [tide_ws.py:849-853](file://tide_ws.py#L849-L853)
 
 **章节来源**
-- [lark2agent_ws.py:1-50](file://lark2agent_ws.py#L1-L50)
-- [lark2agent_ws.py:849-853](file://lark2agent_ws.py#L849-L853)
+- [tide_ws.py:1-50](file://tide_ws.py#L1-L50)
+- [tide_ws.py:849-853](file://tide_ws.py#L849-L853)
 
 ## 性能考虑
 
@@ -415,16 +415,16 @@ M --> N
 3. 确认工作目录的访问权限
 
 **章节来源**
-- [lark2agent_ws.py:5353-5378](file://lark2agent_ws.py#L5353-L5378)
-- [lark2agent_ws.py:5427-5447](file://lark2agent_ws.py#L5427-L5447)
+- [tide_ws.py:5353-5378](file://tide_ws.py#L5353-L5378)
+- [tide_ws.py:5427-5447](file://tide_ws.py#L5427-L5447)
 
 ## 结论
 
-Lark2Agent 的 Agent CLI 集成通过适配器模式实现了高度模块化的架构设计。该设计的主要优势包括：
+Tide 的 Agent CLI 集成通过适配器模式实现了高度模块化的架构设计。该设计的主要优势包括：
 
 1. **统一抽象**：AgentAdapter 基类提供了清晰的接口规范，使得不同 Agent 的集成变得标准化
 2. **灵活扩展**：新增 Agent 只需实现必要的抽象方法，无需修改核心逻辑
 3. **事件驱动**：基于流式 JSON 事件的处理机制，支持实时的状态更新和用户交互
 4. **健壮性**：完善的错误处理和状态管理机制，确保系统的稳定运行
 
-通过这种设计，Lark2Agent 成功地将多种不同的 Agent CLI 集成到统一的平台中，为用户提供了一致的使用体验。同时，模块化的架构也为未来的功能扩展和技术演进奠定了良好的基础。
+通过这种设计，Tide 成功地将多种不同的 Agent CLI 集成到统一的平台中，为用户提供了一致的使用体验。同时，模块化的架构也为未来的功能扩展和技术演进奠定了良好的基础。

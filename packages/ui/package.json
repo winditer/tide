@@ -1,5 +1,5 @@
 {
-  "name": "@lark2codex/ui",
+  "name": "@tide/ui",
   "version": "0.1.0",
   "private": true,
   "main": "./src/index.ts",

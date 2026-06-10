@@ -95,7 +95,7 @@ async def list_chats(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=500),
     show_archived: Optional[bool] = Query(
-        None, description="是否包含已归档会话；缺省读取 LARK2AGENT_SHOW_ARCHIVED"
+        None, description="是否包含已归档会话；缺省读取 TIDE_SHOW_ARCHIVED"
     ),
 ):
     """普通对话列表（不绑定项目），等价于 type=chat 的快捷入口。"""
@@ -139,7 +139,7 @@ async def list_sessions(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=500),
     show_archived: Optional[bool] = Query(
-        None, description="是否包含已归档会话；缺省读取 LARK2AGENT_SHOW_ARCHIVED"
+        None, description="是否包含已归档会话；缺省读取 TIDE_SHOW_ARCHIVED"
     ),
 ):
     """会话列表：DB 优先（按 session_id 聚合），文件扫描补充。支持 type 过滤。"""

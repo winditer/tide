@@ -8,14 +8,14 @@ import {
   type ChangeEvent,
   type DragEvent,
 } from "react";
-import { Button, Input, Select } from "@lark2codex/ui";
+import { Button, Input, Select } from "@tide/ui";
 import {
   fetchSessionsForProject,
   uploadTaskAttachments,
   useCreateTaskMutation,
   useProjects,
   type SessionItem,
-} from "@lark2codex/core";
+} from "@tide/core";
 
 const AGENT_OPTIONS = [
   { label: "Codex", value: "codex" },

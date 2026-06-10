@@ -1,10 +1,11 @@
 "use client";
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { useState, useCallback } from "react";
-import { useProjectBoard, useMoveCard } from "@lark2codex/core";
+import { useProjectBoard, useMoveCard } from "@tide/core";
 import { useQueryClient } from "@tanstack/react-query";
 import { KanbanBoard } from "./KanbanBoard";
 import { KanbanFilters } from "./KanbanFilters";
+import { EmptyState } from "./EmptyState";
 export function ProjectBoard() {
     var _a;
     const [search, setSearch] = useState("");
@@ -50,6 +51,7 @@ export function ProjectBoard() {
         return _jsx("div", { className: "py-8 text-center text-muted-foreground", children: "\u52A0\u8F7D\u4E2D..." });
     }
     const columns = filterColumns((_a = data === null || data === void 0 ? void 0 : data.columns) !== null && _a !== void 0 ? _a : []);
-    return (_jsxs("div", { className: "space-y-4", children: [_jsx(KanbanFilters, { search: search, onSearchChange: setSearch }), _jsx(KanbanBoard, { columns: columns, onDragEnd: handleDragEnd })] }));
+    const totalCards = columns.reduce((sum, c) => sum + c.cards.length, 0);
+    return (_jsxs("div", { className: "space-y-4", children: [_jsx(KanbanFilters, { search: search, onSearchChange: setSearch }), totalCards === 0 ? (_jsx(EmptyState, { message: "\u6682\u65E0\u9879\u76EE", hint: "\u8BF7\u901A\u8FC7 Lark \u53D1\u9001\u4EFB\u52A1\uFF0C\u6216\u5728\u9879\u76EE\u9875\u6DFB\u52A0\u65B0\u7684\u9879\u76EE" })) : (_jsx(KanbanBoard, { columns: columns, onDragEnd: handleDragEnd }))] }));
 }
 //# sourceMappingURL=ProjectBoard.js.map

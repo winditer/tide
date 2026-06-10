@@ -14,7 +14,7 @@ from sqlalchemy import text
 
 from backend.db.engine import async_session_factory
 
-logger = logging.getLogger("lark2agent.conversation_service")
+logger = logging.getLogger("tide.conversation_service")
 
 
 class ConversationService:

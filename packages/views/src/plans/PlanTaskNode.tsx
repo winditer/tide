@@ -2,7 +2,7 @@
 
 import { memo } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import type { PlanDAGNodeData } from "@lark2codex/core";
+import type { PlanDAGNodeData } from "@tide/core";
 
 const STATUS_TONE: Record<
   string,

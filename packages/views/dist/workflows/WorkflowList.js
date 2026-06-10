@@ -2,8 +2,8 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Button, Input } from "@lark2codex/ui";
-import { useDeleteWorkflow } from "@lark2codex/core";
+import { Button, Input } from "@tide/ui";
+import { useDeleteWorkflow } from "@tide/core";
 function formatTime(iso) {
     if (!iso)
         return "—";

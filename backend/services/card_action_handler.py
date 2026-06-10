@@ -1,7 +1,7 @@
 """
 CardActionHandler — Lark 卡片按钮回调分发。
 
-从 lark2agent_ws.py:handle_card_action()（L8089-8353）提取核心业务动作，
+从 tide_ws.py:handle_card_action()（L8089-8353）提取核心业务动作，
 适配新后端 service 层（task_service / plan_service / dashboard 聚合）。
 
 action_value 采用扁平字符串格式，与 backend/services/card_builder.py 中
@@ -54,7 +54,7 @@ from backend.services.plan_service import plan_service
 from backend.services.task_service import task_service
 from backend.services.approval_service import approval_service
 
-logger = logging.getLogger("lark2agent.card_action_handler")
+logger = logging.getLogger("tide.card_action_handler")
 
 # ── action 前缀映射 ────────────────────────────────────────────
 # 顺序：双 ID（plan + task）优先于单 ID，避免 plan_task_stop_ 被

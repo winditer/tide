@@ -1,5 +1,5 @@
 import { type DropResult } from "@hello-pangea/dnd";
-import type { KanbanColumn } from "@lark2codex/core";
+import type { KanbanColumn } from "@tide/core";
 interface KanbanBoardProps {
     columns: KanbanColumn[];
     onDragEnd: (result: DropResult) => void;

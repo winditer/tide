@@ -21,7 +21,7 @@ from backend.services.event_emitter import event_emitter
 from backend.services.plan_executor import plan_executor
 from backend.services.task_service import task_service
 
-logger = logging.getLogger("lark2agent.plan_service")
+logger = logging.getLogger("tide.plan_service")
 
 
 class PlanService:

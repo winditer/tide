@@ -1,4 +1,4 @@
-import type { KanbanColumn } from "@lark2codex/core";
+import type { KanbanColumn } from "@tide/core";
 interface BoardColumnProps {
     column: KanbanColumn;
 }

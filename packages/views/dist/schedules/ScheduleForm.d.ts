@@ -1,4 +1,4 @@
-import type { Schedule } from "@lark2codex/core";
+import type { Schedule } from "@tide/core";
 interface ScheduleFormProps {
     schedule?: Schedule | null;
     onSuccess?: () => void;

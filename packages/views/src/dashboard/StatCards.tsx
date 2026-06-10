@@ -1,7 +1,7 @@
 "use client";
 
-import { Card, CardContent } from "@lark2codex/ui";
-import { useDashboardStats } from "@lark2codex/core";
+import { Card, CardContent } from "@tide/ui";
+import { useDashboardStats } from "@tide/core";
 
 const STATS = [
   { key: "running" as const, label: "运行中", icon: "⚡", color: "text-blue-600" },

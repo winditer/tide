@@ -5,7 +5,7 @@ import type {
   WorkflowDefinition,
   WorkflowNodeRun,
   WorkflowRun,
-} from "@lark2codex/core";
+} from "@tide/core";
 
 interface WorkflowRunViewProps {
   definition: WorkflowDefinition;

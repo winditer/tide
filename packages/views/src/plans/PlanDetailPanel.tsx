@@ -1,14 +1,14 @@
 "use client";
 
-import { Button } from "@lark2codex/ui";
+import { Button } from "@tide/ui";
 import {
   useTaskQuery,
   useStopTaskMutation,
   useRetryTaskMutation,
   useApproveTaskMutation,
   useRejectTaskMutation,
-} from "@lark2codex/core";
-import type { PlanDAGNodeData } from "@lark2codex/core";
+} from "@tide/core";
+import type { PlanDAGNodeData } from "@tide/core";
 
 const STATUS_LABEL: Record<string, string> = {
   queued: "排队中",

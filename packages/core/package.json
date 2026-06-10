@@ -1,5 +1,5 @@
 {
-  "name": "@lark2codex/core",
+  "name": "@tide/core",
   "version": "0.1.0",
   "private": true,
   "main": "./src/index.ts",

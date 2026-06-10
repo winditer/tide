@@ -1,4 +1,4 @@
-import type { Plan } from "@lark2codex/core";
+import type { Plan } from "@tide/core";
 interface PlanListProps {
     plans: Plan[];
     onCreate?: () => void;

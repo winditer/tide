@@ -2,9 +2,9 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Button, Input } from "@lark2codex/ui";
-import { useDeleteWorkflow } from "@lark2codex/core";
-import type { Workflow } from "@lark2codex/core";
+import { Button, Input } from "@tide/ui";
+import { useDeleteWorkflow } from "@tide/core";
+import type { Workflow } from "@tide/core";
 
 function formatTime(iso: string | null) {
   if (!iso) return "—";

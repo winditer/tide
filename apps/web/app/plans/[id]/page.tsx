@@ -2,19 +2,19 @@
 
 import { use, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Button } from "@lark2codex/ui";
+import { Button } from "@tide/ui";
 import {
   usePlan,
   usePlanTasks,
   useStopPlan,
   type PlanDAGNodeData,
-} from "@lark2codex/core";
+} from "@tide/core";
 import {
   PlanDAGView,
   PlanDetailPanel,
   GanttTimeline,
   DiffViewer,
-} from "@lark2codex/views";
+} from "@tide/views";
 
 type Tab = "dag" | "gantt" | "diff";
 

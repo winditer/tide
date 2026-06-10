@@ -1,16 +1,16 @@
-# Lark2Codex
+# Tide
 
 > Lark 多智能体桥接 + Web 工作台 — 把 Codex / Claude Code / Qoder 等 Agent CLI 统一在一个 FastAPI 后端中调度，前端 Web 工作台与 Lark 双通道并存。
 
 完整架构说明见 [ARCHITECTURE.md](ARCHITECTURE.md)；开发计划见 [DEVELOPMENT.md](DEVELOPMENT.md)；演进路线见 [ROADMAP.md](ROADMAP.md)。
 
-> **重要变更（v2.0）**：原单文件脚本 `lark2agent_ws.py` 已废弃，全部能力迁移到 `backend/` 统一后端。详见下文「迁移说明」。
+> **重要变更（v2.0）**：原单文件脚本 `tide_ws.py` 已废弃，全部能力迁移到 `backend/` 统一后端。详见下文「迁移说明」。
 
 ---
 
 ## 项目简介
 
-Lark2Codex 由两个一体化部分组成：
+Tide 由两个一体化部分组成：
 
 - **FastAPI 统一后端（单进程）** — 提供 REST + WebSocket、Agent 执行器、Plan 并行调度、定时任务、工作流引擎、Lark 监听器和 SQLite 状态存储。
 - **Next.js Web 工作台** — Dashboard、任务、Plan DAG、看板、定时任务和工作流可视化编辑器。
@@ -181,21 +181,21 @@ Plan 任务通过 `/plan` 前缀触发，系统会自动将任务拆分为多个
 | --- | --- | --- |
 | `PLAN_MAX_PARALLEL` | `3` | Plan 并行执行的最大子任务数。 |
 | `PLAN_USE_WORKTREES` | `1` | 是否为 Plan 子任务启用 Git worktree 隔离。 |
-| `PLAN_WORKTREE_ROOT` | 空 | 自定义 worktree 根目录；为空时使用 `.lark2agent/worktrees`。 |
+| `PLAN_WORKTREE_ROOT` | 空 | 自定义 worktree 根目录；为空时使用 `.tide/worktrees`。 |
 | `PLAN_TEST_COMMAND` | `git diff --check` | Plan 子任务完成后、进入提交审批前的检查命令。 |
 | `MAX_RUNNING_TASKS` | `6` | 全局同时运行的 Agent 子进程上限；≤0 不限制。 |
-| `LARK2AGENT_STATE_FILE` | `.lark2agent_state.json` | 旧脚本状态文件（迁移期保留兼容）。 |
+| `TIDE_STATE_FILE` | `.tide_state.json` | 旧脚本状态文件（迁移期保留兼容）。 |
 | `LOG_LEVEL` | `INFO` | 后端日志级别。 |
 | `LOG_MESSAGE_CONTENT` | `0` | 是否在日志中记录消息正文/Agent prompt 片段。 |
 
-> SQLite 数据库文件位于 `lark2agent.db`（首次启动自动初始化）。
+> SQLite 数据库文件位于 `tide.db`（首次启动自动初始化）。
 
 ---
 
 ## 项目结构
 
 ```
-lark2codex/
+tide/
 ├── backend/                FastAPI 统一后端
 │   ├── main.py             应用入口（lifespan 注册 init_db / scheduler / lark_listener）
 │   ├── api/                REST + WebSocket 路由
@@ -209,7 +209,7 @@ lark2codex/
 │   ├── core/               Headless 逻辑（zustand store / react-query / api client）
 │   ├── ui/                 shadcn/ui 原子组件
 │   └── views/              业务页面组件
-├── lark2agent_ws.py        ⚠️ DEPRECATED — 旧单文件脚本，仅作迁移参考
+├── tide_ws.py              ⚠️ DEPRECATED — 旧单文件脚本，仅作迁移参考
 ├── ARCHITECTURE.md         架构文档
 ├── DEVELOPMENT.md          开发指南
 └── ROADMAP.md              路线图
@@ -244,7 +244,7 @@ lark2codex/
 - `/qoder=quest <指令>` — Qoder Quest 模式，支持暂停 / 继续 / 终止。
 - `/plan ...` — 并行 Plan 模式，支持阶段和依赖（`depends:1,2`）。
 - `/approve <id>` / `/reject <id>` — 审批；`/stop` 停止当前任务；`/cancel <id>` 取消排队任务。
-- 图片/文件附件：自动下载到 `.lark2agent/attachments`，下一条普通指令会自动带上。
+- 图片/文件附件：自动下载到 `.tide/attachments`，下一条普通指令会自动带上。
 - 中文别名：`看板`、`项目`、`对话`、`状态`、`日报`、`帮助`、`停止` 等可省略 `/` 前缀。
 
 完整指令清单与卡片交互逻辑保留与原 Lark Bridge 一致。
@@ -255,19 +255,19 @@ lark2codex/
 
 | 主题 | v1（已废弃） | v2（当前） |
 |------|------------|------------|
-| 入口 | `python3 lark2agent_ws.py` | `uvicorn backend.main:app` |
-| 状态 | `.lark2agent_state.json` | SQLite (`lark2agent.db`) |
+| 入口 | `python3 tide_ws.py` | `uvicorn backend.main:app` |
+| 状态 | `.tide_state.json` | SQLite (`tide.db`) |
 | Lark | 必需 | **可选**（缺凭据则 Web-only） |
 | 前端 | 无 | Next.js 16 + React 19 工作台 |
 | 部署 | 单脚本 | 单进程 FastAPI（可叠加 Web 容器） |
 
-`lark2agent_ws.py` 顶部已加 `DEPRECATED` 标记，保留仅作为迁移参考；后续版本将删除。
+`tide_ws.py` 顶部已加 `DEPRECATED` 标记，保留仅作为迁移参考；后续版本将删除。
 
 ## 测试
 
 ```bash
 # 后端单元测试
-cd /Users/haifeng/Documents/lark2codex
+cd /Users/haifeng/Documents/tide
 python -m pytest backend/tests/ -v
 
 # 前端 lint / typecheck

@@ -1,8 +1,8 @@
 "use client";
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import Link from "next/link";
-import { Badge, Card, CardContent, CardHeader, CardTitle } from "@lark2codex/ui";
-import { useRecentTasks } from "@lark2codex/core";
+import { Badge, Card, CardContent, CardHeader, CardTitle } from "@tide/ui";
+import { useRecentTasks } from "@tide/core";
 const STATUS_VARIANT = {
     queued: "secondary",
     running: "default",

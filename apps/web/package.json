@@ -1,5 +1,5 @@
 {
-  "name": "@lark2codex/web",
+  "name": "@tide/web",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -10,9 +10,9 @@
   },
   "dependencies": {
     "@hello-pangea/dnd": "^18.0.1",
-    "@lark2codex/core": "*",
-    "@lark2codex/ui": "*",
-    "@lark2codex/views": "*",
+    "@tide/core": "*",
+    "@tide/ui": "*",
+    "@tide/views": "*",
     "@monaco-editor/react": "^4.7.0",
     "@tanstack/react-query": "^5.62.0",
     "@xyflow/react": "^12.11.0",

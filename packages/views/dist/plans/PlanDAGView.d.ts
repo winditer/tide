@@ -1,5 +1,5 @@
 import "@xyflow/react/dist/style.css";
-import type { PlanDAGNode } from "@lark2codex/core";
+import type { PlanDAGNode } from "@tide/core";
 interface PlanDAGViewProps {
     planId: string;
     onNodeClick?: (nodeId: string, data: PlanDAGNode["data"]) => void;

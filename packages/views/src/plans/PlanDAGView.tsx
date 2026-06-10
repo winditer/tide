@@ -15,8 +15,8 @@ import {
 import "@xyflow/react/dist/style.css";
 import ELK, { type ElkNode } from "elkjs/lib/elk.bundled.js";
 
-import { usePlanDAG } from "@lark2codex/core";
-import type { PlanDAGNode, PlanDAGEdge } from "@lark2codex/core";
+import { usePlanDAG } from "@tide/core";
+import type { PlanDAGNode, PlanDAGEdge } from "@tide/core";
 import { PlanTaskNode } from "./PlanTaskNode";
 
 const elk = new ELK();

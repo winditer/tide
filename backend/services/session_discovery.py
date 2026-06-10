@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-logger = logging.getLogger("lark2agent.session_discovery")
+logger = logging.getLogger("tide.session_discovery")
 
 from backend.services.project_discovery import (
     CLAUDE_PROJECTS_DIR,
@@ -127,8 +127,8 @@ def _peek_session_meta(
                             session_source = raw_source
                         # 子会话判断：仅当 cwd 在 worktrees 目录下才视为子会话
                         # source="exec" 不再作为过滤条件（用户通过 Lark 发起的也是 exec）
-                        cwd_str = payload.get("cwd", "")
-                        if ".lark-codex/worktrees" in cwd_str:
+                        cwd_str = str(payload.get("cwd", "") or "").replace("\\", "/")
+                        if ".tide/worktrees" in cwd_str or ".lark-codex/worktrees" in cwd_str:
                             is_sub_session = True
                         elif isinstance(raw_source, dict) and "subagent" in str(raw_source):
                             is_sub_session = True
@@ -304,7 +304,7 @@ def _session_references_project(file_path: str, project_cwd: str, max_chars: int
         True 如果文件内容包含项目路径引用
     """
     try:
-        project_name = Path(project_cwd).name  # e.g., "lark2codex"
+        project_name = Path(project_cwd).name  # e.g., "tide"
         # 需要匹配的路径模式
         patterns = [
             project_cwd,  # 完整路径
@@ -367,7 +367,7 @@ def discover_sessions(
             ):
                 filtered_items.append(it)
             # 备选逻辑：如果 project_root 为 None，扫描文件内容中是否有项目引用
-            # 这处理了 CLI 会话（cwd=/Users/haifeng）但操作 lark2codex 项目的情况
+            # 这处理了 CLI 会话（cwd=/Users/haifeng）但操作 tide 项目的情况
             elif (
                 not it.get("project_root")
                 and it.get("file")

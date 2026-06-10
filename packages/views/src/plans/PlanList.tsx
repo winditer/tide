@@ -1,8 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { Button } from "@lark2codex/ui";
-import type { Plan } from "@lark2codex/core";
+import { Button } from "@tide/ui";
+import type { Plan } from "@tide/core";
 
 const STATUS_TONE: Record<string, { dot: string; label: string }> = {
   active: { dot: "bg-amber-500", label: "ACTIVE" },

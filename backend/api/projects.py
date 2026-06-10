@@ -42,8 +42,8 @@ router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 REGISTRY_PATH = Path(
     os.getenv(
-        "LARK2AGENT_PROJECTS_FILE",
-        str(Path.home() / ".lark2agent" / "registered_projects.json"),
+        "TIDE_PROJECTS_FILE",
+        str(Path.home() / ".tide" / "registered_projects.json"),
     )
 ).expanduser()
 _REGISTRY_LOCK = threading.Lock()
@@ -244,7 +244,7 @@ def _project_payload(
 async def list_projects(
     workspace_id: str = "default",
     show_archived: Optional[bool] = Query(
-        None, description="是否包含已归档项目；缺省读取 LARK2AGENT_SHOW_ARCHIVED"
+        None, description="是否包含已归档项目；缺省读取 TIDE_SHOW_ARCHIVED"
     ),
 ):
     """项目列表 — 文件发现 + DB 聚合 + 已注册项目合并。
@@ -253,7 +253,7 @@ async def list_projects(
     精确的 chat_count 仅在项目详情接口 ``GET /api/projects/{id}`` 中按内容引用匹配计算
     （见 ``get_project`` / ``_project_chats``）；前端列表卡片在 chat_count 为空时显示 "—"。
 
-    归档过滤：``show_archived`` 缺省读取 ``LARK2AGENT_SHOW_ARCHIVED`` 环境变量；
+    归档过滤：``show_archived`` 缺省读取 ``TIDE_SHOW_ARCHIVED`` 环境变量；
     为 false 默认隐藏已归档项目，为 true 时返回全部并在 payload 中标记 ``archived``。
     """
     discovered_list = project_discovery.discover_projects()
@@ -266,7 +266,7 @@ async def list_projects(
     cwds.update(db_map.keys())
     cwds.update(registry.keys())
 
-    # 排除 .lark-codex/worktrees/ 下的临时工作树路径，
+    # 排除 .tide/worktrees/ 下的临时工作树路径，
     # 防止 Plan 执行产生的 worktree 被误列为独立项目。
     cwds = {c for c in cwds if not project_discovery.is_worktree_path(c)}
 

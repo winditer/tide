@@ -7,12 +7,12 @@ import {
   Button,
   Card,
   CardContent,
-} from "@lark2codex/ui";
+} from "@tide/ui";
 import {
   useSessionQuery,
   type SessionMessage,
   type SessionRelatedTask,
-} from "@lark2codex/core";
+} from "@tide/core";
 
 const AGENT_LABEL: Record<string, string> = {
   codex: "Codex",

@@ -1,7 +1,7 @@
 """
 Agent 适配器：AgentAdapter 基类及 Codex / Claude / Qoder 三个子类。
 
-从 lark2agent_ws.py L626-853 提取。
+从 tide_ws.py L626-853 提取。
 适配器内部引用的辅助函数（如 get_active_conversation、parse_codex_json_event 等）
 目前以 stub 形式标记，待后续模块提取完成后替换为正式导入。
 """
@@ -40,7 +40,7 @@ from backend.runtime.config import (
 )
 from backend.runtime.task_runtime import CodexTaskRuntime
 
-logger = logging.getLogger("lark2agent-ws")
+logger = logging.getLogger("tide-ws")
 
 
 # ── Qoder permission mode 常量与工具函数 ──
@@ -129,7 +129,7 @@ def qoder_task_prompt(task: CodexTaskRuntime) -> str:
 def short_text(text: str, limit: int = 120) -> str:
     """截断过长文本，合并空白后保留 limit 个字符。
 
-    从 lark2agent_ws.py L1983 提取。
+    从 tide_ws.py L1983 提取。
     """
     text = re.sub(r"\s+", " ", str(text or "")).strip()
     if len(text) <= limit:
@@ -140,7 +140,7 @@ def short_text(text: str, limit: int = 120) -> str:
 def final_reply_text(text: str, limit: int = FINAL_REPLY_MAX_CHARS) -> str:
     """格式化最终回复文本，超长则截断并附带提示。
 
-    从 lark2agent_ws.py L1990 提取。
+    从 tide_ws.py L1990 提取。
     """
     text = str(text or "").strip()
     if not text:
@@ -154,7 +154,7 @@ def final_reply_text(text: str, limit: int = FINAL_REPLY_MAX_CHARS) -> str:
 def extract_text_content(content: Any) -> str:
     """提取 Codex JSON 消息列表中的文本片段。
 
-    从 lark2agent_ws.py L2222 提取。
+    从 tide_ws.py L2222 提取。
     """
     if isinstance(content, str):
         return content
@@ -173,7 +173,7 @@ def extract_text_content(content: Any) -> str:
 def is_internal_codex_error(text: str) -> bool:
     """判断是否为 Codex 内部错误（router/policy 类）。
 
-    从 lark2agent_ws.py L5257 提取。
+    从 tide_ws.py L5257 提取。
     """
     if not text:
         return False
@@ -197,7 +197,7 @@ def is_internal_codex_error(text: str) -> bool:
 def should_create_approval(text: str) -> bool:
     """判断输出是否表明需要创建审批请求。
 
-    从 lark2agent_ws.py L5277 提取。
+    从 tide_ws.py L5277 提取。
     """
     haystack = str(text or "").lower()
     signals = [
@@ -253,9 +253,9 @@ def approved_permission_mode(agent_id: str) -> str:
 
 # ── stub / placeholder：待后续模块提取完成后替换为正式导入 ──
 
-# stub: ConversationInfo — 后续从 lark2agent_ws.py L174 提取
+# stub: ConversationInfo — 后续从 tide_ws.py L174 提取
 class ConversationInfo:
-    """Stub: 待从 lark2agent_ws.py 提取 ConversationInfo。"""
+    """Stub: 待从 tide_ws.py 提取 ConversationInfo。"""
     def __init__(self, session_id: str = "", file: Path = Path("."), agent_id: str = "codex",
                  cwd: Optional[Path] = None, originator: str = "", source: str = "", **_kwargs: Any):
         self.session_id = session_id
@@ -305,7 +305,7 @@ def get_active_conversation(session_id: str, conversation_id: str = "") -> Optio
 def _get_conversation_sync(conversation_id: str) -> Optional[ConversationInfo]:
     """同步从 DB 获取会话 session_id（用于在同步上下文中调用）。"""
     import sqlite3
-    db_url = os.environ.get("DATABASE_URL", "sqlite+aiosqlite:///./lark2agent.db")
+    db_url = os.environ.get("DATABASE_URL", "sqlite+aiosqlite:///./tide.db")
     db_path = db_url.replace("sqlite+aiosqlite:///", "")
     try:
         conn = sqlite3.connect(db_path)
@@ -410,7 +410,7 @@ def _parse_codex_item_event(typ: str, item: dict) -> tuple[str, str]:
 def parse_codex_json_event(line: str) -> tuple[str, str]:
     """解析 Codex CLI 输出的一行 JSON 事件，返回 (event_type, content)。
 
-    从 lark2agent_ws.py L5207 提取。
+    从 tide_ws.py L5207 提取。
     event_type ∈ {"session_id", "message", "complete", "progress",
                   "tool_output", "text", "skip"}。
 

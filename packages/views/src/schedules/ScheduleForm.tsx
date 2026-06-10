@@ -1,12 +1,12 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Button, Input, Select } from "@lark2codex/ui";
+import { Button, Input, Select } from "@tide/ui";
 import {
   useCreateScheduleMutation,
   useUpdateScheduleMutation,
-} from "@lark2codex/core";
-import type { Schedule, CreateScheduleInput } from "@lark2codex/core";
+} from "@tide/core";
+import type { Schedule, CreateScheduleInput } from "@tide/core";
 
 const TASK_TYPE_OPTIONS = [
   { label: "任务 (Task)", value: "task" },

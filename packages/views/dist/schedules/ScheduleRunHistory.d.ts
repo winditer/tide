@@ -1,4 +1,4 @@
-import type { ScheduleRun } from "@lark2codex/core";
+import type { ScheduleRun } from "@tide/core";
 interface ScheduleRunHistoryProps {
     runs: ScheduleRun[];
 }

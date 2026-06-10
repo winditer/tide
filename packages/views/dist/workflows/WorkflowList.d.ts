@@ -1,4 +1,4 @@
-import type { Workflow } from "@lark2codex/core";
+import type { Workflow } from "@tide/core";
 interface WorkflowListProps {
     items: Workflow[];
 }

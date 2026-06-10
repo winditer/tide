@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { ConnectionStatus, Button } from "@lark2codex/ui";
-import { useWs } from "@lark2codex/core";
+import { ConnectionStatus, Button } from "@tide/ui";
+import { useWs } from "@tide/core";
 
 interface HeaderProps {
   onMenuClick: () => void;
@@ -26,7 +26,7 @@ export function Header({ onMenuClick }: HeaderProps) {
             <path d="M3 5h14M3 10h14M3 15h14" />
           </svg>
         </Button>
-        <span className="text-sm font-medium lg:hidden">Lark2Agent</span>
+        <span className="text-sm font-medium lg:hidden">Tide</span>
       </div>
 
       {/* Right: Connection + Settings */}

@@ -1,8 +1,8 @@
 "use client";
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { useState } from "react";
-import { Button, Input } from "@lark2codex/ui";
-import { useCreateWorkflow } from "@lark2codex/core";
+import { Button, Input } from "@tide/ui";
+import { useCreateWorkflow } from "@tide/core";
 const STARTER_DEFINITION = {
     nodes: [
         {

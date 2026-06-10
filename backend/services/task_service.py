@@ -24,7 +24,7 @@ from backend.runtime.adapters import AGENT_ADAPTERS
 from backend.runtime.executor import agent_executor, TaskEvent
 from backend.runtime.task_runtime import TASKS, CodexTaskRuntime, LOCK
 
-logger = logging.getLogger("lark2agent.task_service")
+logger = logging.getLogger("tide.task_service")
 
 
 class TaskService:

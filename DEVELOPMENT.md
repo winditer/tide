@@ -1,6 +1,6 @@
-# Lark2Agent Development Notes
+# Tide Development Notes
 
-本文档整理当前 Lark2Agent bridge 的设计方案、已实现计划和后续开发约束，便于继续迭代 `lark2agent_ws.py`。
+本文档整理当前 Tide bridge 的设计方案、已实现计划和后续开发约束，便于继续迭代 `tide_ws.py`。
 
 状态标记：
 
@@ -10,7 +10,7 @@
 
 ## 目标
 
-Lark2Agent bridge 的目标是把 Lark 群聊变成多 Agent 远程控制台：
+Tide bridge 的目标是把 Lark 群聊变成多 Agent 远程控制台：
 
 - 在 Lark 里发送自然语言任务，脚本本地启动 Codex CLI、Claude Code CLI 或后续 Agent CLI 执行。
 - 用 Lark 卡片展示任务进度、最终结果、审批入口和项目状态。
@@ -141,13 +141,13 @@ PLAN_USE_WORKTREES=1
 如果当前目录是 Git 仓库，每个子任务会创建独立 worktree：
 
 ```text
-<repo>/.lark2agent/worktrees/<plan_id>-<task_id>
+<repo>/.tide/worktrees/<plan_id>-<task_id>
 ```
 
 并创建独立分支：
 
 ```text
-lark2agent/<plan_id>-<task_id>
+tide/<plan_id>-<task_id>
 ```
 
 因此每个 Plan 子任务拥有：
@@ -159,10 +159,10 @@ lark2agent/<plan_id>-<task_id>
 
 如果当前目录不是 Git 仓库，或关闭 `PLAN_USE_WORKTREES`，子任务会退回原目录执行。这时仍然是多线程和多 Agent 进程，但文件改动没有隔离，存在互相覆盖风险。
 
-项目/对话看板和日报默认不会把 Plan 创建的 worktree 子目录当作独立项目统计，避免 `.lark2agent/worktrees/...` 污染项目列表。这个过滤只影响 `build_index()` 的项目索引，不影响 `Agent Plan` 面板展示子任务执行状态、输出、worktree 路径和审批操作。需要统计这些 worktree 会话时可设置：
+项目/对话看板和日报默认不会把 Plan 创建的 worktree 子目录当作独立项目统计，避免 `.tide/worktrees/...` 污染项目列表。这个过滤只影响 `build_index()` 的项目索引，不影响 `Agent Plan` 面板展示子任务执行状态、输出、worktree 路径和审批操作。需要统计这些 worktree 会话时可设置：
 
 ```env
-LARK2AGENT_INCLUDE_PLAN_WORKTREES=1
+TIDE_INCLUDE_PLAN_WORKTREES=1
 ```
 
 ### [已完成] Plan 子任务收尾第一版
@@ -190,7 +190,7 @@ Plan 已新增合并总览，可以把已提交的子任务 commit 逐个或批�
 - 子任务详情卡：查看 prompt、阶段/依赖、session、worktree、测试、diff、提交和最新输出。
 - 子任务操作：取消、停止、重试、丢弃改动、确认后清理 worktree。
 - 合并冲突自动修复：由 Codex 修改冲突文件，脚本复查冲突、运行 `PLAN_TEST_COMMAND`，通过后执行 `git cherry-pick --continue`。
-- 已合并分支清理：确认后删除 `lark2agent/<plan_id>-<task_id>` 子任务分支。
+- 已合并分支清理：确认后删除 `tide/<plan_id>-<task_id>` 子任务分支。
 - 轻量阶段和依赖：支持 `阶段 1:` / `阶段 2:`，以及 `depends:1,2`。
 
 仍需后续增强：
@@ -240,7 +240,7 @@ README.md
 归档内容默认不显示在查询结果中。需要显示时设置：
 
 ```env
-LARK2AGENT_SHOW_ARCHIVED=1
+TIDE_SHOW_ARCHIVED=1
 ```
 
 项目创建根目录由：
@@ -256,13 +256,13 @@ CODEX_PROJECTS_ROOT=
 WebSocket 脚本启动时会向已记录的 Lark 会话发送欢迎语：
 
 ```text
-I'm Lark2Agent, a lightweight multi-agent bridge for Lark.
+I'm Tide, a lightweight multi-agent bridge for Lark.
 ```
 
 可通过：
 
 ```env
-LARK2AGENT_WELCOME_MESSAGE=
+TIDE_WELCOME_MESSAGE=
 ```
 
 自定义。设为空字符串时不发送。
@@ -309,7 +309,7 @@ QODER_MODEL=
 
 - `on_message` 按 `message_type` 识别 `image`、`file` 和带内嵌图片的 `post`。
 - 图片和文件通过 `im/v1/messages/:message_id/resources/:file_key` 下载。
-- 相对 `LARK_ATTACHMENTS_DIR` 会落到当前 Agent 工作目录下，默认是 `.lark2agent/attachments`，因此 `workspace-write` sandbox 可以读取。
+- 相对 `LARK_ATTACHMENTS_DIR` 会落到当前 Agent 工作目录下，默认是 `.tide/attachments`，因此 `workspace-write` sandbox 可以读取。
 - 只有附件、没有文字的消息会按 `chat_id + sender_id` 暂存，下一条普通文本指令自动消费。
 - 回复或引用附件消息时，会从本地 state 的 `message_refs` 中找回附件路径。
 - Agent 任务卡展示附件摘要，实际 prompt 里包含附件类型、文件名、本地路径和 Lark message id。
@@ -334,35 +334,35 @@ QODER_MODEL=
 - 今日新增或更新功能
 - 修复 bug 数
 
-当前统计主要来自 Codex session 文件、运行中任务、Plan 状态和本地审批记录。总指令数按用户下发的指令统计，并结合普通任务和 Plan 子任务补齐。指定日期查询已实现。跨进程重启后的历史审批统计和任务级耗时记录仍依赖 `.lark2agent_state.json` 中可持久化的数据，后续可继续增强。
+当前统计主要来自 Codex session 文件、运行中任务、Plan 状态和本地审批记录。总指令数按用户下发的指令统计，并结合普通任务和 Plan 子任务补齐。指定日期查询已实现。跨进程重启后的历史审批统计和任务级耗时记录仍依赖 `.tide_state.json` 中可持久化的数据，后续可继续增强。
 
 ## [已完成] 后台运行和重启
 
 推荐后台运行：
 
 ```bash
-cd /Users/haifeng/Documents/lark2codex
-nohup python3 lark2agent_ws.py > lark2agent_ws.log 2>&1 &
+cd /Users/haifeng/Documents/tide
+nohup python3 tide_ws.py > tide_ws.log 2>&1 &
 ```
 
 查看进程：
 
 ```bash
-pgrep -fl lark2agent_ws.py
-ps aux | grep '[l]ark2agent_ws.py'
+pgrep -fl tide_ws.py
+ps aux | grep '[t]ide_ws.py'
 ```
 
 查看日志：
 
 ```bash
-tail -n 100 lark2agent_ws.log
-tail -f lark2agent_ws.log
+tail -n 100 tide_ws.log
+tail -f tide_ws.log
 ```
 
 停止：
 
 ```bash
-pkill -f lark2agent_ws.py
+pkill -f tide_ws.py
 ```
 
 Lark 中也支持：
@@ -403,14 +403,14 @@ KEEP_AWAKE_DISABLE_SLEEP=1
 #### 后端
 
 ```bash
-cd /path/to/lark2codex
+cd /path/to/tide
 pip install -r backend/requirements.txt
 ```
 
 #### 前端
 
 ```bash
-cd /path/to/lark2codex
+cd /path/to/tide
 yarn install
 ```
 
@@ -420,7 +420,7 @@ yarn install
 
 ```bash
 # 终端 1：后端（端口 8000）
-cd /path/to/lark2codex && uvicorn backend.main:app --reload --port 8000
+cd /path/to/tide && uvicorn backend.main:app --reload --port 8000
 
 # 终端 2：前端（端口 3000）
 yarn dev
@@ -441,7 +441,7 @@ python -m pytest backend/tests/ -v
 ### 项目结构
 
 ```
-lark2codex/
+tide/
 ├── apps/
 │   └── web/            # Next.js 15 前端（App Router + TanStack Query + Tailwind CSS）
 ├── packages/
@@ -454,7 +454,7 @@ lark2codex/
 │   ├── models/         # Pydantic schemas
 │   ├── db/             # SQLite + SQLAlchemy 配置
 │   └── runtime/        # Agent 适配器、任务运行时
-└── lark2agent_ws.py    # 现有 Lark Bridge（保留）
+└── tide_ws.py          # 现有 Lark Bridge（保留）
 ```
 
 ## 开发路线图
@@ -466,8 +466,8 @@ lark2codex/
 每个子任务默认创建独立 Git worktree 和独立分支，避免多个 Codex 同时修改同一个目录：
 
 ```text
-<repo>/.lark2agent/worktrees/<plan_id>-<task_id>
-lark2agent/<plan_id>-<task_id>
+<repo>/.tide/worktrees/<plan_id>-<task_id>
+tide/<plan_id>-<task_id>
 ```
 
 当前第一版增强已完成：
@@ -531,14 +531,14 @@ lark2agent/<plan_id>-<task_id>
 - 新增 `/tasks` 或 `/board` 命令。
 - 任务卡按钮回调继续携带 `task_id`，看板按 `task_id` 打开详情。
 
-### [计划] 4. 项目级 `.lark2agent` 配置
+### [计划] 4. 项目级 `.tide` 配置
 
 参考 Continue / Cline 的项目规则。目标是每个项目可以定义自己的执行规则，而不是完全依赖全局 `.env`。
 
 建议配置文件：
 
 ```text
-<project>/.lark2agent/config.json
+<project>/.tide/config.json
 ```
 
 建议支持字段：

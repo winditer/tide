@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Header } from "@lark2codex/views/layout/Header";
-import { Sidebar } from "@lark2codex/views/layout/Sidebar";
+import { Header } from "@tide/views/layout/Header";
+import { Sidebar } from "@tide/views/layout/Sidebar";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);

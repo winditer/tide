@@ -1,7 +1,7 @@
 """
 任务运行时数据模型。
 
-从 lark2agent_ws.py 提取：
+从 tide_ws.py 提取：
 - CodexTaskRuntime dataclass (L238-273)
 - LarkAttachment dataclass (L275-283)
 - LarkReferenceContext dataclass (L286-294)

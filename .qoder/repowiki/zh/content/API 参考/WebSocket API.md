@@ -2,7 +2,7 @@
 
 <cite>
 **本文引用的文件**
-- [lark2agent_ws.py](file://lark2agent_ws.py)
+- [tide_ws.py](file://tide_ws.py)
 - [README.md](file://README.md)
 </cite>
 
@@ -19,7 +19,7 @@
 10. [附录](#附录)
 
 ## 简介
-本文件系统性梳理 Lark2Agent 的 WebSocket API 设计与实现，覆盖连接建立、消息接收、事件处理、消息格式、事件类型、认证与安全、心跳与重连策略、序列化与反序列化、错误处理与异常、客户端集成与最佳实践等内容。目标是帮助开发者快速理解并正确集成 Lark WebSocket 事件通道，实现消息接收、卡片按钮回调、消息已读等事件的可靠处理。
+本文件系统性梳理 Tide 的 WebSocket API 设计与实现，覆盖连接建立、消息接收、事件处理、消息格式、事件类型、认证与安全、心跳与重连策略、序列化与反序列化、错误处理与异常、客户端集成与最佳实践等内容。目标是帮助开发者快速理解并正确集成 Lark WebSocket 事件通道，实现消息接收、卡片按钮回调、消息已读等事件的可靠处理。
 
 ## 项目结构
 - 事件订阅与 WebSocket 连接由 Lark 官方 SDK 管理，本脚本负责事件路由与业务处理。
@@ -32,7 +32,7 @@ subgraph "Lark 平台"
 WS["WebSocket 事件通道"]
 EVT["IM 事件<br/>消息/卡片按钮/已读"]
 end
-subgraph "本地脚本(lark2agent_ws.py)"
+subgraph "本地脚本(tide_ws.py)"
 REG["事件注册<br/>消息/卡片按钮/已读"]
 Q["事件队列<br/>EVENT_QUEUE"]
 WORKER["事件工作线程<br/>event_worker_loop"]
@@ -41,7 +41,7 @@ HANDLER_CARD["卡片按钮处理器<br/>handle_card_action"]
 ADAPTERS["Agent 适配器<br/>Codex/Claude/Qoder"]
 CARD["卡片构建/更新"]
 ATTACH["附件下载/暂存"]
-STATE["状态持久化<br/>.lark2agent_state.json"]
+STATE["状态持久化<br/>.tide_state.json"]
 end
 WS --> EVT
 EVT --> REG
@@ -58,11 +58,11 @@ HANDLER_CARD --> ADAPTERS
 ```
 
 图表来源
-- [lark2agent_ws.py](file://lark2agent_ws.py)
+- [tide_ws.py](file://tide_ws.py)
 - [README.md](file://README.md)
 
 章节来源
-- [lark2agent_ws.py](file://lark2agent_ws.py)
+- [tide_ws.py](file://tide_ws.py)
 - [README.md](file://README.md)
 
 ## 核心组件
@@ -82,7 +82,7 @@ HANDLER_CARD --> ADAPTERS
   - 统一 Codex、Claude Code、Qoder CLI 的命令构建与事件解析。
 
 章节来源
-- [lark2agent_ws.py](file://lark2agent_ws.py)
+- [tide_ws.py](file://tide_ws.py)
 
 ## 架构总览
 WebSocket 事件在本地脚本内的流转如下：
@@ -91,7 +91,7 @@ WebSocket 事件在本地脚本内的流转如下：
 sequenceDiagram
 participant Lark as "Lark 平台"
 participant SDK as "Lark SDK"
-participant Script as "lark2agent_ws.py"
+participant Script as "tide_ws.py"
 participant Queue as "事件队列"
 participant Worker as "事件工作线程"
 participant Text as "文本处理器"
@@ -111,10 +111,10 @@ Worker-->>Script : 任务完成
 ```
 
 图表来源
-- [lark2agent_ws.py](file://lark2agent_ws.py)
+- [tide_ws.py](file://tide_ws.py)
 
 章节来源
-- [lark2agent_ws.py](file://lark2agent_ws.py)
+- [tide_ws.py](file://tide_ws.py)
 
 ## 详细组件分析
 
@@ -132,7 +132,7 @@ Worker-->>Script : 任务完成
 
 章节来源
 - [README.md](file://README.md)
-- [lark2agent_ws.py](file://lark2agent_ws.py)
+- [tide_ws.py](file://tide_ws.py)
 
 ### 2) 消息接收与事件处理
 - 文本消息处理流程
@@ -167,10 +167,10 @@ UpdateCard --> End(["完成"])
 ```
 
 图表来源
-- [lark2agent_ws.py](file://lark2agent_ws.py)
+- [tide_ws.py](file://tide_ws.py)
 
 章节来源
-- [lark2agent_ws.py](file://lark2agent_ws.py)
+- [tide_ws.py](file://tide_ws.py)
 
 ### 3) 消息格式与字段定义
 - 事件头字段
@@ -191,7 +191,7 @@ UpdateCard --> End(["完成"])
   - 通过消息引用表（message_refs）记录任务、会话、工作目录、附件等上下文，支持回复/引用找回附件。
 
 章节来源
-- [lark2agent_ws.py](file://lark2agent_ws.py)
+- [tide_ws.py](file://tide_ws.py)
 
 ### 4) 事件类型与处理机制
 - 消息接收事件
@@ -206,7 +206,7 @@ UpdateCard --> End(["完成"])
   - 当前忽略处理，避免对业务产生副作用。
 
 章节来源
-- [lark2agent_ws.py](file://lark2agent_ws.py)
+- [tide_ws.py](file://tide_ws.py)
 
 ### 5) 连接参数配置
 - 认证参数
@@ -216,8 +216,8 @@ UpdateCard --> End(["完成"])
 - 附件与消息
   - LARK_ATTACHMENTS_DIR、LARK_ATTACHMENT_MAX_BYTES、LARK_PENDING_ATTACHMENT_TTL_SECONDS、MAX_LARK_ATTACHMENTS_PER_MESSAGE、MAX_LARK_MESSAGE_REFS。
 - 状态与持久化
-  - LARK2AGENT_STATE_FILE：本地状态文件路径。
-  - LARK2AGENT_SHOW_ARCHIVED：是否显示归档内容。
+  - TIDE_STATE_FILE：本地状态文件路径。
+  - TIDE_SHOW_ARCHIVED：是否显示归档内容。
 - 访问控制
   - LARK_ALLOWED_CHAT_IDS、LARK_ALLOWED_OPEN_IDS、LARK_ADMIN_OPEN_IDS、LARK_REQUIRE_KNOWN_CHAT。
 - 其他
@@ -226,7 +226,7 @@ UpdateCard --> End(["完成"])
 
 章节来源
 - [README.md](file://README.md)
-- [lark2agent_ws.py](file://lark2agent_ws.py)
+- [tide_ws.py](file://tide_ws.py)
 
 ### 6) 心跳机制与重连策略
 - 心跳与保活
@@ -238,7 +238,7 @@ UpdateCard --> End(["完成"])
 
 章节来源
 - [README.md](file://README.md)
-- [lark2agent_ws.py](file://lark2agent_ws.py)
+- [tide_ws.py](file://tide_ws.py)
 
 ### 7) 消息序列化与反序列化
 - 事件数据
@@ -249,7 +249,7 @@ UpdateCard --> End(["完成"])
   - 任务运行时状态与计划状态以 JSON 写入本地文件，重启后恢复。
 
 章节来源
-- [lark2agent_ws.py](file://lark2agent_ws.py)
+- [tide_ws.py](file://tide_ws.py)
 
 ### 8) 错误处理与异常
 - 事件去重
@@ -264,7 +264,7 @@ UpdateCard --> End(["完成"])
   - 通过 Agent 适配器解析流式输出事件，统一转换为消息/进度/工具输出/完成等事件类型。
 
 章节来源
-- [lark2agent_ws.py](file://lark2agent_ws.py)
+- [tide_ws.py](file://tide_ws.py)
 
 ### 9) 客户端集成与最佳实践
 - 集成步骤
@@ -280,7 +280,7 @@ UpdateCard --> End(["完成"])
 
 章节来源
 - [README.md](file://README.md)
-- [lark2agent_ws.py](file://lark2agent_ws.py)
+- [tide_ws.py](file://tide_ws.py)
 
 ## 依赖关系分析
 - 组件耦合
@@ -309,10 +309,10 @@ CARD --> CARDUI["卡片构建/更新"]
 ```
 
 图表来源
-- [lark2agent_ws.py](file://lark2agent_ws.py)
+- [tide_ws.py](file://tide_ws.py)
 
 章节来源
-- [lark2agent_ws.py](file://lark2agent_ws.py)
+- [tide_ws.py](file://tide_ws.py)
 
 ## 性能考量
 - 事件队列容量与吞吐
@@ -326,7 +326,7 @@ CARD --> CARDUI["卡片构建/更新"]
   - 适度开启 LOG_MESSAGE_CONTENT 与 LOG_LEVEL，平衡可观测性与性能。
 
 章节来源
-- [lark2agent_ws.py](file://lark2agent_ws.py)
+- [tide_ws.py](file://tide_ws.py)
 
 ## 故障排查指南
 - 收不到 Lark 消息
@@ -350,10 +350,10 @@ CARD --> CARDUI["卡片构建/更新"]
 - 环境变量一览（节选）
   - LARK_APP_ID、LARK_APP_SECRET、LARK_DOMAIN、LARK_ENCRYPT_KEY、LARK_VERIFICATION_TOKEN
   - LARK_EVENT_QUEUE_MAXSIZE、LARK_ATTACHMENTS_DIR、LARK_ATTACHMENT_MAX_BYTES、LARK_PENDING_ATTACHMENT_TTL_SECONDS、MAX_LARK_ATTACHMENTS_PER_MESSAGE、MAX_LARK_MESSAGE_REFS
-  - LARK2AGENT_STATE_FILE、LARK2AGENT_SHOW_ARCHIVED、LARK_ALLOWED_CHAT_IDS、LARK_ALLOWED_OPEN_IDS、LARK_ADMIN_OPEN_IDS、LARK_REQUIRE_KNOWN_CHAT
+  - TIDE_STATE_FILE、TIDE_SHOW_ARCHIVED、LARK_ALLOWED_CHAT_IDS、LARK_ALLOWED_OPEN_IDS、LARK_ADMIN_OPEN_IDS、LARK_REQUIRE_KNOWN_CHAT
   - LOG_MESSAGE_CONTENT、LOG_LEVEL
   - KEEP_AWAKE_ON_AC_POWER、KEEP_AWAKE_CHECK_INTERVAL_SECONDS、KEEP_AWAKE_DISABLE_SLEEP
 
 章节来源
 - [README.md](file://README.md)
-- [lark2agent_ws.py](file://lark2agent_ws.py)
+- [tide_ws.py](file://tide_ws.py)

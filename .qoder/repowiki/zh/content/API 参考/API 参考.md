@@ -3,7 +3,7 @@
 <cite>
 **本文档引用的文件**
 - [README.md](file://README.md)
-- [lark2agent_ws.py](file://lark2agent_ws.py)
+- [tide_ws.py](file://tide_ws.py)
 - [.gitignore](file://.gitignore)
 </cite>
 
@@ -20,7 +20,7 @@
 10. [附录](#附录)
 
 ## 简介
-本文件为 Lark2Agent 的 API 参考文档，覆盖以下方面：
+本文件为 Tide 的 API 参考文档，覆盖以下方面：
 - 事件处理 API：消息接收、卡片按钮回调、消息已读事件的处理机制与 WebSocket 连接。
 - 任务管理 API：普通任务与 Plan 并行任务的生命周期、状态、并发控制与持久化。
 - 配置管理 API：环境变量、运行态持久化与访问控制。
@@ -29,16 +29,16 @@
 - 使用示例、错误处理策略与最佳实践。
 
 ## 项目结构
-- lark2agent_ws.py：主程序，包含 Lark WebSocket 事件处理、消息卡片构建、任务执行、审批与 Plan 并行调度、状态持久化与 macOS 保活。
+- tide_ws.py：主程序，包含 Lark WebSocket 事件处理、消息卡片构建、任务执行、审批与 Plan 并行调度、状态持久化与 macOS 保活。
 - README.md：功能说明、安装与运行、Lark 使用方式、环境变量参考与常见问题。
 - .gitignore：忽略文件与目录（含状态文件与日志）。
 
 ```mermaid
 graph TB
 subgraph "本地运行"
-WS["WebSocket 客户端<br/>lark2agent_ws.py"]
+WS["WebSocket 客户端<br/>tide_ws.py"]
 CLI["Agent CLI<br/>Codex/Claude/Qoder"]
-FS[".lark2agent_state.json<br/>本地状态文件"]
+FS[".tide_state.json<br/>本地状态文件"]
 end
 subgraph "Lark 平台"
 BOT["机器人账号"]
@@ -55,7 +55,7 @@ WS --> FS
 ```
 
 **图表来源**
-- [lark2agent_ws.py:8569-8584](file://lark2agent_ws.py#L8569-L8584)
+- [tide_ws.py:8569-8584](file://tide_ws.py#L8569-L8584)
 - [README.md:33-47](file://README.md#L33-L47)
 
 **章节来源**
@@ -79,15 +79,15 @@ WS --> FS
   - 会话索引与续写、权限模式与超时控制、Qoder Quest 模式支持。
 
 **章节来源**
-- [lark2agent_ws.py:8569-8584](file://lark2agent_ws.py#L8569-L8584)
-- [lark2agent_ws.py:8515-8528](file://lark2agent_ws.py#L8515-L8528)
-- [lark2agent_ws.py:3663-3700](file://lark2agent_ws.py#L3663-L3700)
-- [lark2agent_ws.py:8047-8182](file://lark2agent_ws.py#L8047-L8182)
-- [lark2agent_ws.py:648-801](file://lark2agent_ws.py#L648-L801)
-- [lark2agent_ws.py:804-846](file://lark2agent_ws.py#L804-L846)
+- [tide_ws.py:8569-8584](file://tide_ws.py#L8569-L8584)
+- [tide_ws.py:8515-8528](file://tide_ws.py#L8515-L8528)
+- [tide_ws.py:3663-3700](file://tide_ws.py#L3663-L3700)
+- [tide_ws.py:8047-8182](file://tide_ws.py#L8047-L8182)
+- [tide_ws.py:648-801](file://tide_ws.py#L648-L801)
+- [tide_ws.py:804-846](file://tide_ws.py#L804-L846)
 
 ## 架构总览
-Lark2Agent 通过 lark-oapi WebSocket 客户端订阅 Lark 事件，解析消息与卡片按钮回调，驱动本地 Agent CLI 子进程执行任务，并将进度、结果与审批状态回写到 Lark 交互卡片。运行态与 Plan 状态持久化于本地 JSON 文件，支持脚本重启后的状态恢复。
+Tide 通过 lark-oapi WebSocket 客户端订阅 Lark 事件，解析消息与卡片按钮回调，驱动本地 Agent CLI 子进程执行任务，并将进度、结果与审批状态回写到 Lark 交互卡片。运行态与 Plan 状态持久化于本地 JSON 文件，支持脚本重启后的状态恢复。
 
 ```mermaid
 sequenceDiagram
@@ -107,9 +107,9 @@ Card-->>Lark : "发送交互卡片"
 ```
 
 **图表来源**
-- [lark2agent_ws.py:8515-8528](file://lark2agent_ws.py#L8515-L8528)
-- [lark2agent_ws.py:3897-4060](file://lark2agent_ws.py#L3897-L4060)
-- [lark2agent_ws.py:648-801](file://lark2agent_ws.py#L648-L801)
+- [tide_ws.py:8515-8528](file://tide_ws.py#L8515-L8528)
+- [tide_ws.py:3897-4060](file://tide_ws.py#L3897-L4060)
+- [tide_ws.py:648-801](file://tide_ws.py#L648-L801)
 
 ## 详细组件分析
 
@@ -142,13 +142,13 @@ Drop --> End
 ```
 
 **图表来源**
-- [lark2agent_ws.py:8355-8368](file://lark2agent_ws.py#L8355-L8368)
-- [lark2agent_ws.py:8515-8528](file://lark2agent_ws.py#L8515-L8528)
+- [tide_ws.py:8355-8368](file://tide_ws.py#L8355-L8368)
+- [tide_ws.py:8515-8528](file://tide_ws.py#L8515-L8528)
 
 **章节来源**
-- [lark2agent_ws.py:8569-8584](file://lark2agent_ws.py#L8569-L8584)
-- [lark2agent_ws.py:8511-8513](file://lark2agent_ws.py#L8511-L8513)
-- [lark2agent_ws.py:8047-8182](file://lark2agent_ws.py#L8047-L8182)
+- [tide_ws.py:8569-8584](file://tide_ws.py#L8569-L8584)
+- [tide_ws.py:8511-8513](file://tide_ws.py#L8511-L8513)
+- [tide_ws.py:8047-8182](file://tide_ws.py#L8047-L8182)
 
 ### 任务管理 API
 - 普通任务
@@ -273,14 +273,14 @@ PlanRuntime --> PlanTask : "包含"
 ```
 
 **图表来源**
-- [lark2agent_ws.py:209-273](file://lark2agent_ws.py#L209-L273)
-- [lark2agent_ws.py:343-385](file://lark2agent_ws.py#L343-L385)
+- [tide_ws.py:209-273](file://tide_ws.py#L209-L273)
+- [tide_ws.py:343-385](file://tide_ws.py#L343-L385)
 
 **章节来源**
-- [lark2agent_ws.py:3897-4060](file://lark2agent_ws.py#L3897-L4060)
-- [lark2agent_ws.py:5651-5687](file://lark2agent_ws.py#L5651-L5687)
-- [lark2agent_ws.py:6160-6167](file://lark2agent_ws.py#L6160-L6167)
-- [lark2agent_ws.py:7237-7266](file://lark2agent_ws.py#L7237-L7266)
+- [tide_ws.py:3897-4060](file://tide_ws.py#L3897-L4060)
+- [tide_ws.py:5651-5687](file://tide_ws.py#L5651-L5687)
+- [tide_ws.py:6160-6167](file://tide_ws.py#L6160-L6167)
+- [tide_ws.py:7237-7266](file://tide_ws.py#L7237-L7266)
 
 ### 配置管理 API
 - 环境变量注入
@@ -293,7 +293,7 @@ PlanRuntime --> PlanTask : "包含"
 - CSV/集合解析
   - LARK_ALLOWED_CHAT_IDS、LARK_ALLOWED_OPEN_IDS、LARK_ADMIN_OPEN_IDS 支持逗号/分号/空白分隔。
 - 运行态持久化
-  - 本地状态文件：.lark2agent_state.json，保存已知聊天、运行态、Plan 与消息引用缓存。
+  - 本地状态文件：.tide_state.json，保存已知聊天、运行态、Plan 与消息引用缓存。
   - 读写原子化：临时文件写入后替换，确保一致性。
 
 ```mermaid
@@ -305,16 +305,16 @@ Persist --> Load["启动时读取状态"]
 ```
 
 **图表来源**
-- [lark2agent_ws.py:34-49](file://lark2agent_ws.py#L34-L49)
-- [lark2agent_ws.py:154-159](file://lark2agent_ws.py#L154-L159)
-- [lark2agent_ws.py:869-891](file://lark2agent_ws.py#L869-L891)
-- [lark2agent_ws.py:1175-1182](file://lark2agent_ws.py#L1175-L1182)
+- [tide_ws.py:34-49](file://tide_ws.py#L34-L49)
+- [tide_ws.py:154-159](file://tide_ws.py#L154-L159)
+- [tide_ws.py:869-891](file://tide_ws.py#L869-L891)
+- [tide_ws.py:1175-1182](file://tide_ws.py#L1175-L1182)
 
 **章节来源**
-- [lark2agent_ws.py:34-49](file://lark2agent_ws.py#L34-L49)
-- [lark2agent_ws.py:154-159](file://lark2agent_ws.py#L154-L159)
-- [lark2agent_ws.py:869-891](file://lark2agent_ws.py#L869-L891)
-- [lark2agent_ws.py:1175-1182](file://lark2agent_ws.py#L1175-L1182)
+- [tide_ws.py:34-49](file://tide_ws.py#L34-L49)
+- [tide_ws.py:154-159](file://tide_ws.py#L154-L159)
+- [tide_ws.py:869-891](file://tide_ws.py#L869-L891)
+- [tide_ws.py:1175-1182](file://tide_ws.py#L1175-L1182)
 
 ### Lark 平台集成 API
 - 交互卡片
@@ -345,14 +345,14 @@ WS-->>Lark : "补丁/刷新/Toast"
 ```
 
 **图表来源**
-- [lark2agent_ws.py:1449-1539](file://lark2agent_ws.py#L1449-L1539)
-- [lark2agent_ws.py:3663-3700](file://lark2agent_ws.py#L3663-L3700)
-- [lark2agent_ws.py:8047-8182](file://lark2agent_ws.py#L8047-L8182)
+- [tide_ws.py:1449-1539](file://tide_ws.py#L1449-L1539)
+- [tide_ws.py:3663-3700](file://tide_ws.py#L3663-L3700)
+- [tide_ws.py:8047-8182](file://tide_ws.py#L8047-L8182)
 
 **章节来源**
-- [lark2agent_ws.py:1449-1539](file://lark2agent_ws.py#L1449-L1539)
-- [lark2agent_ws.py:3663-3700](file://lark2agent_ws.py#L3663-L3700)
-- [lark2agent_ws.py:8047-8182](file://lark2agent_ws.py#L8047-L8182)
+- [tide_ws.py:1449-1539](file://tide_ws.py#L1449-L1539)
+- [tide_ws.py:3663-3700](file://tide_ws.py#L3663-L3700)
+- [tide_ws.py:8047-8182](file://tide_ws.py#L8047-L8182)
 
 ### Agent CLI 集成 API
 - 适配器模式
@@ -401,16 +401,16 @@ AgentAdapter <|-- QoderAdapter
 ```
 
 **图表来源**
-- [lark2agent_ws.py:626-646](file://lark2agent_ws.py#L626-L646)
-- [lark2agent_ws.py:648-681](file://lark2agent_ws.py#L648-L681)
-- [lark2agent_ws.py:702-769](file://lark2agent_ws.py#L702-L769)
-- [lark2agent_ws.py:771-801](file://lark2agent_ws.py#L771-L801)
+- [tide_ws.py:626-646](file://tide_ws.py#L626-L646)
+- [tide_ws.py:648-681](file://tide_ws.py#L648-L681)
+- [tide_ws.py:702-769](file://tide_ws.py#L702-L769)
+- [tide_ws.py:771-801](file://tide_ws.py#L771-L801)
 
 **章节来源**
-- [lark2agent_ws.py:626-646](file://lark2agent_ws.py#L626-L646)
-- [lark2agent_ws.py:648-681](file://lark2agent_ws.py#L648-L681)
-- [lark2agent_ws.py:702-769](file://lark2agent_ws.py#L702-L769)
-- [lark2agent_ws.py:771-801](file://lark2agent_ws.py#L771-L801)
+- [tide_ws.py:626-646](file://tide_ws.py#L626-L646)
+- [tide_ws.py:648-681](file://tide_ws.py#L648-L681)
+- [tide_ws.py:702-769](file://tide_ws.py#L702-L769)
+- [tide_ws.py:771-801](file://tide_ws.py#L771-L801)
 
 ## 依赖关系分析
 - 组件耦合
@@ -433,12 +433,12 @@ CARD --> LARK["Lark OpenAPI"]
 ```
 
 **图表来源**
-- [lark2agent_ws.py:8569-8584](file://lark2agent_ws.py#L8569-L8584)
-- [lark2agent_ws.py:3663-3700](file://lark2agent_ws.py#L3663-L3700)
+- [tide_ws.py:8569-8584](file://tide_ws.py#L8569-L8584)
+- [tide_ws.py:3663-3700](file://tide_ws.py#L3663-L3700)
 
 **章节来源**
-- [lark2agent_ws.py:8569-8584](file://lark2agent_ws.py#L8569-L8584)
-- [lark2agent_ws.py:3663-3700](file://lark2agent_ws.py#L3663-L3700)
+- [tide_ws.py:8569-8584](file://tide_ws.py#L8569-L8584)
+- [tide_ws.py:3663-3700](file://tide_ws.py#L3663-L3700)
 
 ## 性能考量
 - 事件队列与并发
@@ -469,7 +469,7 @@ CARD --> LARK["Lark OpenAPI"]
 - [README.md:474-511](file://README.md#L474-L511)
 
 ## 结论
-Lark2Agent 通过轻量的 WebSocket 客户端与适配器模式，将 Lark 协作入口与本地 Agent CLI 执行能力高效整合，提供任务卡片、审批、Plan 并行与状态同步等工程化能力。通过完善的配置管理与运行态持久化，满足团队协作与远程工程控制的需求。
+Tide 通过轻量的 WebSocket 客户端与适配器模式，将 Lark 协作入口与本地 Agent CLI 执行能力高效整合，提供任务卡片、审批、Plan 并行与状态同步等工程化能力。通过完善的配置管理与运行态持久化，满足团队协作与远程工程控制的需求。
 
 [本节为总结，无需特定文件分析]
 
@@ -477,13 +477,13 @@ Lark2Agent 通过轻量的 WebSocket 客户端与适配器模式，将 Lark 协�
 
 ### API 使用示例
 - 启动与运行
-  - 前台运行：python3 lark2agent_ws.py
-  - 后台运行：nohup python3 lark2agent_ws.py > lark2agent_ws.log 2>&1 &
+  - 前台运行：python3 tide_ws.py
+  - 后台运行：nohup python3 tide_ws.py > tide_ws.log 2>&1 &
   - Lark 内重启：/restart
 - 常用指令
   - /panel、/projects、/convos、/status、/daily、/plan、/agent、/stop、/restart 等。
 - 图片与文件
-  - 发送图片/文件后，附件下载至 .lark2agent/attachments/<chat_id>/<message_id>/；无文本消息的附件可在 LARK_PENDING_ATTACHMENT_TTL_SECONDS 内被下一条指令消费。
+  - 发送图片/文件后，附件下载至 .tide/attachments/<chat_id>/<message_id>/；无文本消息的附件可在 LARK_PENDING_ATTACHMENT_TTL_SECONDS 内被下一条指令消费。
 
 **章节来源**
 - [README.md:75-152](file://README.md#L75-L152)
@@ -496,19 +496,19 @@ Lark2Agent 通过轻量的 WebSocket 客户端与适配器模式，将 Lark 协�
 - 审批超时：PENDING_APPROVAL_WAIT_SECONDS 控制等待时间，超时后按默认策略继续。
 
 **章节来源**
-- [lark2agent_ws.py:8355-8368](file://lark2agent_ws.py#L8355-L8368)
-- [lark2agent_ws.py:8506-8508](file://lark2agent_ws.py#L8506-L8508)
-- [lark2agent_ws.py:3688-3698](file://lark2agent_ws.py#L3688-L3698)
-- [lark2agent_ws.py:410-418](file://lark2agent_ws.py#L410-L418)
+- [tide_ws.py:8355-8368](file://tide_ws.py#L8355-L8368)
+- [tide_ws.py:8506-8508](file://tide_ws.py#L8506-L8508)
+- [tide_ws.py:3688-3698](file://tide_ws.py#L3688-L3698)
+- [tide_ws.py:410-418](file://tide_ws.py#L410-L418)
 
 ### 最佳实践
 - 严格控制并发：合理设置 MAX_RUNNING_TASKS 与 MAX_RUNNING_TASKS_PER_CHAT，避免资源争用。
 - 合理刷新频率：TASK_CARD_REFRESH_INTERVAL_SECONDS 不宜过低，避免频繁更新卡片。
 - 附件管理：限制附件大小与数量，避免占用过多磁盘与网络带宽。
 - 审批与权限：优先使用 Agent CLI 的 sandbox/approval policy，Lark 审批作为补充闭环。
-- 状态持久化：定期检查 .lark2agent_state.json 权限与大小，避免影响运行。
+- 状态持久化：定期检查 .tide_state.json 权限与大小，避免影响运行。
 
 **章节来源**
-- [lark2agent_ws.py:6160-6167](file://lark2agent_ws.py#L6160-L6167)
-- [lark2agent_ws.py:7237-7266](file://lark2agent_ws.py#L7237-L7266)
-- [lark2agent_ws.py:1175-1182](file://lark2agent_ws.py#L1175-L1182)
+- [tide_ws.py:6160-6167](file://tide_ws.py#L6160-L6167)
+- [tide_ws.py:7237-7266](file://tide_ws.py#L7237-L7266)
+- [tide_ws.py:1175-1182](file://tide_ws.py#L1175-L1182)

@@ -2,15 +2,15 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { Button } from "@lark2codex/ui";
+import { Button } from "@tide/ui";
 import {
   useWorkflow,
   useUpdateWorkflow,
   useRunWorkflow,
   useWorkflowRuns,
-} from "@lark2codex/core";
-import type { WorkflowDefinition } from "@lark2codex/core";
-import { WorkflowCanvas, WorkflowRunHistory } from "@lark2codex/views";
+} from "@tide/core";
+import type { WorkflowDefinition } from "@tide/core";
+import { WorkflowCanvas, WorkflowRunHistory } from "@tide/views";
 
 export default function WorkflowEditorPage() {
   const params = useParams<{ id: string }>();

@@ -1,12 +1,13 @@
 "use client";
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { useState, useCallback } from "react";
-import { useAgentBoard, useMoveCard } from "@lark2codex/core";
+import { useAgentBoard, useMoveCard } from "@tide/core";
 import { useQueryClient } from "@tanstack/react-query";
 import { DragDropContext } from "@hello-pangea/dnd";
-import { Badge } from "@lark2codex/ui";
+import { Badge } from "@tide/ui";
 import { BoardColumn } from "./BoardColumn";
 import { KanbanFilters } from "./KanbanFilters";
+import { EmptyState } from "./EmptyState";
 export function AgentBoard() {
     const [search, setSearch] = useState("");
     const { data, isLoading } = useAgentBoard();
@@ -57,6 +58,8 @@ export function AgentBoard() {
     const filteredSwimlanes = search.trim()
         ? swimlanes.map((s) => (Object.assign(Object.assign({}, s), { columns: s.columns.map((col) => (Object.assign(Object.assign({}, col), { cards: col.cards.filter((c) => c.title.toLowerCase().includes(search.toLowerCase())) }))) })))
         : swimlanes;
-    return (_jsxs("div", { className: "space-y-4", children: [_jsx(KanbanFilters, { search: search, onSearchChange: setSearch }), _jsx(DragDropContext, { onDragEnd: handleDragEnd, children: _jsx("div", { className: "space-y-6", children: filteredSwimlanes.map((swimlane) => (_jsxs("div", { className: `rounded-lg border p-4 ${swimlane.idle ? "border-dashed opacity-60" : ""}`, children: [_jsxs("div", { className: "mb-3 flex items-center gap-2", children: [_jsx("span", { className: "text-sm font-semibold", children: swimlane.agent }), swimlane.idle && (_jsx(Badge, { variant: "outline", className: "text-xs", children: "\u7A7A\u95F2" }))] }), _jsx("div", { className: "flex gap-4 overflow-x-auto pb-2", children: swimlane.columns.map((column) => (_jsx(BoardColumn, { column: column }, column.id))) })] }, swimlane.agent))) }) })] }));
+    const totalCards = filteredSwimlanes.reduce((sum, s) => sum + s.columns.reduce((c, col) => c + col.cards.length, 0), 0);
+    const hasContent = filteredSwimlanes.length > 0 && totalCards > 0;
+    return (_jsxs("div", { className: "space-y-4", children: [_jsx(KanbanFilters, { search: search, onSearchChange: setSearch }), !hasContent ? (_jsx(EmptyState, { message: "\u6682\u65E0\u8FD0\u884C\u4E2D\u7684\u4EFB\u52A1", hint: "\u5F53 Agent \u63A5\u6536\u5230\u4EFB\u52A1\u540E\uFF0C\u4F1A\u6309\u6CF3\u9053\u663E\u793A\u5728\u8FD9\u91CC" })) : (_jsx(DragDropContext, { onDragEnd: handleDragEnd, children: _jsx("div", { className: "space-y-6", children: filteredSwimlanes.map((swimlane) => (_jsxs("div", { className: `rounded-lg border p-4 ${swimlane.idle ? "border-dashed opacity-60" : ""}`, children: [_jsxs("div", { className: "mb-3 flex items-center gap-2", children: [_jsx("span", { className: "text-sm font-semibold", children: swimlane.agent }), swimlane.idle && (_jsx(Badge, { variant: "outline", className: "text-xs", children: "\u7A7A\u95F2" }))] }), _jsx("div", { className: "flex gap-4 overflow-x-auto pb-2", children: swimlane.columns.map((column) => (_jsx(BoardColumn, { column: column }, column.id))) })] }, swimlane.agent))) }) }))] }));
 }
 //# sourceMappingURL=AgentBoard.js.map

@@ -1,7 +1,7 @@
 "use client";
 
-import { Card, CardContent, CardHeader, CardTitle } from "@lark2codex/ui";
-import { useAgents } from "@lark2codex/core";
+import { Card, CardContent, CardHeader, CardTitle } from "@tide/ui";
+import { useAgents } from "@tide/core";
 
 export function AgentPanel() {
   const { data, isLoading, isError } = useAgents();

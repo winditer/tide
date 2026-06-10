@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { Badge, Card, CardContent, CardHeader, CardTitle } from "@lark2codex/ui";
-import { useRecentTasks } from "@lark2codex/core";
-import type { RecentTask } from "@lark2codex/core";
+import { Badge, Card, CardContent, CardHeader, CardTitle } from "@tide/ui";
+import { useRecentTasks } from "@tide/core";
+import type { RecentTask } from "@tide/core";
 
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   queued: "secondary",

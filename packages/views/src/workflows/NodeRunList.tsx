@@ -1,6 +1,6 @@
 "use client";
 
-import type { WorkflowNodeRun, WorkflowRun } from "@lark2codex/core";
+import type { WorkflowNodeRun, WorkflowRun } from "@tide/core";
 import { STATUS_BG, STATUS_LABEL, statusTone } from "./node-tones";
 
 interface NodeRunListProps {

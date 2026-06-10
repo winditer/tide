@@ -1,4 +1,4 @@
-import type { WorkflowNodeType } from "@lark2codex/core";
+import type { WorkflowNodeType } from "@tide/core";
 interface NodePaletteProps {
     onAddNode?: (type: WorkflowNodeType) => void;
 }

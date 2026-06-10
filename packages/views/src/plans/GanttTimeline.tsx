@@ -2,8 +2,8 @@
 
 import { useMemo } from "react";
 import dayjs from "dayjs";
-import { usePlanTimeline } from "@lark2codex/core";
-import type { GanttItem } from "@lark2codex/core";
+import { usePlanTimeline } from "@tide/core";
+import type { GanttItem } from "@tide/core";
 
 const STATUS_FILL: Record<string, string> = {
   queued: "#cbd5e1",

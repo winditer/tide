@@ -1,11 +1,11 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { useAgentBoard, useMoveCard } from "@lark2codex/core";
-import type { KanbanColumn, KanbanCard, AgentSwimlane } from "@lark2codex/core";
+import { useAgentBoard, useMoveCard } from "@tide/core";
+import type { KanbanColumn, KanbanCard, AgentSwimlane } from "@tide/core";
 import { useQueryClient } from "@tanstack/react-query";
 import { DragDropContext, type DropResult } from "@hello-pangea/dnd";
-import { Badge } from "@lark2codex/ui";
+import { Badge } from "@tide/ui";
 import { BoardColumn } from "./BoardColumn";
 import { KanbanFilters } from "./KanbanFilters";
 import { EmptyState } from "./EmptyState";

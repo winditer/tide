@@ -1,16 +1,16 @@
 """
-从 .lark2agent_state.json / .lark_codex_state.json 以及本地 Codex/Claude/Qoder
+从 .tide_state.json 以及本地 Codex/Claude/Qoder
 session 文件迁移历史会话到 conversations 表。
 
 一次性脚本，幂等运行（已存在的 (workspace_id, chat_id, session_id) 组合不会重复插入）。
 
 运行方式：
-    cd /Users/haifeng/Documents/lark2codex
+    cd /Users/haifeng/Documents/tide
     python -m backend.scripts.migrate_conversations
 
 可选环境变量：
     MIGRATE_WORKSPACE_ID   目标 workspace（默认 default）
-    MIGRATE_DB_PATH        SQLite 文件路径（默认 lark2agent.db）
+    MIGRATE_DB_PATH        SQLite 文件路径（默认 tide.db）
     MIGRATE_MAX_FILES      每个 Agent 扫描的最近 session 文件数量（默认 300）
     MIGRATE_DRY_RUN=1      只打印不写入
     CODEX_SESSIONS_DIR / CLAUDE_PROJECTS_DIR / QODER_PROJECTS_DIR
@@ -38,13 +38,12 @@ logger = logging.getLogger("migrate_conversations")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 WORKSPACE_ID = os.getenv("MIGRATE_WORKSPACE_ID", "default")
-DB_PATH = Path(os.getenv("MIGRATE_DB_PATH", str(PROJECT_ROOT / "lark2agent.db")))
+DB_PATH = Path(os.getenv("MIGRATE_DB_PATH", str(PROJECT_ROOT / "tide.db")))
 MAX_FILES = int(os.getenv("MIGRATE_MAX_FILES", "300"))
 DRY_RUN = os.getenv("MIGRATE_DRY_RUN", "0") == "1"
 
 STATE_FILES = [
-    PROJECT_ROOT / ".lark2agent_state.json",
-    PROJECT_ROOT / ".lark_codex_state.json",
+    PROJECT_ROOT / ".tide_state.json",
 ]
 
 CODEX_SESSIONS_DIR = Path(
@@ -93,7 +92,7 @@ def _normalize_agent_id(agent_id: str = "") -> str:
 
 
 def _split_session_key(value: str) -> tuple[str, str]:
-    """与 lark2agent_ws.split_conversation_key 行为一致：
+    """与 tide_ws.split_conversation_key 行为一致：
     - "claude:xxxx" -> ("claude", "xxxx")
     - "qoder:xxxx"  -> ("qoder", "xxxx")
     - 其它          -> ("codex", value)

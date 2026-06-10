@@ -1,7 +1,7 @@
-# Lark2Codex — 系统架构
+# Tide — 系统架构
 
 > 版本：v2.0 | 更新日期：2026-06-08
-> 状态：**已实施**（Phase 1–4 迁移完成；旧脚本 `lark2agent_ws.py` 已废弃）
+> 状态：**已实施**（Phase 1–4 迁移完成；旧脚本 `tide_ws.py` 已废弃）
 
 完整功能与启动方式见 [README.md](README.md)；演进路线见 [ROADMAP.md](ROADMAP.md)。
 
@@ -9,7 +9,7 @@
 
 ## 1. 概述
 
-Lark2Codex 把 Codex / Claude Code / Qoder 等 Agent CLI 统一封装在 **单进程 FastAPI 后端** 中，前端是 **Next.js Web 工作台**，并保留 **Lark 机器人** 作为辅助通道。设计目标：
+Tide 把 Codex / Claude Code / Qoder 等 Agent CLI 统一封装在 **单进程 FastAPI 后端** 中，前端是 **Next.js Web 工作台**，并保留 **Lark 机器人** 作为辅助通道。设计目标：
 
 - **统一后端，单进程部署** — 不再维护两份独立的 Lark 脚本和 Web API。
 - **SQLite 唯一数据源** — Web、Lark、定时器、工作流共享同一份状态。
@@ -52,7 +52,7 @@ Lark2Codex 把 Codex / Claude Code / Qoder 等 Agent CLI 统一封装在 **单�
 │                           ▼                                     │
 │  ┌──────────────┐  ┌──────────────┐  ┌────────────────────┐    │
 │  │ SQLite (WAL) │  │ APScheduler  │  │ Lark Listener (线程) │    │
-│  │ lark2agent.db│  │ 内存 jobstore │  │ lark-oapi WS         │    │
+│  │   tide.db    │  │ 内存 jobstore │  │ lark-oapi WS         │    │
 │  └──────────────┘  └──────────────┘  └────────────────────┘    │
 └────────────────────────────┬───────────────────────────────────┘
                              │ Lark SDK (可选)
@@ -267,7 +267,7 @@ WS /ws
 
 1. 用户提交 `/plan` 文本或 Web 表单 → `PlanService.create_plan` 解析阶段与依赖（`depends:1,2`） → 写 `plans` + `plan_tasks` + 关联 `tasks(status=queued)`。
 2. `PlanExecutor` 按 `max_parallel` + DAG 拓扑序调度：
-   - 在 Git 仓库下使用 `git_utils` 创建 `.lark2agent/worktrees/<plan_id>-<task_id>` worktree 与 `lark2agent/<plan_id>-<task_id>` 分支。
+   - 在 Git 仓库下使用 `git_utils` 创建 `.tide/worktrees/<plan_id>-<task_id>` worktree 与 `tide/<plan_id>-<task_id>` 分支。
    - 调用 `task_runtime` 启动 Agent 子进程；输出通过 `event_emitter` → `ws_hub` 流式广播。
 3. 子任务结束执行 `PLAN_TEST_COMMAND`，生成 diff_summary，写回 `tasks` 并推送到 Plan DAG 视图。
 4. 进入「等待提交」状态 → Web/Lark 审批后 commit 到子任务分支；不会自动合并主干。
@@ -325,7 +325,7 @@ cd apps/web && yarn dev
 docker-compose.yml
   ├── api          (FastAPI, uvicorn workers=1, 端口 8000)
   ├── web          (Next.js standalone build, 端口 3000)
-  └── data         (持久化卷: lark2agent.db, .lark2agent/)
+  └── data         (持久化卷: tide.db, .tide/)
 ```
 
 不依赖 Redis、PostgreSQL；如有水平扩展需求，可将 SQLite 替换为 PostgreSQL 并将 ws_hub 升级为 Pub/Sub。

@@ -35,7 +35,7 @@ from backend.runtime.executor import agent_executor
 from backend.services.event_emitter import event_emitter
 from backend.services.ws_hub import ws_hub
 
-logger = logging.getLogger("lark2agent.workflow_engine")
+logger = logging.getLogger("tide.workflow_engine")
 
 
 def _safe_json_loads(raw, default):

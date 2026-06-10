@@ -1,9 +1,9 @@
 "use client";
 
 import { useId, useMemo, useState } from "react";
-import { Button, Input, Select } from "@lark2codex/ui";
-import { useCreatePlan, useProjects } from "@lark2codex/core";
-import type { PlanTaskDef } from "@lark2codex/core";
+import { Button, Input, Select } from "@tide/ui";
+import { useCreatePlan, useProjects } from "@tide/core";
+import type { PlanTaskDef } from "@tide/core";
 
 const AGENT_OPTIONS = [
   { label: "Codex", value: "codex" },

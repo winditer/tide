@@ -22,7 +22,7 @@ from backend.services.task_service import task_service
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
-ATTACHMENTS_DIR = Path(".lark2agent/attachments/web")
+ATTACHMENTS_DIR = Path(".tide/attachments/web")
 
 
 def _safe_upload_name(filename: str) -> str:

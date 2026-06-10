@@ -15,9 +15,12 @@
     "incremental": true,
     "plugins": [{ "name": "next" }],
     "paths": {
-      "@lark2codex/core": ["../../packages/core/src"],
-      "@lark2codex/ui": ["../../packages/ui/src"],
-      "@lark2codex/views": ["../../packages/views/src"]
+      "@tide/core": ["../../packages/core/src"],
+      "@tide/core/*": ["../../packages/core/src/*"],
+      "@tide/ui": ["../../packages/ui/src"],
+      "@tide/ui/*": ["../../packages/ui/src/*"],
+      "@tide/views": ["../../packages/views/src"],
+      "@tide/views/*": ["../../packages/views/src/*"]
     }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],

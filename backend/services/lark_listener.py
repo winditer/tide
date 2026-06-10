@@ -29,7 +29,7 @@ from backend.runtime.config import (
     MAX_LARK_ATTACHMENTS_PER_MESSAGE,
 )
 
-logger = logging.getLogger("lark2agent.lark_listener")
+logger = logging.getLogger("tide.lark_listener")
 
 
 @dataclass
@@ -376,7 +376,7 @@ class LarkListener:
             logger.warning("GetMessageResourceRequest not available")
             return []
 
-        # 输出目录：项目根/.lark2agent/attachments/{chat_id}/{message_id}/
+        # 输出目录：项目根/.tide/attachments/{chat_id}/{message_id}/
         base_dir = Path(LARK_ATTACHMENTS_DIR).expanduser()
         if not base_dir.is_absolute():
             base_dir = Path.cwd() / base_dir

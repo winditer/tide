@@ -27,7 +27,7 @@ class EventTypes:
     WORKFLOW_NODE_COMPLETED = "workflow.node.completed"
     SCHEDULE_RUN_STARTED = "schedule.run.started"
     SCHEDULE_RUN_COMPLETED = "schedule.run.completed"
-    # Lark 桥接事件（来自 lark2agent_ws.py）
+    # Lark 桥接事件（来自 tide_ws.py）
     LARK_TASK_CREATED = "lark.task.created"
     LARK_TASK_UPDATED = "lark.task.updated"
 
@@ -98,7 +98,7 @@ class EventEmitter:
             await lark_bridge.on_task_status_changed(task_id, new_status, source="web")
         except Exception:
             import logging
-            logging.getLogger("lark2agent.event_emitter").debug(
+            logging.getLogger("tide.event_emitter").debug(
                 "lark_bridge notify skipped", exc_info=True,
             )
 

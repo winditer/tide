@@ -1,14 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Button, Select } from "@lark2codex/ui";
+import { Button, Select } from "@tide/ui";
 import {
   fetchSessionsForProject,
   useAgents,
   useCreateTaskMutation,
   useProjects,
   type SessionItem,
-} from "@lark2codex/core";
+} from "@tide/core";
 
 const AGENT_LABEL: Record<string, string> = {
   codex: "CX",

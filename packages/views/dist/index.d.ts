@@ -1,6 +1,8 @@
 export { TaskList } from "./tasks/TaskList";
 export { TaskCreateForm } from "./tasks/TaskCreateForm";
 export { ApprovalPanel } from "./tasks/ApprovalPanel";
+export { TaskFilters } from "./tasks/TaskFilters";
+export type { TaskFiltersValue } from "./tasks/TaskFilters";
 export { StatCards } from "./dashboard/StatCards";
 export { RecentTasks } from "./dashboard/RecentTasks";
 export { AgentPanel } from "./dashboard/AgentPanel";
@@ -18,6 +20,7 @@ export { KanbanBoard } from "./kanban/KanbanBoard";
 export { BoardColumn } from "./kanban/BoardColumn";
 export { BoardCard } from "./kanban/BoardCard";
 export { KanbanFilters } from "./kanban/KanbanFilters";
+export { EmptyState as KanbanEmptyState } from "./kanban/EmptyState";
 export { ProjectBoard } from "./kanban/ProjectBoard";
 export { SessionBoard } from "./kanban/SessionBoard";
 export { AgentBoard } from "./kanban/AgentBoard";

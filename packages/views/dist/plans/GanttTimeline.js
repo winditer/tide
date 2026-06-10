@@ -2,7 +2,7 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { useMemo } from "react";
 import dayjs from "dayjs";
-import { usePlanTimeline } from "@lark2codex/core";
+import { usePlanTimeline } from "@tide/core";
 const STATUS_FILL = {
     queued: "#cbd5e1",
     running: "#f59e0b",

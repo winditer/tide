@@ -18,7 +18,7 @@ from backend.db.engine import async_session_factory
 from backend.services.event_emitter import event_emitter
 from backend.services.ws_hub import ws_hub
 
-logger = logging.getLogger("lark2agent.schedule_service")
+logger = logging.getLogger("tide.schedule_service")
 
 
 class ScheduleService:

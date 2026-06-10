@@ -15,7 +15,7 @@ from sqlalchemy import text
 
 from backend.db.engine import async_session_factory
 
-logger = logging.getLogger("lark2agent.workflow_service")
+logger = logging.getLogger("tide.workflow_service")
 
 
 def _safe_json_loads(raw, default):

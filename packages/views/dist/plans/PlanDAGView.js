@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import ELK from "elkjs/lib/elk.bundled.js";
-import { usePlanDAG } from "@lark2codex/core";
+import { usePlanDAG } from "@tide/core";
 import { PlanTaskNode } from "./PlanTaskNode";
 const elk = new ELK();
 const NODE_WIDTH = 260;

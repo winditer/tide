@@ -1,7 +1,7 @@
 "use client";
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
-import { Card, CardContent, CardHeader, CardTitle } from "@lark2codex/ui";
-import { useAgents } from "@lark2codex/core";
+import { Card, CardContent, CardHeader, CardTitle } from "@tide/ui";
+import { useAgents } from "@tide/core";
 export function AgentPanel() {
     var _a;
     const { data, isLoading, isError } = useAgents();

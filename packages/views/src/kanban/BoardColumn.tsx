@@ -1,8 +1,8 @@
 "use client";
 
-import { Badge } from "@lark2codex/ui";
+import { Badge } from "@tide/ui";
 import { Droppable } from "@hello-pangea/dnd";
-import type { KanbanColumn } from "@lark2codex/core";
+import type { KanbanColumn } from "@tide/core";
 import { BoardCard } from "./BoardCard";
 
 interface BoardColumnProps {

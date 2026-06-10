@@ -1,26 +1,26 @@
-# Lark2Agent Web 前端
+# Tide Web 前端
 
 Next.js 15 App Router + TanStack Query + Tailwind CSS。
 
 ## 项目结构
 
 ```
-lark2codex/
+tide/
 ├── apps/web/            # Next.js 15 应用
 │   ├── app/             # App Router 页面
-│   ├── package.json     # @lark2codex/web
+│   ├── package.json     # @tide/web
 │   └── ...
 ├── packages/
-│   ├── core/            # @lark2codex/core — Zustand stores、React Query hooks、API client、TypeScript 类型
-│   ├── ui/              # @lark2codex/ui — shadcn/ui 原子组件
-│   └── views/           # @lark2codex/views — 业务组件
+│   ├── core/            # @tide/core — Zustand stores、React Query hooks、API client、TypeScript 类型
+│   ├── ui/              # @tide/ui — shadcn/ui 原子组件
+│   └── views/           # @tide/views — 业务组件
 └── ...
 ```
 
 ## 开发启动
 
 ```bash
-cd /path/to/lark2codex
+cd /path/to/tide
 yarn install
 yarn dev
 ```
@@ -28,7 +28,7 @@ yarn dev
 前端默认运行在 http://localhost:3000，需同时启动后端：
 
 ```bash
-cd /path/to/lark2codex && uvicorn backend.main:app --reload --port 8000
+cd /path/to/tide && uvicorn backend.main:app --reload --port 8000
 ```
 
 ## 构建生产版本
@@ -55,12 +55,12 @@ yarn start
 在页面中使用：
 
 ```tsx
-import { Button, Card } from "@lark2codex/ui"
-import { TaskList } from "@lark2codex/views"
+import { Button, Card } from "@tide/ui"
+import { TaskList } from "@tide/views"
 ```
 
 API 请求通过 `packages/core/` 中的 API client + TanStack Query hooks 统一管理：
 
 ```tsx
-import { useTasks } from "@lark2codex/core"
+import { useTasks } from "@tide/core"
 ```

@@ -1,4 +1,4 @@
-import type { WorkflowRun } from "@lark2codex/core";
+import type { WorkflowRun } from "@tide/core";
 interface NodeRunListProps {
     run: WorkflowRun;
     onApprove?: (nodeId: string) => void;

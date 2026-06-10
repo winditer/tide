@@ -1,4 +1,4 @@
-import type { KanbanCard } from "@lark2codex/core";
+import type { KanbanCard } from "@tide/core";
 interface BoardCardProps {
     card: KanbanCard;
     index: number;

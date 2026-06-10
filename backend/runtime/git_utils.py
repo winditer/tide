@@ -23,7 +23,7 @@ import re
 import shutil
 from pathlib import Path
 
-logger = logging.getLogger("lark2agent.git_utils")
+logger = logging.getLogger("tide.git_utils")
 
 
 # ── 内部辅助 ────────────────────────────────────────────────────────────────
@@ -185,7 +185,7 @@ async def git_diff_summary(cwd: Path) -> str:
 
 def _plan_worktree_root(repo_root: Path) -> Path:
     """Plan worktree 在仓库内的统一存放目录。"""
-    return repo_root / ".lark-codex" / "worktrees"
+    return repo_root / ".tide" / "worktrees"
 
 
 def _plan_worktree_path(repo_root: Path, plan_id: str, task_id: str) -> Path:
@@ -195,9 +195,9 @@ def _plan_worktree_path(repo_root: Path, plan_id: str, task_id: str) -> Path:
 
 
 def _plan_branch_name(plan_id: str, task_id: str) -> str:
-    """子任务对应的分支名：``lark-codex/{plan_id}-{task_id[:8]}``。"""
+    """子任务对应的分支名：``tide/{plan_id}-{task_id[:8]}``。"""
     short_task = safe_git_ref_part(task_id)[:8] or "task"
-    return f"lark-codex/{safe_git_ref_part(plan_id)}-{short_task}"
+    return f"tide/{safe_git_ref_part(plan_id)}-{short_task}"
 
 
 async def prepare_plan_worktree(
@@ -207,8 +207,8 @@ async def prepare_plan_worktree(
 ) -> tuple[Path, str, str]:
     """创建 Git worktree + 新分支，供 PlanExecutor 隔离执行子任务。
 
-    - 路径：``{repo_root}/.lark-codex/worktrees/{plan_id}-{task_id}``
-    - 分支：``lark-codex/{plan_id}-{task_id[:8]}``
+    - 路径：``{repo_root}/.tide/worktrees/{plan_id}-{task_id}``
+    - 分支：``tide/{plan_id}-{task_id[:8]}``
 
     若目标 worktree 已存在（``.git`` 目录可见），直接复用并跳过创建。
 
@@ -281,7 +281,7 @@ async def cleanup_plan_worktree(
     1. ``git worktree remove --force <path>``
     2. ``git branch -D <branch>``
     3. 若 git 命令失败但 worktree 目录仍存在且位于
-       ``{repo_root}/.lark-codex/worktrees`` 下，fallback 到
+       ``{repo_root}/.tide/worktrees`` 下，fallback 到
        ``shutil.rmtree``。
 
     异常被吞下并记录日志，不会向上抛出。
@@ -357,7 +357,7 @@ async def commit_changes(cwd: Path, message: str) -> str | None:
 
     # 仍可能 add 后没有暂存内容（例如 .gitignore 过滤），再次确认
     code, output = await git_command(
-        cwd, ["commit", "-m", message or "lark-codex auto commit"], timeout=60
+        cwd, ["commit", "-m", message or "tide auto commit"], timeout=60
     )
     if code != 0:
         logger.warning(

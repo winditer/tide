@@ -1,15 +1,15 @@
 "use client";
 
 import { useParams, useRouter } from "next/navigation";
-import { Button } from "@lark2codex/ui";
+import { Button } from "@tide/ui";
 import {
   useWorkflow,
   useWorkflowRun,
   useCancelRun,
   useApproveNode,
   useRejectNode,
-} from "@lark2codex/core";
-import { WorkflowRunView, WorkflowNodeRunList } from "@lark2codex/views";
+} from "@tide/core";
+import { WorkflowRunView, WorkflowNodeRunList } from "@tide/views";
 
 const STATUS_TONE: Record<
   string,

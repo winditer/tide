@@ -1,4 +1,4 @@
-import type { WorkflowNodeRunStatus } from "@lark2codex/core";
+import type { WorkflowNodeRunStatus } from "@tide/core";
 export interface NodeTone {
     ring: string;
     surface: string;

@@ -10,7 +10,7 @@ import {
   CardContent,
   Input,
   Select,
-} from "@lark2codex/ui";
+} from "@tide/ui";
 import {
   useAgents,
   useCreateSessionMutation,
@@ -19,7 +19,7 @@ import {
   useArchiveSessionMutation,
   useUnarchiveSessionMutation,
   type SessionInfo,
-} from "@lark2codex/core";
+} from "@tide/core";
 
 type SessionRow = SessionInfo & {
   title?: string | null;

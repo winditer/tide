@@ -1,9 +1,9 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { Badge } from "@lark2codex/ui";
-import { Button } from "@lark2codex/ui";
-import type { Task, TaskStatus } from "@lark2codex/core";
+import { Badge } from "@tide/ui";
+import { Button } from "@tide/ui";
+import type { Task, TaskStatus } from "@tide/core";
 
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   queued: "secondary",

@@ -1,7 +1,7 @@
 "use client";
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
-import { Button } from "@lark2codex/ui";
-import { useApproveTaskMutation, useRejectTaskMutation, } from "@lark2codex/core";
+import { Button } from "@tide/ui";
+import { useApproveTaskMutation, useRejectTaskMutation, } from "@tide/core";
 export function ApprovalPanel({ taskId, reason }) {
     const approveMutation = useApproveTaskMutation();
     const rejectMutation = useRejectTaskMutation();

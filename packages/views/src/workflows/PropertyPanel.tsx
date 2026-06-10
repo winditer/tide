@@ -1,7 +1,7 @@
 "use client";
 
-import { Button, Input, Select } from "@lark2codex/ui";
-import type { WorkflowNode, WorkflowNodeType } from "@lark2codex/core";
+import { Button, Input, Select } from "@tide/ui";
+import type { WorkflowNode, WorkflowNodeType } from "@tide/core";
 
 const TYPE_LABEL: Record<WorkflowNodeType, string> = {
   start: "起始",

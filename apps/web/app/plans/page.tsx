@@ -1,9 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Button, Select } from "@lark2codex/ui";
-import { usePlans, useProjects } from "@lark2codex/core";
-import { PlanList, PlanCreateForm } from "@lark2codex/views";
+import { Button, Select } from "@tide/ui";
+import { usePlans, useProjects } from "@tide/core";
+import { PlanList, PlanCreateForm } from "@tide/views";
 
 const STATUS_FILTERS = [
   { label: "全部", value: "" },

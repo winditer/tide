@@ -1,6 +1,6 @@
 "use client";
 import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
-import { Button, Input, Select } from "@lark2codex/ui";
+import { Button, Input, Select } from "@tide/ui";
 const TYPE_LABEL = {
     start: "起始",
     end: "终止",

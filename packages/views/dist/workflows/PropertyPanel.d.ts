@@ -1,4 +1,4 @@
-import type { WorkflowNode } from "@lark2codex/core";
+import type { WorkflowNode } from "@tide/core";
 interface PropertyPanelProps {
     node: WorkflowNode | null;
     onUpdate: (id: string, data: Record<string, any>) => void;

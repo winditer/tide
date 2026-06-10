@@ -1,5 +1,5 @@
 {
-  "name": "@lark2codex/views",
+  "name": "@tide/views",
   "version": "0.1.0",
   "private": true,
   "main": "./src/index.ts",
@@ -17,8 +17,8 @@
     "./workflows/nodes/*": "./src/workflows/nodes/*.tsx"
   },
   "dependencies": {
-    "@lark2codex/core": "*",
-    "@lark2codex/ui": "*",
+    "@tide/core": "*",
+    "@tide/ui": "*",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "@hello-pangea/dnd": "^18.0.0"

@@ -1,10 +1,11 @@
 "use client";
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { useState, useCallback } from "react";
-import { useSessionBoard, useMoveCard } from "@lark2codex/core";
+import { useSessionBoard, useMoveCard } from "@tide/core";
 import { useQueryClient } from "@tanstack/react-query";
 import { KanbanBoard } from "./KanbanBoard";
 import { KanbanFilters } from "./KanbanFilters";
+import { EmptyState } from "./EmptyState";
 export function SessionBoard() {
     var _a;
     const [search, setSearch] = useState("");
@@ -49,6 +50,7 @@ export function SessionBoard() {
         return _jsx("div", { className: "py-8 text-center text-muted-foreground", children: "\u52A0\u8F7D\u4E2D..." });
     }
     const columns = filterColumns((_a = data === null || data === void 0 ? void 0 : data.columns) !== null && _a !== void 0 ? _a : []);
-    return (_jsxs("div", { className: "space-y-4", children: [_jsx(KanbanFilters, { search: search, onSearchChange: setSearch }), _jsx(KanbanBoard, { columns: columns, onDragEnd: handleDragEnd })] }));
+    const totalCards = columns.reduce((sum, c) => sum + c.cards.length, 0);
+    return (_jsxs("div", { className: "space-y-4", children: [_jsx(KanbanFilters, { search: search, onSearchChange: setSearch }), totalCards === 0 ? (_jsx(EmptyState, { message: "\u6682\u65E0\u6D3B\u8DC3\u4F1A\u8BDD", hint: "\u5F53\u4EFB\u52A1\u88AB\u521B\u5EFA\u6216\u8FD0\u884C\u65F6\uFF0C\u4F1A\u8BDD\u4F1A\u51FA\u73B0\u5728\u8FD9\u91CC" })) : (_jsx(KanbanBoard, { columns: columns, onDragEnd: handleDragEnd }))] }));
 }
 //# sourceMappingURL=SessionBoard.js.map

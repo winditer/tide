@@ -1,9 +1,9 @@
 "use client";
 
-import { Badge } from "@lark2codex/ui";
+import { Badge } from "@tide/ui";
 import { Draggable } from "@hello-pangea/dnd";
 import { useRouter } from "next/navigation";
-import type { KanbanCard } from "@lark2codex/core";
+import type { KanbanCard } from "@tide/core";
 
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   queued: "secondary",

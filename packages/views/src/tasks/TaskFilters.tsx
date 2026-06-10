@@ -1,7 +1,7 @@
 "use client";
 
-import { Button, Select, Input } from "@lark2codex/ui";
-import { useAgents, useProjects, useSessions } from "@lark2codex/core";
+import { Button, Select, Input } from "@tide/ui";
+import { useAgents, useProjects, useSessions } from "@tide/core";
 
 export interface TaskFiltersValue {
   status?: string;

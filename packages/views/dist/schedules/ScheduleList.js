@@ -2,8 +2,8 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { Badge, Button, Input } from "@lark2codex/ui";
-import { useToggleScheduleMutation, useDeleteScheduleMutation, useTriggerScheduleMutation, } from "@lark2codex/core";
+import { Badge, Button, Input } from "@tide/ui";
+import { useToggleScheduleMutation, useDeleteScheduleMutation, useTriggerScheduleMutation, } from "@tide/core";
 function formatTime(iso) {
     if (!iso)
         return "—";

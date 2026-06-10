@@ -1,7 +1,7 @@
 """
 环境变量配置与常量。
 
-从 lark2agent_ws.py L54-151 提取的所有配置常量。
+从 tide_ws.py L54-151 提取的所有配置常量。
 """
 
 import os
@@ -84,7 +84,7 @@ MAX_SESSION_FILES = int(os.getenv("MAX_SESSION_FILES", "300"))
 MAX_RUNNING_TASKS = int(os.getenv("MAX_RUNNING_TASKS", "6"))
 MAX_RUNNING_TASKS_PER_CHAT = int(os.getenv("MAX_RUNNING_TASKS_PER_CHAT", "4"))
 LARK_EVENT_QUEUE_MAXSIZE = int(os.getenv("LARK_EVENT_QUEUE_MAXSIZE", "200"))
-LARK_ATTACHMENTS_DIR = os.getenv("LARK_ATTACHMENTS_DIR", ".lark2agent/attachments")
+LARK_ATTACHMENTS_DIR = os.getenv("LARK_ATTACHMENTS_DIR", ".tide/attachments")
 LARK_ATTACHMENT_MAX_BYTES = int(os.getenv("LARK_ATTACHMENT_MAX_BYTES", str(50 * 1024 * 1024)))
 LARK_PENDING_ATTACHMENT_TTL_SECONDS = int(os.getenv("LARK_PENDING_ATTACHMENT_TTL_SECONDS", "900"))
 MAX_LARK_ATTACHMENTS_PER_MESSAGE = int(os.getenv("MAX_LARK_ATTACHMENTS_PER_MESSAGE", "8"))
@@ -100,19 +100,13 @@ PLAN_TEST_COMMAND = os.getenv("PLAN_TEST_COMMAND", "git diff --check")
 PLAN_TEST_COMMAND_SHELL = os.getenv("PLAN_TEST_COMMAND_SHELL", "0") == "1"
 PLAN_TEST_TIMEOUT_SECONDS = int(os.getenv("PLAN_TEST_TIMEOUT_SECONDS", "120"))
 DAILY_REPORT_TIME = os.getenv("DAILY_REPORT_TIME", "19:00")
-STATE_FILE = Path(os.getenv("LARK2AGENT_STATE_FILE", os.getenv("LARK_CODEX_STATE_FILE", ".lark2agent_state.json")))
-LARK2AGENT_SHOW_ARCHIVED = os.getenv("LARK2AGENT_SHOW_ARCHIVED", os.getenv("LARK_CODEX_SHOW_ARCHIVED", "0")) == "1"
-LARK2AGENT_INCLUDE_PLAN_WORKTREES = os.getenv(
-    "LARK2AGENT_INCLUDE_PLAN_WORKTREES",
-    os.getenv("LARK_CODEX_INCLUDE_PLAN_WORKTREES", "0"),
-) == "1"
+STATE_FILE = Path(os.getenv("TIDE_STATE_FILE", ".tide_state.json"))
+TIDE_SHOW_ARCHIVED = os.getenv("TIDE_SHOW_ARCHIVED", "0") == "1"
+TIDE_INCLUDE_PLAN_WORKTREES = os.getenv("TIDE_INCLUDE_PLAN_WORKTREES", "0") == "1"
 MAX_LARK_MESSAGE_REFS = int(os.getenv("MAX_LARK_MESSAGE_REFS", "1000"))
-LARK2AGENT_WELCOME_MESSAGE = os.getenv(
-    "LARK2AGENT_WELCOME_MESSAGE",
-    os.getenv(
-        "LARK_CODEX_WELCOME_MESSAGE",
-        "I'm Lark2Agent, a lightweight multi-agent bridge for Lark.",
-    ),
+TIDE_WELCOME_MESSAGE = os.getenv(
+    "TIDE_WELCOME_MESSAGE",
+    "I'm Tide, a lightweight multi-agent bridge for Lark.",
 )
 SYNC_DESKTOP_SESSIONS = os.getenv("SYNC_DESKTOP_SESSIONS", "0") == "1"
 SESSION_WATCH_INTERVAL_SECONDS = int(os.getenv("SESSION_WATCH_INTERVAL_SECONDS", "3"))

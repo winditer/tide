@@ -1,4 +1,4 @@
-import type { Task } from "@lark2codex/core";
+import type { Task } from "@tide/core";
 interface TaskListProps {
     items: Task[];
     total: number;

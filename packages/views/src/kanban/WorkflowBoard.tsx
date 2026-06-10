@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { useWorkflowBoard, useMoveCard } from "@lark2codex/core";
-import type { KanbanColumn, KanbanCard } from "@lark2codex/core";
+import { useWorkflowBoard, useMoveCard } from "@tide/core";
+import type { KanbanColumn, KanbanCard } from "@tide/core";
 import { useQueryClient } from "@tanstack/react-query";
 import type { DropResult } from "@hello-pangea/dnd";
 import { KanbanBoard } from "./KanbanBoard";

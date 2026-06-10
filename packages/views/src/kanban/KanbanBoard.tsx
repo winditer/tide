@@ -1,7 +1,7 @@
 "use client";
 
 import { DragDropContext, type DropResult } from "@hello-pangea/dnd";
-import type { KanbanColumn } from "@lark2codex/core";
+import type { KanbanColumn } from "@tide/core";
 import { BoardColumn } from "./BoardColumn";
 
 interface KanbanBoardProps {

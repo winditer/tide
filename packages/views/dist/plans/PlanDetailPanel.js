@@ -1,7 +1,7 @@
 "use client";
 import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
-import { Button } from "@lark2codex/ui";
-import { useTaskQuery, useStopTaskMutation, useRetryTaskMutation, useApproveTaskMutation, useRejectTaskMutation, } from "@lark2codex/core";
+import { Button } from "@tide/ui";
+import { useTaskQuery, useStopTaskMutation, useRetryTaskMutation, useApproveTaskMutation, useRejectTaskMutation, } from "@tide/core";
 const STATUS_LABEL = {
     queued: "排队中",
     running: "运行中",

@@ -1,8 +1,8 @@
 """归档状态服务 — 维护项目/会话的软删除标记。
 
-存储方案：独立的 JSON 文件（避免与 Lark Bridge 的 ``.lark2agent_state.json`` 互相干扰）。
-默认路径由 ``LARK2AGENT_ARCHIVE_FILE`` 环境变量控制，落在仓库根目录下的
-``.lark2agent_archived.json``。
+存储方案：独立的 JSON 文件（避免与 Lark Bridge 的 ``.tide_state.json`` 互相干扰）。
+默认路径由 ``TIDE_ARCHIVE_FILE`` 环境变量控制，落在仓库根目录下的
+``.tide_archived.json``。
 
 JSON 结构::
 
@@ -26,13 +26,13 @@ import threading
 from pathlib import Path
 from typing import Iterable, List, Set
 
-logger = logging.getLogger("lark2agent.archive_service")
+logger = logging.getLogger("tide.archive_service")
 
-DEFAULT_ARCHIVE_FILE = ".lark2agent_archived.json"
+DEFAULT_ARCHIVE_FILE = ".tide_archived.json"
 
 
 def _resolve_path() -> Path:
-    raw = os.getenv("LARK2AGENT_ARCHIVE_FILE", DEFAULT_ARCHIVE_FILE)
+    raw = os.getenv("TIDE_ARCHIVE_FILE", DEFAULT_ARCHIVE_FILE)
     return Path(raw).expanduser()
 
 
@@ -187,7 +187,7 @@ class ArchiveStore:
 
 def _env_show_archived_default() -> bool:
     """读取默认的 ``show_archived`` 配置（环境变量）。"""
-    raw = os.getenv("LARK2AGENT_SHOW_ARCHIVED", os.getenv("LARK_CODEX_SHOW_ARCHIVED", "0"))
+    raw = os.getenv("TIDE_SHOW_ARCHIVED", "0")
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 

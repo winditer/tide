@@ -1,4 +1,4 @@
-# Lark2Agent Web 工作台 — 实施路线图
+# Tide Web 工作台 — 实施路线图
 
 > 版本：v1.0 | 更新日期：2026-06-05
 > 状态：**P1-P10 已完成，P11-P12 规划中**
@@ -48,7 +48,7 @@
 ### 目录结构
 
 ```
-lark2codex/
+tide/
 ├── apps/
 │   └── web/                    # Next.js App Router
 │       ├── app/
@@ -85,7 +85,7 @@ lark2codex/
 │   ├── models/                 # SQLAlchemy 模型
 │   ├── db/                     # 数据库配置 + migration
 │   └── ws/                     # WebSocket Hub
-├── lark2agent_ws.py            # 现有 Lark Bridge（保留）
+├── tide_ws.py                  # 现有 Lark Bridge（保留）
 └── ...
 ```
 
@@ -128,8 +128,8 @@ class TaskService:
     """桥接现有 AGENT_ADAPTERS 到 Web API"""
 
     def __init__(self):
-        # 直接导入 lark2agent_ws.py 中的运行时
-        from lark2agent_ws import AGENT_ADAPTERS, TASKS, SESSION_RUN_LOCKS
+        # 直接导入 tide_ws.py 中的运行时
+        from tide_ws import AGENT_ADAPTERS, TASKS, SESSION_RUN_LOCKS
         self.agent_adapters = AGENT_ADAPTERS
         self.running_tasks = TASKS
 
@@ -430,7 +430,7 @@ start_run(workflow_id, input)
 
 | # | 任务 | 状态 | 说明 |
 |---|------|------|------|
-| 10.1 | Lark Bridge 写 SQLite 适配 | ⬜ | 现有 lark2agent_ws.py 状态变更加 SQLite 写入 |
+| 10.1 | Lark Bridge 写 SQLite 适配 | ⬜ | 现有 tide_ws.py 状态变更加 SQLite 写入 |
 | 10.2 | Web 操作 → Lark 卡片刷新 | ⬜ | Web 审批/停止 → Lark 卡片更新 |
 | 10.3 | Lark 卡片回调 → Web 刷新 | ⬜ | Lark 审批/停止 → WS 广播 |
 | 10.4 | 双通道任务列表 | ⬜ | 任务详情展示来源（Web/Lark） |
@@ -546,7 +546,7 @@ P1 → P2 → P3 → P4 → P11 → P12
 
 | 风险 | 影响 | 缓解措施 |
 |------|------|---------|
-| 现有 lark2agent_ws.py 重构范围大 | P2 延期 | TaskService 先桥接不重构；后期渐进式拆分 |
+| 现有 tide_ws.py 重构范围大 | P2 延期 | TaskService 先桥接不重构；后期渐进式拆分 |
 | React Flow 自定义节点复杂度 | P5/P9 延期 | 先用简单矩形节点，后期逐步美化 |
 | Workflow 引擎状态一致性 | P8 质量风险 | 每步写 DB + 事件日志 + 单元测试覆盖 |
 | SQLite 并发写入性能 | 生产稳定性 | WAL 模式 + 写入串行化；后期可迁移 PostgreSQL |

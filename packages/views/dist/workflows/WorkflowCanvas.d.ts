@@ -1,5 +1,5 @@
 import "@xyflow/react/dist/style.css";
-import type { WorkflowDefinition, WorkflowNodeRun } from "@lark2codex/core";
+import type { WorkflowDefinition, WorkflowNodeRun } from "@tide/core";
 export interface WorkflowCanvasProps {
     definition: WorkflowDefinition;
     /** When provided, switches into runtime / read-only mode and color nodes by status. */

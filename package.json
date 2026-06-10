@@ -1,10 +1,10 @@
 {
-  "name": "lark2codex",
+  "name": "tide",
   "private": true,
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {
-    "dev": "yarn workspace @lark2codex/web dev",
-    "build": "yarn workspace @lark2codex/web build",
-    "lint": "yarn workspace @lark2codex/web lint"
+    "dev": "yarn workspace @tide/web dev",
+    "build": "yarn workspace @tide/web build",
+    "lint": "yarn workspace @tide/web lint"
   }
 }

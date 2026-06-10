@@ -21,7 +21,7 @@ from backend.services.lark_listener import LarkEvent
 from backend.services.lark_bridge import lark_bridge
 from backend.services.conversation_service import conversation_service
 
-logger = logging.getLogger("lark2agent.message_handler")
+logger = logging.getLogger("tide.message_handler")
 
 # 待处理附件暂存：key = f"{chat_id}:{sender_id}"
 # value = {"attachments": [<dict>...], "timestamp": <epoch_seconds>}
@@ -325,7 +325,7 @@ class MessageHandler:
     async def _cmd_help(self, chat_id: str):
         """显示帮助信息"""
         help_text = (
-            "📖 Lark2Agent 指令大全\n"
+            "📖 Tide 指令大全\n"
             "\n"
             "📋 展示类\n"
             "• /projects 或 /项目 — 显示项目面板\n"

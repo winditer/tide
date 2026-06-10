@@ -65,7 +65,7 @@ def load_dotenv(path: Path = Path(".env")):
 load_dotenv()
 
 _ORIG_ARGV = list(sys.argv)  # 保存原始 argv，防止重启时使用被修改的 sys.argv
-APP_NAME = "Lark2Agent"
+APP_NAME = "Tide"
 
 # ===================== 配置 =====================
 # 不要把 app secret 写进代码；用环境变量或 .env 注入。
@@ -123,7 +123,7 @@ MAX_SESSION_FILES = int(os.getenv("MAX_SESSION_FILES", "300"))
 MAX_RUNNING_TASKS = int(os.getenv("MAX_RUNNING_TASKS", "6"))
 MAX_RUNNING_TASKS_PER_CHAT = int(os.getenv("MAX_RUNNING_TASKS_PER_CHAT", "4"))
 LARK_EVENT_QUEUE_MAXSIZE = int(os.getenv("LARK_EVENT_QUEUE_MAXSIZE", "200"))
-LARK_ATTACHMENTS_DIR = os.getenv("LARK_ATTACHMENTS_DIR", ".lark2agent/attachments")
+LARK_ATTACHMENTS_DIR = os.getenv("LARK_ATTACHMENTS_DIR", ".tide/attachments")
 LARK_ATTACHMENT_MAX_BYTES = int(os.getenv("LARK_ATTACHMENT_MAX_BYTES", str(50 * 1024 * 1024)))
 LARK_PENDING_ATTACHMENT_TTL_SECONDS = int(os.getenv("LARK_PENDING_ATTACHMENT_TTL_SECONDS", "900"))
 MAX_LARK_ATTACHMENTS_PER_MESSAGE = int(os.getenv("MAX_LARK_ATTACHMENTS_PER_MESSAGE", "8"))
@@ -139,19 +139,16 @@ PLAN_TEST_COMMAND = os.getenv("PLAN_TEST_COMMAND", "git diff --check")
 PLAN_TEST_COMMAND_SHELL = os.getenv("PLAN_TEST_COMMAND_SHELL", "0") == "1"
 PLAN_TEST_TIMEOUT_SECONDS = int(os.getenv("PLAN_TEST_TIMEOUT_SECONDS", "120"))
 DAILY_REPORT_TIME = os.getenv("DAILY_REPORT_TIME", "19:00")
-STATE_FILE = Path(os.getenv("LARK2AGENT_STATE_FILE", os.getenv("LARK_CODEX_STATE_FILE", ".lark2agent_state.json")))
-LARK2AGENT_SHOW_ARCHIVED = os.getenv("LARK2AGENT_SHOW_ARCHIVED", os.getenv("LARK_CODEX_SHOW_ARCHIVED", "0")) == "1"
-LARK2AGENT_INCLUDE_PLAN_WORKTREES = os.getenv(
-    "LARK2AGENT_INCLUDE_PLAN_WORKTREES",
-    os.getenv("LARK_CODEX_INCLUDE_PLAN_WORKTREES", "0"),
+STATE_FILE = Path(os.getenv("TIDE_STATE_FILE", ".tide_state.json"))
+TIDE_SHOW_ARCHIVED = os.getenv("TIDE_SHOW_ARCHIVED", "0") == "1"
+TIDE_INCLUDE_PLAN_WORKTREES = os.getenv(
+    "TIDE_INCLUDE_PLAN_WORKTREES",
+    "0",
 ) == "1"
 MAX_LARK_MESSAGE_REFS = int(os.getenv("MAX_LARK_MESSAGE_REFS", "1000"))
-LARK2AGENT_WELCOME_MESSAGE = os.getenv(
-    "LARK2AGENT_WELCOME_MESSAGE",
-    os.getenv(
-        "LARK_CODEX_WELCOME_MESSAGE",
-        "I'm Lark2Agent, a lightweight multi-agent bridge for Lark.",
-    ),
+TIDE_WELCOME_MESSAGE = os.getenv(
+    "TIDE_WELCOME_MESSAGE",
+    "I'm Tide, a lightweight multi-agent bridge for Lark.",
 )
 SYNC_DESKTOP_SESSIONS = os.getenv("SYNC_DESKTOP_SESSIONS", "0") == "1"
 SESSION_WATCH_INTERVAL_SECONDS = int(os.getenv("SESSION_WATCH_INTERVAL_SECONDS", "3"))
@@ -183,7 +180,7 @@ logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
     format="%(asctime)s %(levelname)s %(threadName)s %(message)s",
 )
-logger = logging.getLogger("lark2agent-ws")
+logger = logging.getLogger("tide-ws")
 
 
 @dataclass
@@ -1199,7 +1196,7 @@ def get_runtime(chat_id: str) -> ChatRuntime:
 
 
 def send_startup_welcome():
-    message = LARK2AGENT_WELCOME_MESSAGE.strip()
+    message = TIDE_WELCOME_MESSAGE.strip()
     if not message:
         return
     with LOCK:
@@ -2139,7 +2136,7 @@ def is_plan_worktree_path(cwd: Optional[Path]) -> bool:
 
     parts = path.parts
     for index, part in enumerate(parts[:-1]):
-        if part in (".lark2agent", ".lark-codex") and parts[index + 1] == "worktrees":
+        if part in (".tide", ".lark-codex") and parts[index + 1] == "worktrees":
             return True
     return False
 
@@ -2686,17 +2683,17 @@ def build_index(report_date=None) -> tuple[list[ProjectInfo], dict[str, Conversa
     def add_conversation(conv: ConversationInfo):
         if not conv:
             return
-        if not LARK2AGENT_INCLUDE_PLAN_WORKTREES and is_plan_worktree_path(conv.cwd):
+        if not TIDE_INCLUDE_PLAN_WORKTREES and is_plan_worktree_path(conv.cwd):
             return
         if report_date and conv.today_activity_count <= 0:
             return
-        if not LARK2AGENT_SHOW_ARCHIVED and is_session_archived(conv.session_id):
+        if not TIDE_SHOW_ARCHIVED and is_session_archived(conv.session_id):
             return
         conversations[conv.session_id] = conv
         root = conversation_project_root(conv)
         if conv.session_id in marked_ordinary_sessions():
             root = None
-        if not LARK2AGENT_SHOW_ARCHIVED and root and is_project_archived(root):
+        if not TIDE_SHOW_ARCHIVED and root and is_project_archived(root):
             return
         if root:
             key = project_key(root)
@@ -3056,7 +3053,7 @@ def plan_task_cwd(plan: PlanRuntime, task: PlanTask) -> Path:
 def plan_worktree_root(repo_root: Path) -> Path:
     if PLAN_WORKTREE_ROOT:
         return Path(PLAN_WORKTREE_ROOT).expanduser().resolve()
-    return repo_root / ".lark2agent" / "worktrees"
+    return repo_root / ".tide" / "worktrees"
 
 
 def prepare_plan_worktree(plan: PlanRuntime, task: PlanTask) -> Path:
@@ -3069,7 +3066,7 @@ def prepare_plan_worktree(plan: PlanRuntime, task: PlanTask) -> Path:
         return plan.cwd
 
     task.base_head = git_head(repo_root)
-    task.branch_name = f"lark2agent/{safe_git_ref_part(plan.plan_id)}-{safe_git_ref_part(task.task_id)}"
+    task.branch_name = f"tide/{safe_git_ref_part(plan.plan_id)}-{safe_git_ref_part(task.task_id)}"
     root = plan_worktree_root(repo_root)
     worktree = root / f"{safe_git_ref_part(plan.plan_id)}-{safe_git_ref_part(task.task_id)}"
     if (worktree / ".git").exists():
@@ -5494,7 +5491,7 @@ def run_plan_task(plan_id: str, task_id: str):
 
     last_message_path: Optional[Path] = None
     try:
-        fd, name = tempfile.mkstemp(prefix="lark2agent-plan-", suffix=".txt")
+        fd, name = tempfile.mkstemp(prefix="tide-plan-", suffix=".txt")
         os.close(fd)
         last_message_path = Path(name)
     except OSError:
@@ -6027,7 +6024,7 @@ def run_plan_merge_conflict_fix(chat_id: str, plan_id: str):
 
     last_message_path: Optional[Path] = None
     try:
-        fd, name = tempfile.mkstemp(prefix="lark2agent-merge-fix-", suffix=".txt")
+        fd, name = tempfile.mkstemp(prefix="tide-merge-fix-", suffix=".txt")
         os.close(fd)
         last_message_path = Path(name)
     except OSError:
@@ -6393,7 +6390,7 @@ def run_codex(chat_id: str, prompt: str, force_ordinary: bool = False, task_id: 
 
     last_message_path: Optional[Path] = None
     try:
-        fd, name = tempfile.mkstemp(prefix="lark2agent-last-", suffix=".txt")
+        fd, name = tempfile.mkstemp(prefix="tide-last-", suffix=".txt")
         os.close(fd)
         last_message_path = Path(name)
         task.last_message_path = str(last_message_path)

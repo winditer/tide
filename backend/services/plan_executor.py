@@ -8,7 +8,7 @@ Plan 并行执行引擎（asyncio 驱动）。
   worktree 隔离，结束后跑测试 / diff，进入 review 或 completed 状态。
 - 审批 / 提交 / 合并：与 plan_service / API 路由协作。
 
-迁移自 ``lark2agent_ws.py`` 的 ``plan_runner_loop`` / ``run_plan_task``
+迁移自 ``tide_ws.py`` 的 ``plan_runner_loop`` / ``run_plan_task``
 （L5471-5689），改写为完全异步、由 FastAPI 后端持久化驱动。
 """
 
@@ -39,7 +39,7 @@ from backend.runtime.config import (
 from backend.runtime.executor import AgentExecutor
 from backend.services.event_emitter import event_emitter
 
-logger = logging.getLogger("lark2agent.plan_executor")
+logger = logging.getLogger("tide.plan_executor")
 
 
 # 终止状态集合（依赖检查使用）
@@ -800,8 +800,8 @@ class PlanExecutor:
 
     def _build_commit_message(self, plan_id: str, task: dict) -> str:
         prompt = (task.get("prompt") or "").strip().splitlines()
-        title = prompt[0] if prompt else "lark-codex task"
-        return f"lark-codex(plan {plan_id[:8]}): {title[:80]}"
+        title = prompt[0] if prompt else "tide task"
+        return f"tide(plan {plan_id[:8]}): {title[:80]}"
 
 
 # 全局单例

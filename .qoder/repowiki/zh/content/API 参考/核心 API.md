@@ -2,7 +2,7 @@
 
 <cite>
 **本文档引用的文件**
-- [lark2agent_ws.py](file://lark2agent_ws.py)
+- [tide_ws.py](file://tide_ws.py)
 - [README.md](file://README.md)
 </cite>
 
@@ -19,7 +19,7 @@
 10. [附录](#附录)
 
 ## 简介
-本文件面向 Lark2Agent 的核心 API，聚焦三大领域：
+本文件面向 Tide 的核心 API，聚焦三大领域：
 - 事件处理 API：WebSocket 事件接收、消息解析与处理流程
 - 任务管理 API：任务创建、执行、监控与状态更新
 - 配置管理 API：环境变量加载、配置校验与运行时配置更新
@@ -27,7 +27,7 @@
 文档提供函数原型、参数类型、默认值、返回值格式、使用示例、错误处理机制、异常类型与调试信息，并阐明各 API 之间的调用关系与依赖。
 
 ## 项目结构
-- 主程序入口与核心逻辑集中在 lark2agent_ws.py
+- 主程序入口与核心逻辑集中在 tide_ws.py
 - README.md 提供功能说明、安装与运行指引、环境变量说明与常见问题
 - 项目采用模块化设计，围绕数据模型、适配器、消息与卡片、任务与计划、状态持久化等维度组织
 
@@ -51,18 +51,18 @@ STATE --> PLAN
 ```
 
 **图表来源**
-- [lark2agent_ws.py:1642-1652](file://lark2agent_ws.py#L1642-L1652)
-- [lark2agent_ws.py:3482-3524](file://lark2agent_ws.py#L3482-L3524)
-- [lark2agent_ws.py:4029-4091](file://lark2agent_ws.py#L4029-L4091)
-- [lark2agent_ws.py:4682-4701](file://lark2agent_ws.py#L4682-L4701)
-- [lark2agent_ws.py:869-891](file://lark2agent_ws.py#L869-L891)
+- [tide_ws.py:1642-1652](file://tide_ws.py#L1642-L1652)
+- [tide_ws.py:3482-3524](file://tide_ws.py#L3482-L3524)
+- [tide_ws.py:4029-4091](file://tide_ws.py#L4029-L4091)
+- [tide_ws.py:4682-4701](file://tide_ws.py#L4682-L4701)
+- [tide_ws.py:869-891](file://tide_ws.py#L869-L891)
 
 **章节来源**
-- [lark2agent_ws.py:1642-1652](file://lark2agent_ws.py#L1642-L1652)
-- [lark2agent_ws.py:3482-3524](file://lark2agent_ws.py#L3482-L3524)
-- [lark2agent_ws.py:4029-4091](file://lark2agent_ws.py#L4029-L4091)
-- [lark2agent_ws.py:4682-4701](file://lark2agent_ws.py#L4682-L4701)
-- [lark2agent_ws.py:869-891](file://lark2agent_ws.py#L869-L891)
+- [tide_ws.py:1642-1652](file://tide_ws.py#L1642-L1652)
+- [tide_ws.py:3482-3524](file://tide_ws.py#L3482-L3524)
+- [tide_ws.py:4029-4091](file://tide_ws.py#L4029-L4091)
+- [tide_ws.py:4682-4701](file://tide_ws.py#L4682-L4701)
+- [tide_ws.py:869-891](file://tide_ws.py#L869-L891)
 
 ## 核心组件
 - 数据模型与运行时
@@ -77,16 +77,16 @@ STATE --> PLAN
   - load_dotenv、read_state、write_state、save_runtime、load_known_chats、save_plans_state、load_plans_state 等
 
 **章节来源**
-- [lark2agent_ws.py:173-397](file://lark2agent_ws.py#L173-L397)
-- [lark2agent_ws.py:626-801](file://lark2agent_ws.py#L626-L801)
-- [lark2agent_ws.py:1642-1652](file://lark2agent_ws.py#L1642-L1652)
-- [lark2agent_ws.py:3482-3733](file://lark2agent_ws.py#L3482-L3733)
-- [lark2agent_ws.py:4029-4143](file://lark2agent_ws.py#L4029-L4143)
-- [lark2agent_ws.py:4682-4701](file://lark2agent_ws.py#L4682-L4701)
-- [lark2agent_ws.py:869-1173](file://lark2agent_ws.py#L869-L1173)
+- [tide_ws.py:173-397](file://tide_ws.py#L173-L397)
+- [tide_ws.py:626-801](file://tide_ws.py#L626-L801)
+- [tide_ws.py:1642-1652](file://tide_ws.py#L1642-L1652)
+- [tide_ws.py:3482-3733](file://tide_ws.py#L3482-L3733)
+- [tide_ws.py:4029-4143](file://tide_ws.py#L4029-L4143)
+- [tide_ws.py:4682-4701](file://tide_ws.py#L4682-L4701)
+- [tide_ws.py:869-1173](file://tide_ws.py#L869-L1173)
 
 ## 架构总览
-Lark2Agent 通过 lark-oapi 的 EventDispatcherHandler 注册消息、已读、卡片动作三类事件回调，统一进入消息解析与路由逻辑。随后根据命令前缀与上下文选择 Agent 执行（Codex/Claude/Qoder），并以卡片形式持续反馈任务状态与结果。
+Tide 通过 lark-oapi 的 EventDispatcherHandler 注册消息、已读、卡片动作三类事件回调，统一进入消息解析与路由逻辑。随后根据命令前缀与上下文选择 Agent 执行（Codex/Claude/Qoder），并以卡片形式持续反馈任务状态与结果。
 
 ```mermaid
 sequenceDiagram
@@ -107,11 +107,11 @@ Card-->>Lark : "卡片消息"
 ```
 
 **图表来源**
-- [lark2agent_ws.py:1642-1652](file://lark2agent_ws.py#L1642-L1652)
-- [lark2agent_ws.py:1795-1847](file://lark2agent_ws.py#L1795-L1847)
-- [lark2agent_ws.py:4029-4091](file://lark2agent_ws.py#L4029-L4091)
-- [lark2agent_ws.py:3482-3524](file://lark2agent_ws.py#L3482-L3524)
-- [lark2agent_ws.py:869-891](file://lark2agent_ws.py#L869-L891)
+- [tide_ws.py:1642-1652](file://tide_ws.py#L1642-L1652)
+- [tide_ws.py:1795-1847](file://tide_ws.py#L1795-L1847)
+- [tide_ws.py:4029-4091](file://tide_ws.py#L4029-L4091)
+- [tide_ws.py:3482-3524](file://tide_ws.py#L3482-L3524)
+- [tide_ws.py:869-891](file://tide_ws.py#L869-L891)
 
 ## 详细组件分析
 
@@ -136,13 +136,13 @@ Card-->>Lark : "卡片消息"
 - WebSocket 事件到达 → get_event_handler() 注册回调 → on_message() 解析消息 → normalize_text_command() 标准化命令 → send_task_card()/run_plan_task() 创建任务 → send_card()/update_card() 更新卡片
 
 **章节来源**
-- [lark2agent_ws.py:1642-1652](file://lark2agent_ws.py#L1642-L1652)
-- [lark2agent_ws.py:1795-1847](file://lark2agent_ws.py#L1795-L1847)
-- [lark2agent_ws.py:1449-1539](file://lark2agent_ws.py#L1449-L1539)
-- [lark2agent_ws.py:1561-1580](file://lark2agent_ws.py#L1561-L1580)
-- [lark2agent_ws.py:1622-1639](file://lark2agent_ws.py#L1622-L1639)
-- [lark2agent_ws.py:1859-1964](file://lark2agent_ws.py#L1859-L1964)
-- [lark2agent_ws.py:1877-1920](file://lark2agent_ws.py#L1877-L1920)
+- [tide_ws.py:1642-1652](file://tide_ws.py#L1642-L1652)
+- [tide_ws.py:1795-1847](file://tide_ws.py#L1795-L1847)
+- [tide_ws.py:1449-1539](file://tide_ws.py#L1449-L1539)
+- [tide_ws.py:1561-1580](file://tide_ws.py#L1561-L1580)
+- [tide_ws.py:1622-1639](file://tide_ws.py#L1622-L1639)
+- [tide_ws.py:1859-1964](file://tide_ws.py#L1859-L1964)
+- [tide_ws.py:1877-1920](file://tide_ws.py#L1877-L1920)
 
 ### 任务管理 API
 - 任务生命周期
@@ -182,19 +182,19 @@ Task->>Card : "结束文本(task_end_text)"
 ```
 
 **图表来源**
-- [lark2agent_ws.py:4029-4091](file://lark2agent_ws.py#L4029-L4091)
-- [lark2agent_ws.py:5012-5035](file://lark2agent_ws.py#L5012-L5035)
-- [lark2agent_ws.py:5207-5254](file://lark2agent_ws.py#L5207-L5254)
-- [lark2agent_ws.py:3185-3228](file://lark2agent_ws.py#L3185-L3228)
-- [lark2agent_ws.py:4146-4143](file://lark2agent_ws.py#L4146-L4143)
+- [tide_ws.py:4029-4091](file://tide_ws.py#L4029-L4091)
+- [tide_ws.py:5012-5035](file://tide_ws.py#L5012-L5035)
+- [tide_ws.py:5207-5254](file://tide_ws.py#L5207-L5254)
+- [tide_ws.py:3185-3228](file://tide_ws.py#L3185-L3228)
+- [tide_ws.py:4146-4143](file://tide_ws.py#L4146-L4143)
 
 **章节来源**
-- [lark2agent_ws.py:4029-4091](file://lark2agent_ws.py#L4029-L4091)
-- [lark2agent_ws.py:4094-4143](file://lark2agent_ws.py#L4094-L4143)
-- [lark2agent_ws.py:5012-5035](file://lark2agent_ws.py#L5012-L5035)
-- [lark2agent_ws.py:5207-5254](file://lark2agent_ws.py#L5207-L5254)
-- [lark2agent_ws.py:3185-3228](file://lark2agent_ws.py#L3185-L3228)
-- [lark2agent_ws.py:4146-4143](file://lark2agent_ws.py#L4146-L4143)
+- [tide_ws.py:4029-4091](file://tide_ws.py#L4029-L4091)
+- [tide_ws.py:4094-4143](file://tide_ws.py#L4094-L4143)
+- [tide_ws.py:5012-5035](file://tide_ws.py#L5012-L5035)
+- [tide_ws.py:5207-5254](file://tide_ws.py#L5207-L5254)
+- [tide_ws.py:3185-3228](file://tide_ws.py#L3185-L3228)
+- [tide_ws.py:4146-4143](file://tide_ws.py#L4146-L4143)
 
 ### 计划管理 API（并行任务）
 - 计划生命周期
@@ -225,19 +225,19 @@ Finalize --> End
 ```
 
 **图表来源**
-- [lark2agent_ws.py:5471-5599](file://lark2agent_ws.py#L5471-L5599)
-- [lark2agent_ws.py:4329-4340](file://lark2agent_ws.py#L4329-L4340)
-- [lark2agent_ws.py:3046-3075](file://lark2agent_ws.py#L3046-L3075)
-- [lark2agent_ws.py:3132-3166](file://lark2agent_ws.py#L3132-L3166)
+- [tide_ws.py:5471-5599](file://tide_ws.py#L5471-L5599)
+- [tide_ws.py:4329-4340](file://tide_ws.py#L4329-L4340)
+- [tide_ws.py:3046-3075](file://tide_ws.py#L3046-L3075)
+- [tide_ws.py:3132-3166](file://tide_ws.py#L3132-L3166)
 
 **章节来源**
-- [lark2agent_ws.py:4405-4505](file://lark2agent_ws.py#L4405-L4505)
-- [lark2agent_ws.py:4508-4572](file://lark2agent_ws.py#L4508-L4572)
-- [lark2agent_ws.py:4575-4627](file://lark2agent_ws.py#L4575-L4627)
-- [lark2agent_ws.py:5471-5599](file://lark2agent_ws.py#L5471-L5599)
-- [lark2agent_ws.py:4329-4340](file://lark2agent_ws.py#L4329-L4340)
-- [lark2agent_ws.py:3046-3075](file://lark2agent_ws.py#L3046-L3075)
-- [lark2agent_ws.py:3132-3166](file://lark2agent_ws.py#L3132-L3166)
+- [tide_ws.py:4405-4505](file://tide_ws.py#L4405-L4505)
+- [tide_ws.py:4508-4572](file://tide_ws.py#L4508-L4572)
+- [tide_ws.py:4575-4627](file://tide_ws.py#L4575-L4627)
+- [tide_ws.py:5471-5599](file://tide_ws.py#L5471-L5599)
+- [tide_ws.py:4329-4340](file://tide_ws.py#L4329-L4340)
+- [tide_ws.py:3046-3075](file://tide_ws.py#L3046-L3075)
+- [tide_ws.py:3132-3166](file://tide_ws.py#L3132-L3166)
 
 ### 配置管理 API
 - 环境变量加载
@@ -253,7 +253,7 @@ Finalize --> End
   - save_runtime()/load_known_chats(): 保存/加载运行时状态
   - save_plans_state()/load_plans_state(): 保存/加载计划状态
 - 状态持久化
-  - read_state()/write_state(): 读写本地状态文件（.lark2agent_state.json），含 chats、message_refs、plans 等
+  - read_state()/write_state(): 读写本地状态文件（.tide_state.json），含 chats、message_refs、plans 等
 
 ```mermaid
 classDiagram
@@ -278,19 +278,19 @@ AgentAdapter <|-- QoderAdapter
 ```
 
 **图表来源**
-- [lark2agent_ws.py:626-801](file://lark2agent_ws.py#L626-L801)
-- [lark2agent_ws.py:409-425](file://lark2agent_ws.py#L409-L425)
-- [lark2agent_ws.py:477-488](file://lark2agent_ws.py#L477-L488)
-- [lark2agent_ws.py:557-568](file://lark2agent_ws.py#L557-L568)
-- [lark2agent_ws.py:162-164](file://lark2agent_ws.py#L162-L164)
+- [tide_ws.py:626-801](file://tide_ws.py#L626-L801)
+- [tide_ws.py:409-425](file://tide_ws.py#L409-L425)
+- [tide_ws.py:477-488](file://tide_ws.py#L477-L488)
+- [tide_ws.py:557-568](file://tide_ws.py#L557-L568)
+- [tide_ws.py:162-164](file://tide_ws.py#L162-L164)
 
 **章节来源**
-- [lark2agent_ws.py:34-49](file://lark2agent_ws.py#L34-L49)
-- [lark2agent_ws.py:409-425](file://lark2agent_ws.py#L409-L425)
-- [lark2agent_ws.py:477-488](file://lark2agent_ws.py#L477-L488)
-- [lark2agent_ws.py:557-568](file://lark2agent_ws.py#L557-L568)
-- [lark2agent_ws.py:162-164](file://lark2agent_ws.py#L162-L164)
-- [lark2agent_ws.py:869-1173](file://lark2agent_ws.py#L869-L1173)
+- [tide_ws.py:34-49](file://tide_ws.py#L34-L49)
+- [tide_ws.py:409-425](file://tide_ws.py#L409-L425)
+- [tide_ws.py:477-488](file://tide_ws.py#L477-L488)
+- [tide_ws.py:557-568](file://tide_ws.py#L557-L568)
+- [tide_ws.py:162-164](file://tide_ws.py#L162-L164)
+- [tide_ws.py:869-1173](file://tide_ws.py#L869-L1173)
 
 ## 依赖分析
 - 组件耦合
@@ -315,21 +315,21 @@ TaskAPI --> PlanAPI["计划 API<br/>run_plan_task()/build_plan_card()"]
 ```
 
 **图表来源**
-- [lark2agent_ws.py:1642-1652](file://lark2agent_ws.py#L1642-L1652)
-- [lark2agent_ws.py:1795-1847](file://lark2agent_ws.py#L1795-L1847)
-- [lark2agent_ws.py:4029-4091](file://lark2agent_ws.py#L4029-L4091)
-- [lark2agent_ws.py:626-801](file://lark2agent_ws.py#L626-L801)
-- [lark2agent_ws.py:869-891](file://lark2agent_ws.py#L869-L891)
-- [lark2agent_ws.py:3482-3524](file://lark2agent_ws.py#L3482-L3524)
-- [lark2agent_ws.py:4682-4701](file://lark2agent_ws.py#L4682-L4701)
+- [tide_ws.py:1642-1652](file://tide_ws.py#L1642-L1652)
+- [tide_ws.py:1795-1847](file://tide_ws.py#L1795-L1847)
+- [tide_ws.py:4029-4091](file://tide_ws.py#L4029-L4091)
+- [tide_ws.py:626-801](file://tide_ws.py#L626-L801)
+- [tide_ws.py:869-891](file://tide_ws.py#L869-L891)
+- [tide_ws.py:3482-3524](file://tide_ws.py#L3482-L3524)
+- [tide_ws.py:4682-4701](file://tide_ws.py#L4682-L4701)
 
 **章节来源**
-- [lark2agent_ws.py:1642-1652](file://lark2agent_ws.py#L1642-L1652)
-- [lark2agent_ws.py:4029-4091](file://lark2agent_ws.py#L4029-L4091)
-- [lark2agent_ws.py:626-801](file://lark2agent_ws.py#L626-L801)
-- [lark2agent_ws.py:869-891](file://lark2agent_ws.py#L869-L891)
-- [lark2agent_ws.py:3482-3524](file://lark2agent_ws.py#L3482-L3524)
-- [lark2agent_ws.py:4682-4701](file://lark2agent_ws.py#L4682-L4701)
+- [tide_ws.py:1642-1652](file://tide_ws.py#L1642-L1652)
+- [tide_ws.py:4029-4091](file://tide_ws.py#L4029-L4091)
+- [tide_ws.py:626-801](file://tide_ws.py#L626-L801)
+- [tide_ws.py:869-891](file://tide_ws.py#L869-L891)
+- [tide_ws.py:3482-3524](file://tide_ws.py#L3482-L3524)
+- [tide_ws.py:4682-4701](file://tide_ws.py#L4682-L4701)
 
 ## 性能考虑
 - 事件解析与卡片更新节流：update_task_card/update_plan_card 控制最小更新间隔，避免频繁网络请求
@@ -355,12 +355,12 @@ TaskAPI --> PlanAPI["计划 API<br/>run_plan_task()/build_plan_card()"]
   - KEEP_AWAKE_ON_AC_POWER=1 仅在接入电源时启用 caffeinate；如需合盖运行，参考 README 设置 KEEP_AWAKE_DISABLE_SLEEP
 
 **章节来源**
-- [lark2agent_ws.py:3688-3702](file://lark2agent_ws.py#L3688-L3702)
-- [lark2agent_ws.py:5427-5447](file://lark2agent_ws.py#L5427-L5447)
+- [tide_ws.py:3688-3702](file://tide_ws.py#L3688-L3702)
+- [tide_ws.py:5427-5447](file://tide_ws.py#L5427-L5447)
 - [README.md:474-511](file://README.md#L474-L511)
 
 ## 结论
-Lark2Agent 通过清晰的事件处理、任务管理与配置管理 API，实现了从 Lark 消息到多 Agent CLI 的无缝桥接。其设计强调：
+Tide 通过清晰的事件处理、任务管理与配置管理 API，实现了从 Lark 消息到多 Agent CLI 的无缝桥接。其设计强调：
 - 事件驱动与命令标准化
 - 任务卡片化反馈与状态持久化
 - 计划并行与依赖控制
@@ -376,107 +376,107 @@ Lark2Agent 通过清晰的事件处理、任务管理与配置管理 API，实�
 - 事件处理
   - get_event_handler() → lark.EventDispatcherHandler
     - 作用：注册消息接收、消息已读、卡片动作回调
-    - 示例：参见 [lark2agent_ws.py:1642-1652](file://lark2agent_ws.py#L1642-L1652)
+    - 示例：参见 [tide_ws.py:1642-1652](file://tide_ws.py#L1642-L1652)
   - parse_text_message(raw_content: str) → str
     - 作用：从 Lark JSON 内容提取纯文本
-    - 示例：参见 [lark2agent_ws.py:1795-1812](file://lark2agent_ws.py#L1795-L1812)
+    - 示例：参见 [tide_ws.py:1795-1812](file://tide_ws.py#L1795-L1812)
   - normalize_text_command(content: str) → str
     - 作用：将中文别名与简写转换为标准命令前缀
-    - 示例：参见 [lark2agent_ws.py:1823-1847](file://lark2agent_ws.py#L1823-L1847)
+    - 示例：参见 [tide_ws.py:1823-1847](file://tide_ws.py#L1823-L1847)
   - download_lark_message_attachments(chat_id: str, msg, meta: dict[str, str]) → (list[dict], list[str])
     - 作用：下载图片/文件资源并返回本地附件规范与错误列表
-    - 示例：参见 [lark2agent_ws.py:1449-1539](file://lark2agent_ws.py#L1449-L1539)
+    - 示例：参见 [tide_ws.py:1449-1539](file://tide_ws.py#L1449-L1539)
 
 - 消息与卡片
   - send_msg(chat_id: str, text: str) → void
     - 作用：发送交互式卡片消息
-    - 示例：参见 [lark2agent_ws.py:3482-3524](file://lark2agent_ws.py#L3482-L3524)
+    - 示例：参见 [tide_ws.py:3482-3524](file://tide_ws.py#L3482-L3524)
   - send_card(chat_id: str, card: dict[str, Any]) → str
     - 作用：发送卡片并返回 message_id
-    - 示例：参见 [lark2agent_ws.py:3663-3703](file://lark2agent_ws.py#L3663-L3703)
+    - 示例：参见 [tide_ws.py:3663-3703](file://tide_ws.py#L3663-L3703)
   - update_card(message_id: str, card: dict[str, Any]) → bool
     - 作用：更新已有卡片
-    - 示例：参见 [lark2agent_ws.py:3705-3732](file://lark2agent_ws.py#L3705-L3732)
+    - 示例：参见 [tide_ws.py:3705-3732](file://tide_ws.py#L3705-L3732)
   - base_card(title: str, elements: list[dict], template: str = "blue") → dict
     - 作用：构造基础卡片结构
-    - 示例：参见 [lark2agent_ws.py:3735-3743](file://lark2agent_ws.py#L3735-L3743)
+    - 示例：参见 [tide_ws.py:3735-3743](file://tide_ws.py#L3735-L3743)
 
 - 任务管理
   - send_task_card(chat_id: str, prompt: str, status: str, model: str = "", agent_id: str = "", ...) → str
     - 作用：创建任务并发送初始卡片，返回 task_id
-    - 示例：参见 [lark2agent_ws.py:4029-4091](file://lark2agent_ws.py#L4029-L4091)
+    - 示例：参见 [tide_ws.py:4029-4091](file://tide_ws.py#L4029-L4091)
   - update_task_card(chat_id: str, status: str = "", output: str = "", detail: str = "", force: bool = False, task_id: str = "") → bool
     - 作用：更新任务卡片，支持强制刷新与节流
-    - 示例：参见 [lark2agent_ws.py:4094-4143](file://lark2agent_ws.py#L4094-L4143)
+    - 示例：参见 [tide_ws.py:4094-4143](file://tide_ws.py#L4094-L4143)
   - build_task_card(...) → dict
     - 作用：构建任务卡片元素
-    - 示例：参见 [lark2agent_ws.py:3897-4026](file://lark2agent_ws.py#L3897-L4026)
+    - 示例：参见 [tide_ws.py:3897-4026](file://tide_ws.py#L3897-L4026)
   - codex_task_command(task: CodexTaskRuntime, last_message_file: Optional[Path] = None) → list[str]
     - 作用：构建 Agent CLI 命令
-    - 示例：参见 [lark2agent_ws.py:5033-5034](file://lark2agent_ws.py#L5033-L5034)
+    - 示例：参见 [tide_ws.py:5033-5034](file://tide_ws.py#L5033-L5034)
   - parse_codex_json_event(line: str) → tuple[str, str]
     - 作用：解析 Codex 流式事件
-    - 示例：参见 [lark2agent_ws.py:5207-5254](file://lark2agent_ws.py#L5207-L5254)
+    - 示例：参见 [tide_ws.py:5207-5254](file://tide_ws.py#L5207-L5254)
 
 - 计划管理
   - run_plan_task(plan_id: str, task_id: str) → void
     - 作用：并行执行子任务，支持 worktree 隔离与测试命令
-    - 示例：参见 [lark2agent_ws.py:5471-5599](file://lark2agent_ws.py#L5471-L5599)
+    - 示例：参见 [tide_ws.py:5471-5599](file://tide_ws.py#L5471-L5599)
   - build_plan_card(plan: PlanRuntime) → dict
     - 作用：构建 Plan 卡片
-    - 示例：参见 [lark2agent_ws.py:4405-4505](file://lark2agent_ws.py#L4405-L4505)
+    - 示例：参见 [tide_ws.py:4405-4505](file://tide_ws.py#L4405-L4505)
   - build_plan_task_card(plan: PlanRuntime, task: PlanTask) → dict
     - 作用：构建子任务详情卡片
-    - 示例：参见 [lark2agent_ws.py:4508-4572](file://lark2agent_ws.py#L4508-L4572)
+    - 示例：参见 [tide_ws.py:4508-4572](file://tide_ws.py#L4508-L4572)
   - build_plan_merge_card(plan: PlanRuntime) → dict
     - 作用：构建合并总览卡片
-    - 示例：参见 [lark2agent_ws.py:4575-4627](file://lark2agent_ws.py#L4575-L4627)
+    - 示例：参见 [tide_ws.py:4575-4627](file://tide_ws.py#L4575-L4627)
 
 - 配置管理
   - load_dotenv(path: Path = Path(".env")) → void
     - 作用：从 .env 注入环境变量
-    - 示例：参见 [lark2agent_ws.py:34-49](file://lark2agent_ws.py#L34-L49)
+    - 示例：参见 [tide_ws.py:34-49](file://tide_ws.py#L34-L49)
   - read_state() → dict
     - 作用：读取本地状态文件
-    - 示例：参见 [lark2agent_ws.py:869-876](file://lark2agent_ws.py#L869-L876)
+    - 示例：参见 [tide_ws.py:869-876](file://tide_ws.py#L869-L876)
   - write_state(state: dict) → void
     - 作用：写入本地状态文件
-    - 示例：参见 [lark2agent_ws.py:879-891](file://lark2agent_ws.py#L879-L891)
+    - 示例：参见 [tide_ws.py:879-891](file://tide_ws.py#L879-L891)
   - save_runtime(chat_id: str) → void
     - 作用：保存运行时状态
-    - 示例：参见 [lark2agent_ws.py:983-1014](file://lark2agent_ws.py#L983-L1014)
+    - 示例：参见 [tide_ws.py:983-1014](file://tide_ws.py#L983-L1014)
   - load_known_chats() → void
     - 作用：加载已知聊天的运行时状态
-    - 示例：参见 [lark2agent_ws.py:1017-1043](file://lark2agent_ws.py#L1017-L1043)
+    - 示例：参见 [tide_ws.py:1017-1043](file://tide_ws.py#L1017-L1043)
   - save_plans_state() → void
     - 作用：保存计划状态
-    - 示例：参见 [lark2agent_ws.py:1152-1157](file://lark2agent_ws.py#L1152-L1157)
+    - 示例：参见 [tide_ws.py:1152-1157](file://tide_ws.py#L1152-L1157)
   - load_plans_state() → void
     - 作用：加载计划状态
-    - 示例：参见 [lark2agent_ws.py:1160-1172](file://lark2agent_ws.py#L1160-L1172)
+    - 示例：参见 [tide_ws.py:1160-1172](file://tide_ws.py#L1160-L1172)
 
 **章节来源**
-- [lark2agent_ws.py:1642-1652](file://lark2agent_ws.py#L1642-L1652)
-- [lark2agent_ws.py:1795-1812](file://lark2agent_ws.py#L1795-L1812)
-- [lark2agent_ws.py:1823-1847](file://lark2agent_ws.py#L1823-L1847)
-- [lark2agent_ws.py:1449-1539](file://lark2agent_ws.py#L1449-L1539)
-- [lark2agent_ws.py:3482-3524](file://lark2agent_ws.py#L3482-L3524)
-- [lark2agent_ws.py:3663-3703](file://lark2agent_ws.py#L3663-L3703)
-- [lark2agent_ws.py:3705-3732](file://lark2agent_ws.py#L3705-L3732)
-- [lark2agent_ws.py:3735-3743](file://lark2agent_ws.py#L3735-L3743)
-- [lark2agent_ws.py:4029-4091](file://lark2agent_ws.py#L4029-L4091)
-- [lark2agent_ws.py:4094-4143](file://lark2agent_ws.py#L4094-L4143)
-- [lark2agent_ws.py:3897-4026](file://lark2agent_ws.py#L3897-L4026)
-- [lark2agent_ws.py:5033-5034](file://lark2agent_ws.py#L5033-L5034)
-- [lark2agent_ws.py:5207-5254](file://lark2agent_ws.py#L5207-L5254)
-- [lark2agent_ws.py:5471-5599](file://lark2agent_ws.py#L5471-L5599)
-- [lark2agent_ws.py:4405-4505](file://lark2agent_ws.py#L4405-L4505)
-- [lark2agent_ws.py:4508-4572](file://lark2agent_ws.py#L4508-L4572)
-- [lark2agent_ws.py:4575-4627](file://lark2agent_ws.py#L4575-L4627)
-- [lark2agent_ws.py:34-49](file://lark2agent_ws.py#L34-L49)
-- [lark2agent_ws.py:869-876](file://lark2agent_ws.py#L869-L876)
-- [lark2agent_ws.py:879-891](file://lark2agent_ws.py#L879-L891)
-- [lark2agent_ws.py:983-1014](file://lark2agent_ws.py#L983-L1014)
-- [lark2agent_ws.py:1017-1043](file://lark2agent_ws.py#L1017-L1043)
-- [lark2agent_ws.py:1152-1157](file://lark2agent_ws.py#L1152-L1157)
-- [lark2agent_ws.py:1160-1172](file://lark2agent_ws.py#L1160-L1172)
+- [tide_ws.py:1642-1652](file://tide_ws.py#L1642-L1652)
+- [tide_ws.py:1795-1812](file://tide_ws.py#L1795-L1812)
+- [tide_ws.py:1823-1847](file://tide_ws.py#L1823-L1847)
+- [tide_ws.py:1449-1539](file://tide_ws.py#L1449-L1539)
+- [tide_ws.py:3482-3524](file://tide_ws.py#L3482-L3524)
+- [tide_ws.py:3663-3703](file://tide_ws.py#L3663-L3703)
+- [tide_ws.py:3705-3732](file://tide_ws.py#L3705-L3732)
+- [tide_ws.py:3735-3743](file://tide_ws.py#L3735-L3743)
+- [tide_ws.py:4029-4091](file://tide_ws.py#L4029-L4091)
+- [tide_ws.py:4094-4143](file://tide_ws.py#L4094-L4143)
+- [tide_ws.py:3897-4026](file://tide_ws.py#L3897-L4026)
+- [tide_ws.py:5033-5034](file://tide_ws.py#L5033-L5034)
+- [tide_ws.py:5207-5254](file://tide_ws.py#L5207-L5254)
+- [tide_ws.py:5471-5599](file://tide_ws.py#L5471-L5599)
+- [tide_ws.py:4405-4505](file://tide_ws.py#L4405-L4505)
+- [tide_ws.py:4508-4572](file://tide_ws.py#L4508-L4572)
+- [tide_ws.py:4575-4627](file://tide_ws.py#L4575-L4627)
+- [tide_ws.py:34-49](file://tide_ws.py#L34-L49)
+- [tide_ws.py:869-876](file://tide_ws.py#L869-L876)
+- [tide_ws.py:879-891](file://tide_ws.py#L879-L891)
+- [tide_ws.py:983-1014](file://tide_ws.py#L983-L1014)
+- [tide_ws.py:1017-1043](file://tide_ws.py#L1017-L1043)
+- [tide_ws.py:1152-1157](file://tide_ws.py#L1152-L1157)
+- [tide_ws.py:1160-1172](file://tide_ws.py#L1160-L1172)

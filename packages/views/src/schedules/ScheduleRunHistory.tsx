@@ -1,7 +1,7 @@
 "use client";
 
-import { Badge } from "@lark2codex/ui";
-import type { ScheduleRun } from "@lark2codex/core";
+import { Badge } from "@tide/ui";
+import type { ScheduleRun } from "@tide/core";
 
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   success: "secondary",

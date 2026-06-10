@@ -1,6 +1,6 @@
 "use client";
 
-import { Input } from "@lark2codex/ui";
+import { Input } from "@tide/ui";
 
 interface KanbanFiltersProps {
   search: string;

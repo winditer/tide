@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import type { WorkflowRun } from "@lark2codex/core";
+import type { WorkflowRun } from "@tide/core";
 
 const STATUS_TONE: Record<
   string,

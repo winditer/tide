@@ -2,14 +2,14 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { Badge, Button, Input } from "@lark2codex/ui";
+import { Badge, Button, Input } from "@tide/ui";
 import {
   useSchedulesQuery,
   useToggleScheduleMutation,
   useDeleteScheduleMutation,
   useTriggerScheduleMutation,
-} from "@lark2codex/core";
-import type { Schedule } from "@lark2codex/core";
+} from "@tide/core";
+import type { Schedule } from "@tide/core";
 
 function formatTime(iso: string | null) {
   if (!iso) return "—";

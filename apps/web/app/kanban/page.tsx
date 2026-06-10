@@ -1,13 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { Button } from "@lark2codex/ui";
+import { Button } from "@tide/ui";
 import {
   ProjectBoard,
   SessionBoard,
   AgentBoard,
   WorkflowBoard,
-} from "@lark2codex/views";
+} from "@tide/views";
 
 type TabKey = "projects" | "sessions" | "agents" | "workflows";
 

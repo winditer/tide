@@ -32,7 +32,7 @@ from backend.api.lark_callback import router as lark_callback_router
 from backend.api.conversations import router as conversations_router
 from backend.api.approvals import router as approvals_router
 
-logger = logging.getLogger("lark2agent.main")
+logger = logging.getLogger("tide.main")
 
 
 @asynccontextmanager
@@ -71,7 +71,7 @@ async def lifespan(app: FastAPI):
         await schedule_service.shutdown()
 
 
-app = FastAPI(title="Lark2Agent API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Tide API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

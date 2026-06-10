@@ -1,10 +1,10 @@
 "use client";
 
-import { Button } from "@lark2codex/ui";
+import { Button } from "@tide/ui";
 import {
   useApproveTaskMutation,
   useRejectTaskMutation,
-} from "@lark2codex/core";
+} from "@tide/core";
 
 interface ApprovalPanelProps {
   taskId: string;

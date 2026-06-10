@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { Badge, Button, Card, CardContent, Input } from "@lark2codex/ui";
+import { Badge, Button, Card, CardContent, Input } from "@tide/ui";
 import {
   useProjects,
   useCreateProject,
@@ -10,7 +10,7 @@ import {
   useArchiveProject,
   useUnarchiveProject,
   type ProjectInfo,
-} from "@lark2codex/core";
+} from "@tide/core";
 
 type DialogMode = "new" | "register";
 

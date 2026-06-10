@@ -2,7 +2,7 @@
 
 import { use, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Badge, Button, Card, CardContent } from "@lark2codex/ui";
+import { Badge, Button, Card, CardContent } from "@tide/ui";
 import {
   useProject,
   useProjectChats,
@@ -11,7 +11,7 @@ import {
   useDeleteProject,
   type ProjectSession,
   type ProjectTaskSummary,
-} from "@lark2codex/core";
+} from "@tide/core";
 
 type TabKey = "conversations" | "tasks" | "settings";
 

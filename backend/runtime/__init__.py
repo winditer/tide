@@ -1,5 +1,5 @@
 """
-backend.runtime — 从 lark2agent_ws.py 提取的核心可复用模块。
+backend.runtime — 从 tide_ws.py 提取的核心可复用模块。
 """
 
 # config

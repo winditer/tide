@@ -1,6 +1,6 @@
 "use client";
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
-import { Badge } from "@lark2codex/ui";
+import { Badge } from "@tide/ui";
 import { Droppable } from "@hello-pangea/dnd";
 import { BoardCard } from "./BoardCard";
 export function BoardColumn({ column }) {

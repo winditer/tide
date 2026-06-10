@@ -1,6 +1,6 @@
 """Lark 交互卡片构建工具（纯函数）。
 
-从 lark2agent_ws.py 抽取的卡片原语与模板：
+从 tide_ws.py 抽取的卡片原语与模板：
 - 原语函数（normalize_lark_md/button/md/...）：原样保留
 - 卡片模板（dashboard/project/chats/conversation）：改为接受外部数据参数，
   不再依赖全局 RUNTIMES / build_index()，便于在 FastAPI / 测试中复用。
@@ -18,7 +18,7 @@ from typing import Any, Optional
 
 # ---------- 常量 ----------
 
-APP_NAME = "Lark2Agent"
+APP_NAME = "Tide"
 MAX_PROJECTS_IN_PANEL = 8
 MAX_CONVERSATIONS_IN_PANEL = 10
 LARK_CARD_ENABLE_FORWARD = True

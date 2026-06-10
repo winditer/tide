@@ -39,7 +39,7 @@ from fastapi import APIRouter, Request
 
 from backend.services.card_action_handler import card_action_handler
 
-logger = logging.getLogger("lark2agent.api.lark_callback")
+logger = logging.getLogger("tide.api.lark_callback")
 
 router = APIRouter(prefix="/api/lark", tags=["lark"])
 
