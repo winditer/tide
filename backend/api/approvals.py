@@ -9,11 +9,28 @@ Approvals API — 审批流 REST 接口。
 """
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
 from typing import Optional
 
 from backend.services.approval_service import approval_service
 
 router = APIRouter(prefix="/api/approvals", tags=["approvals"])
+
+
+class ApprovalActionBody(BaseModel):
+    """审批操作请求体：可选审批意见 + 可选操作人。"""
+
+    operator_id: Optional[str] = None
+    # 审批意见。通过时可选；拒绝时建议必填（前端校验）。
+    comment: Optional[str] = Field(default=None, description="审批意见 / reason / comment")
+    # 兼容前端可能使用 reason 字段名
+    reason: Optional[str] = None
+
+
+def _extract_comment(body: Optional[ApprovalActionBody]) -> Optional[str]:
+    if body is None:
+        return None
+    return (body.comment if body.comment is not None else body.reason)
 
 
 @router.get("")
@@ -43,9 +60,17 @@ async def get_approval(approval_id: str):
 
 
 @router.post("/{approval_id}/approve")
-async def approve(approval_id: str, operator_id: Optional[str] = None):
-    """审批通过"""
-    ok = await approval_service.approve(approval_id, operator_id=operator_id)
+async def approve(
+    approval_id: str,
+    body: Optional[ApprovalActionBody] = None,
+    operator_id: Optional[str] = Query(None),
+):
+    """审批通过。可选 body: { operator_id, comment }"""
+    op = (body.operator_id if body and body.operator_id else operator_id)
+    comment = _extract_comment(body)
+    ok = await approval_service.approve(
+        approval_id, operator_id=op, comment=comment,
+    )
     if not ok:
         raise HTTPException(
             status_code=400,
@@ -55,9 +80,17 @@ async def approve(approval_id: str, operator_id: Optional[str] = None):
 
 
 @router.post("/{approval_id}/reject")
-async def reject(approval_id: str, operator_id: Optional[str] = None):
-    """审批拒绝"""
-    ok = await approval_service.reject(approval_id, operator_id=operator_id)
+async def reject(
+    approval_id: str,
+    body: Optional[ApprovalActionBody] = None,
+    operator_id: Optional[str] = Query(None),
+):
+    """审批拒绝。可选 body: { operator_id, comment }（拒绝时建议必填）"""
+    op = (body.operator_id if body and body.operator_id else operator_id)
+    comment = _extract_comment(body)
+    ok = await approval_service.reject(
+        approval_id, operator_id=op, comment=comment,
+    )
     if not ok:
         raise HTTPException(
             status_code=400,

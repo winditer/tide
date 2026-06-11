@@ -106,10 +106,10 @@ class ApprovalService:
 
     # ── 审批通过 ───────────────────────────────────────────
 
-    async def approve(self, approval_id: str, operator_id: Optional[str] = None) -> bool:
+    async def approve(self, approval_id: str, operator_id: Optional[str] = None, comment: Optional[str] = None) -> bool:
         """
         审批通过：
-        1. 更新 approvals 状态为 approved
+        1. 更新 approvals 状态为 approved（comment 合并到 detail.comment）
         2. 恢复任务执行（通过 task_service 或 plan_executor）
         3. emit 事件
         4. 更新 Lark 卡片
@@ -125,18 +125,22 @@ class ApprovalService:
             )
             return False
 
+        # 合并 comment 到 detail 字段并持久化
+        merged_detail = self._merge_comment_into_detail(approval.get("detail"), comment)
+
         # 更新审批记录
         async with async_session_factory() as session:
             await session.execute(
                 text("""
                 UPDATE approvals
-                SET status = 'approved', operator_id = :operator_id, resolved_at = :resolved_at
+                SET status = 'approved', operator_id = :operator_id, resolved_at = :resolved_at, detail = :detail
                 WHERE id = :id
                 """),
                 {
                     "id": approval_id,
                     "operator_id": operator_id,
                     "resolved_at": _now_iso(),
+                    "detail": json.dumps(merged_detail, ensure_ascii=False),
                 },
             )
             await session.commit()
@@ -165,7 +169,7 @@ class ApprovalService:
                     str(detail.get("work_item_id") or task_id)[:8],
                 )
                 await work_item_service.on_work_item_approval_resolved(
-                    approval_id, True
+                    approval_id, True, comment=comment,
                 )
             except Exception:
                 logger.exception(
@@ -204,10 +208,10 @@ class ApprovalService:
 
     # ── 审批拒绝 ───────────────────────────────────────────
 
-    async def reject(self, approval_id: str, operator_id: Optional[str] = None) -> bool:
+    async def reject(self, approval_id: str, operator_id: Optional[str] = None, comment: Optional[str] = None) -> bool:
         """
         审批拒绝：
-        1. 更新 approvals 状态为 rejected
+        1. 更新 approvals 状态为 rejected（comment 合并到 detail.comment）
         2. 取消/失败任务
         3. emit 事件
         4. 更新 Lark 卡片
@@ -223,18 +227,22 @@ class ApprovalService:
             )
             return False
 
+        # 合并 comment 到 detail
+        merged_detail = self._merge_comment_into_detail(approval.get("detail"), comment)
+
         # 更新审批记录
         async with async_session_factory() as session:
             await session.execute(
                 text("""
                 UPDATE approvals
-                SET status = 'rejected', operator_id = :operator_id, resolved_at = :resolved_at
+                SET status = 'rejected', operator_id = :operator_id, resolved_at = :resolved_at, detail = :detail
                 WHERE id = :id
                 """),
                 {
                     "id": approval_id,
                     "operator_id": operator_id,
                     "resolved_at": _now_iso(),
+                    "detail": json.dumps(merged_detail, ensure_ascii=False),
                 },
             )
             await session.commit()
@@ -254,7 +262,7 @@ class ApprovalService:
 
         # 终止任务
         if approval_type == "work_item_transition" or detail.get("work_item_id"):
-            # 工作项审批被拒：保持在当前节点（work_item_service 处理日志）
+            # 工作项审批被拒：让工作项服务决定是否推进到下游（例如结束节点）
             try:
                 from backend.services.work_item_service import work_item_service
                 logger.info(
@@ -262,7 +270,7 @@ class ApprovalService:
                     approval_id[:8],
                 )
                 await work_item_service.on_work_item_approval_resolved(
-                    approval_id, False
+                    approval_id, False, comment=comment,
                 )
             except Exception:
                 logger.exception(
@@ -396,6 +404,26 @@ class ApprovalService:
             return result.rowcount
 
     # ── 辅助方法 ───────────────────────────────────────────
+
+    # ── 辅助方法 ──────────────────────────────────
+
+    @staticmethod
+    def _merge_comment_into_detail(raw_detail, comment: Optional[str]) -> dict:
+        """将审批意见 comment 合并到 approvals.detail JSON 中，保证存储为 dict。"""
+        if isinstance(raw_detail, dict):
+            detail = dict(raw_detail)
+        elif isinstance(raw_detail, str) and raw_detail:
+            try:
+                detail = json.loads(raw_detail)
+                if not isinstance(detail, dict):
+                    detail = {}
+            except (json.JSONDecodeError, TypeError):
+                detail = {}
+        else:
+            detail = {}
+        if comment is not None:
+            detail["comment"] = comment
+        return detail
 
     async def _update_lark_card(self, task_id: str) -> None:
         """更新 Lark 卡片（防御性调用，不阻塞主流程）。"""

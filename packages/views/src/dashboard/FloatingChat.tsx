@@ -22,7 +22,7 @@ const DEFAULT_POSITION: ButtonPosition = { bottom: 24, right: 24 };
 const POSITION_STORAGE_KEY = "tide.floating-chat.position";
 const PROJECT_STORAGE_KEY = "tide.floating-chat.project";
 const AGENT_STORAGE_KEY = "tide.floating-chat.agent";
-const BUTTON_SIZE = 56;
+const BUTTON_SIZE = 48;
 const DRAG_THRESHOLD = 4;
 const WINDOW_W = 380;
 const WINDOW_H = 520;
@@ -326,18 +326,18 @@ export function FloatingChat() {
         onClick={handleButtonClick}
         style={{ bottom: position.bottom, right: position.right }}
         className={
-          "fixed z-50 flex h-14 w-14 items-center justify-center rounded-full border-2 border-zinc-900 bg-white text-zinc-900 shadow-[4px_4px_0_0_rgba(0,0,0,1)] transition-transform hover:-translate-y-0.5 active:translate-y-0 " +
+          "fixed z-50 flex h-12 w-12 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg transition-smooth hover:scale-105 hover:shadow-xl " +
           (isDragging ? "cursor-grabbing" : "cursor-grab")
         }
       >
         <svg
           xmlns="http://www.w3.org/2000/svg"
-          width="22"
-          height="22"
+          width="20"
+          height="20"
           viewBox="0 0 24 24"
           fill="none"
           stroke="currentColor"
-          strokeWidth="2.5"
+          strokeWidth="2.2"
           strokeLinecap="round"
           strokeLinejoin="round"
           aria-hidden="true"
@@ -345,7 +345,7 @@ export function FloatingChat() {
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
         </svg>
         {unread && (
-          <span className="absolute -right-0.5 -top-0.5 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border-2 border-zinc-900 bg-red-500" />
+          <span className="absolute -right-0.5 -top-0.5 inline-flex h-3 w-3 items-center justify-center rounded-full border-2 border-background bg-destructive" />
         )}
       </button>
 
@@ -353,16 +353,16 @@ export function FloatingChat() {
       {open && (
         <div
           style={windowStyle}
-          className="fixed z-50 flex flex-col rounded-xl border-2 border-zinc-900 bg-white shadow-[6px_6px_0_0_rgba(0,0,0,1)]"
+          className="fixed z-50 flex flex-col overflow-hidden rounded-2xl border border-border/50 bg-card shadow-2xl"
         >
           {/* Resize handle – top-left corner */}
           {!isMaximized && (
             <div
               onMouseDown={handleResizeMouseDown}
-              className="absolute -left-0.5 -top-0.5 z-10 flex h-5 w-5 cursor-nw-resize items-end justify-end"
+              className="absolute left-1 top-1 z-10 flex h-4 w-4 cursor-nw-resize items-end justify-end opacity-40 transition-opacity hover:opacity-90"
               title="拖动调整大小"
             >
-              <svg width="10" height="10" viewBox="0 0 10 10" className="text-zinc-400">
+              <svg width="10" height="10" viewBox="0 0 10 10" className="text-zinc-50">
                 <path d="M0 10 L10 0" stroke="currentColor" strokeWidth="1.5" />
                 <path d="M0 6 L6 0" stroke="currentColor" strokeWidth="1.5" />
               </svg>
@@ -374,14 +374,14 @@ export function FloatingChat() {
                 ? { width: "100%", height: "100%" }
                 : { width: windowSize.width, height: windowSize.height }
             }
-            className="flex flex-col overflow-hidden rounded-[10px]"
+            className="flex flex-col overflow-hidden"
           >
             {/* Header */}
-            <div className="flex h-12 shrink-0 items-center gap-2 border-b-2 border-zinc-900 bg-yellow-300 px-3">
-              <div className="flex items-center gap-1.5">
-                <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
-                <span className="font-mono text-[11px] font-semibold tracking-[0.25em] text-zinc-900">
-                  CHAT
+            <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border/50 bg-[hsl(224_71%_4%)] px-4">
+              <div className="flex items-center gap-2">
+                <span className="inline-block h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]" />
+                <span className="text-[13px] font-medium tracking-wide text-white">
+                  Chat
                 </span>
               </div>
               <div className="ml-auto flex items-center gap-1">
@@ -389,7 +389,7 @@ export function FloatingChat() {
                   type="button"
                   onClick={chat.clearHistory}
                   title="清空历史"
-                  className="flex h-7 w-7 items-center justify-center rounded border-2 border-zinc-900 bg-white text-zinc-900 transition-colors hover:bg-zinc-900 hover:text-white"
+                  className="flex h-7 w-7 items-center justify-center rounded-md text-zinc-400 transition-colors hover:bg-white/10 hover:text-white"
                 >
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
@@ -412,7 +412,7 @@ export function FloatingChat() {
                   type="button"
                   onClick={() => setIsMaximized((v) => !v)}
                   title={isMaximized ? "还原" : "最大化"}
-                  className="flex h-7 w-7 items-center justify-center rounded border-2 border-zinc-900 bg-white text-zinc-900 transition-colors hover:bg-zinc-900 hover:text-white"
+                  className="flex h-7 w-7 items-center justify-center rounded-md text-zinc-400 transition-colors hover:bg-white/10 hover:text-white"
                 >
                   {isMaximized ? (
                     <svg
@@ -454,7 +454,7 @@ export function FloatingChat() {
                   type="button"
                   onClick={() => setOpen(false)}
                   title="关闭"
-                  className="flex h-7 w-7 items-center justify-center rounded border-2 border-zinc-900 bg-white text-zinc-900 transition-colors hover:bg-zinc-900 hover:text-white"
+                  className="flex h-7 w-7 items-center justify-center rounded-md text-zinc-400 transition-colors hover:bg-white/10 hover:text-white"
                 >
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
@@ -476,13 +476,13 @@ export function FloatingChat() {
             </div>
 
             {/* Context bar */}
-            <div className="flex shrink-0 items-center gap-2 border-b-2 border-zinc-900 bg-zinc-50 px-3 py-2">
+            <div className="flex shrink-0 items-center gap-2 border-b border-border/50 bg-card px-3 py-2">
               <select
                 value={projectCwd}
                 onChange={(e) => setProjectCwd(e.target.value)}
-                className="h-7 max-w-[170px] flex-1 truncate rounded border-2 border-zinc-900 bg-white px-2 font-mono text-[11px] tracking-wider text-zinc-900 focus:outline-none focus:ring-2 focus:ring-yellow-300"
+                className="h-7 max-w-[170px] flex-1 truncate rounded-md border border-border/50 bg-muted/50 px-2 text-xs text-foreground transition-colors focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30"
               >
-                <option value="">CHAT · 无项目</option>
+                <option value="">无项目 · 纯对话</option>
                 {projects.map((p) => (
                   <option key={p.id} value={p.cwd}>
                     {p.name}
@@ -492,9 +492,9 @@ export function FloatingChat() {
               <select
                 value={agentId}
                 onChange={(e) => setAgentId(e.target.value)}
-                className="h-7 w-[110px] rounded border-2 border-zinc-900 bg-white px-2 font-mono text-[11px] tracking-wider text-zinc-900 focus:outline-none focus:ring-2 focus:ring-yellow-300"
+                className="h-7 w-[110px] rounded-md border border-border/50 bg-muted/50 px-2 text-xs text-foreground transition-colors focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30"
               >
-                <option value="">AUTO</option>
+                <option value="">自动</option>
                 {agents.map((a) => (
                   <option key={a.id} value={a.id}>
                     {a.name}
@@ -504,7 +504,7 @@ export function FloatingChat() {
             </div>
 
             {/* Messages */}
-            <div className="flex-1 overflow-hidden bg-zinc-50">
+            <div className="flex-1 overflow-hidden bg-background">
               <ChatMessageList
                 messages={chat.messages}
                 emptyHint={
@@ -512,17 +512,17 @@ export function FloatingChat() {
                     ? `在「${selectedProject.name}」中执行任务`
                     : "纯对话模式 · 不绑定项目"
                 }
-                onApprove={(approvalId) => void chat.approveTask(approvalId)}
-                onReject={(approvalId) => void chat.rejectTask(approvalId)}
+                onApprove={(approvalId, comment) => void chat.approveTask(approvalId, comment)}
+                onReject={(approvalId, comment) => void chat.rejectTask(approvalId, comment)}
               />
             </div>
 
             {/* Input */}
-            <div className="shrink-0 border-t-2 border-zinc-900 bg-white p-2">
-              <div className="mb-1 flex items-center justify-center" aria-hidden="true">
+            <div className="shrink-0 border-t border-border/50 bg-card p-3">
+              <div className="mb-1.5 flex items-center justify-center" aria-hidden="true">
                 <span
                   title="拖动输入框右下角可调整高度"
-                  className="inline-flex h-1 w-8 rounded-full bg-zinc-300"
+                  className="inline-flex h-1 w-8 rounded-full bg-border"
                 />
               </div>
               <div className="flex items-end gap-2">
@@ -536,13 +536,13 @@ export function FloatingChat() {
                       ? `在「${selectedProject.name}」中执行... (⌘+Enter)`
                       : "输入消息开始对话... (⌘+Enter)"
                   }
-                  className="min-h-[60px] max-h-[200px] flex-1 resize-y rounded border-2 border-zinc-900 bg-white px-2 py-1.5 text-sm leading-snug text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-yellow-300"
+                  className="min-h-[60px] max-h-[200px] flex-1 resize-y rounded-lg border-0 bg-muted/50 px-3 py-2 text-sm leading-snug text-foreground placeholder:text-muted-foreground transition-shadow focus:outline-none focus:ring-2 focus:ring-ring"
                 />
                 <button
                   type="button"
                   onClick={() => void handleSend()}
                   disabled={!draftInput.trim() || chat.isSending}
-                  className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded border-2 border-zinc-900 bg-zinc-900 text-white shadow-[3px_3px_0_0_rgba(0,0,0,1)] transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:bg-zinc-300 disabled:text-zinc-500 disabled:shadow-none disabled:hover:translate-y-0"
+                  className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground transition-smooth hover:bg-primary/90 hover:shadow-md disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground disabled:hover:shadow-none"
                   title="发送 (⌘+Enter)"
                 >
                   {chat.isSending ? (
@@ -566,13 +566,13 @@ export function FloatingChat() {
                   )}
                 </button>
               </div>
-              <div className="mt-1 flex items-center justify-between font-mono text-[10px] tracking-widest text-zinc-400">
+              <div className="mt-1.5 flex items-center justify-between text-[10px] text-muted-foreground">
                 <span>
                   {selectedProject
-                    ? `PROJECT · ${selectedProject.name}`
-                    : "CHAT MODE"}
+                    ? `项目 · ${selectedProject.name}`
+                    : "纯对话模式"}
                 </span>
-                <span>⌘ + ↵ SEND</span>
+                <span>⌘ + ↵ 发送</span>
               </div>
             </div>
           </div>

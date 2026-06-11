@@ -38,11 +38,11 @@ export function WorkflowList({ items }: WorkflowListProps) {
 
   if (items.length === 0) {
     return (
-      <div className="border-2 border-dashed border-zinc-400 bg-white px-6 py-16 text-center shadow-[6px_6px_0_0_rgba(24,24,27,0.92)]">
-        <div className="font-mono text-[11px] tracking-[0.3em] text-zinc-500">
-          ◇ NO WORKFLOWS YET
+      <div className="bg-card rounded-xl p-16 text-center">
+        <div className="text-xs font-medium text-muted-foreground">
+          暂无工作流
         </div>
-        <div className="mt-2 text-sm text-zinc-500">
+        <div className="mt-2 text-sm text-muted-foreground">
           点击右上角「创建工作流」开始
         </div>
       </div>
@@ -50,83 +50,70 @@ export function WorkflowList({ items }: WorkflowListProps) {
   }
 
   return (
-    <div className="overflow-hidden border-2 border-zinc-900 bg-white shadow-[6px_6px_0_0_rgba(24,24,27,0.92)]">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b-2 border-zinc-900 bg-zinc-950 px-4 py-2.5 text-white">
-        <div className="flex items-center gap-2">
-          <span className="inline-block h-2 w-2 bg-emerald-400" />
-          <span className="font-mono text-[11px] tracking-[0.3em]">
-            ◳ WORKFLOWS
-          </span>
-        </div>
-        <span className="font-mono text-[10px] tracking-widest text-zinc-400">
-          {items.length} ITEMS
-        </span>
-      </div>
-
+    <div className="overflow-hidden">
       {/* Search */}
-      <div className="border-b border-zinc-200 bg-zinc-50 px-4 py-3">
+      <div className="border-b border-border/50 px-4 py-3">
         <Input
           placeholder="搜索工作流名称或描述..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="max-w-sm"
+          className="max-w-sm rounded-lg"
         />
       </div>
 
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b-2 border-zinc-900 bg-zinc-50">
-              <th className="px-3 py-2 text-left font-mono text-[10px] tracking-[0.2em] text-zinc-700">
-                NAME
+            <tr className="border-b border-border/50 bg-muted/30">
+              <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground">
+                名称
               </th>
-              <th className="px-3 py-2 text-left font-mono text-[10px] tracking-[0.2em] text-zinc-700">
-                DESCRIPTION
+              <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground">
+                描述
               </th>
-              <th className="px-3 py-2 text-left font-mono text-[10px] tracking-[0.2em] text-zinc-700">
-                NODES
+              <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground">
+                节点
               </th>
-              <th className="px-3 py-2 text-left font-mono text-[10px] tracking-[0.2em] text-zinc-700">
-                VER
+              <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground">
+                版本
               </th>
-              <th className="px-3 py-2 text-left font-mono text-[10px] tracking-[0.2em] text-zinc-700">
-                UPDATED
+              <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground">
+                更新时间
               </th>
-              <th className="px-3 py-2 text-left font-mono text-[10px] tracking-[0.2em] text-zinc-700">
-                STATUS
+              <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground">
+                状态
               </th>
-              <th className="px-3 py-2 text-left font-mono text-[10px] tracking-[0.2em] text-zinc-700">
-                ACTIONS
+              <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground">
+                操作
               </th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className="divide-y divide-border/50">
             {filtered.map((w) => {
               const nodeCount = w.definition?.nodes?.length ?? 0;
               return (
                 <tr
                   key={w.id}
-                  className="cursor-pointer border-b border-zinc-200 transition-colors hover:bg-zinc-50"
+                  className="cursor-pointer transition-colors hover:bg-muted/30"
                   onClick={() => router.push(`/workflows/${w.id}`)}
                 >
-                  <td className="px-3 py-3 font-semibold text-zinc-900">
+                  <td className="px-4 py-3 font-semibold text-foreground">
                     {w.name}
                   </td>
-                  <td className="max-w-xs px-3 py-3 truncate text-zinc-600">
+                  <td className="max-w-xs px-4 py-3 truncate text-muted-foreground">
                     {w.description || "—"}
                   </td>
-                  <td className="px-3 py-3 font-mono text-[11px] text-zinc-700">
-                    ◰ {nodeCount}
+                  <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
+                    {nodeCount} 个
                   </td>
-                  <td className="px-3 py-3 font-mono text-[11px] text-zinc-700">
+                  <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
                     v{w.version}
                   </td>
-                  <td className="px-3 py-3 font-mono text-[11px] text-zinc-700">
+                  <td className="px-4 py-3 text-xs text-muted-foreground">
                     {formatTime(w.updated_at)}
                   </td>
                   <td
-                    className="px-3 py-3"
+                    className="px-4 py-3"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <button
@@ -134,17 +121,18 @@ export function WorkflowList({ items }: WorkflowListProps) {
                       disabled={toggle.isPending}
                       onClick={() => toggle.mutate(w.id)}
                       title={w.enabled ? "点击禁用" : "点击启用"}
-                      className={`inline-flex items-center gap-1 border-2 px-2 py-[2px] font-mono text-[10px] tracking-[0.2em] transition-all hover:translate-x-[1px] hover:translate-y-[1px] disabled:opacity-50 ${
+                      className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-[10px] font-medium transition-smooth disabled:opacity-50 ${
                         w.enabled
-                          ? "border-emerald-700 bg-emerald-50 text-emerald-800 shadow-[2px_2px_0_0_rgba(4,120,87,0.6)] hover:shadow-none"
-                          : "border-zinc-500 bg-zinc-100 text-zinc-600 shadow-[2px_2px_0_0_rgba(82,82,91,0.5)] hover:shadow-none"
+                          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                          : "border-border bg-muted text-muted-foreground"
                       }`}
                     >
-                      {w.enabled ? "● ENABLED" : "○ DISABLED"}
+                      <span className={`h-1.5 w-1.5 rounded-full ${w.enabled ? "bg-emerald-500" : "bg-zinc-400"}`} />
+                      {w.enabled ? "已启用" : "已禁用"}
                     </button>
                   </td>
                   <td
-                    className="px-3 py-3"
+                    className="px-4 py-3"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <div className="flex items-center gap-1">
@@ -178,8 +166,8 @@ export function WorkflowList({ items }: WorkflowListProps) {
       </div>
 
       {filtered.length === 0 && items.length > 0 && (
-        <div className="px-4 py-8 text-center font-mono text-[11px] tracking-widest text-zinc-500">
-          ◇ NO MATCHES
+        <div className="px-4 py-8 text-center text-xs text-muted-foreground">
+          无匹配结果
         </div>
       )}
     </div>

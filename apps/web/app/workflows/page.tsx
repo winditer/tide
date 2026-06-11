@@ -12,45 +12,40 @@ export default function WorkflowsPage() {
   const [showCreate, setShowCreate] = useState(false);
 
   return (
-    <main className="mx-auto max-w-7xl px-2 py-2">
+    <div className="space-y-8">
       {/* Page header */}
-      <div className="mb-6 flex items-end justify-between">
-        <div>
-          <div className="font-mono text-[10px] tracking-[0.3em] text-zinc-500">
-            ◳ ORCHESTRATION
-          </div>
-          <h1 className="mt-1 text-3xl font-black tracking-tight text-zinc-900">
-            Workflows
-          </h1>
-          <p className="mt-1 text-sm text-zinc-600">
-            可视化构建多 Agent 协作的 DAG 工作流
+      <header className="flex items-end justify-between gap-4">
+        <div className="space-y-1">
+          <h1 className="text-2xl font-semibold tracking-tight">工作流</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            可视化构建多 Agent 协作的 DAG 工作流。
           </p>
         </div>
         <Button onClick={() => setShowCreate(true)}>+ 创建工作流</Button>
-      </div>
+      </header>
 
       {isLoading ? (
-        <div className="border-2 border-zinc-900 bg-white px-4 py-12 text-center font-mono text-xs tracking-widest text-zinc-500 shadow-[6px_6px_0_0_rgba(24,24,27,0.92)]">
-          ◐ LOADING WORKFLOWS…
+        <div className="bg-card rounded-xl shadow-card px-4 py-12 text-center text-sm text-muted-foreground transition-smooth">
+          加载中...
         </div>
       ) : isError ? (
-        <div className="border-2 border-rose-700 bg-rose-50 px-4 py-12 text-center font-mono text-xs text-rose-700 shadow-[6px_6px_0_0_rgba(190,18,60,0.92)]">
-          ✕ 加载失败 — {String(error)}
+        <div className="bg-card rounded-xl shadow-card px-4 py-12 text-center text-sm text-destructive transition-smooth">
+          加载失败 — {String(error)}
         </div>
       ) : (
-        <WorkflowList items={data ?? []} />
+        <div className="bg-card rounded-xl shadow-card overflow-hidden hover:shadow-card-hover transition-smooth">
+          <WorkflowList items={data ?? []} />
+        </div>
       )}
 
       {showCreate && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-lg border-2 border-zinc-900 bg-white shadow-[8px_8px_0_0_rgba(24,24,27,0.92)]">
-            <div className="flex items-center justify-between border-b-2 border-zinc-900 bg-zinc-950 px-4 py-3 text-white">
-              <span className="font-mono text-[11px] tracking-[0.3em]">
-                ◳ NEW WORKFLOW
-              </span>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-lg bg-card rounded-xl shadow-card-hover overflow-hidden">
+            <div className="flex items-center justify-between border-b border-border/50 px-5 py-3">
+              <span className="text-sm font-semibold">创建工作流</span>
               <button
                 onClick={() => setShowCreate(false)}
-                className="font-mono text-sm text-zinc-300 hover:text-white"
+                className="text-muted-foreground hover:text-foreground transition-smooth"
               >
                 ✕
               </button>
@@ -67,6 +62,6 @@ export default function WorkflowsPage() {
           </div>
         </div>
       )}
-    </main>
+    </div>
   );
 }

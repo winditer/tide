@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Badge, Button, Card, CardContent, Input } from "@tide/ui";
 import {
   useProjects,
@@ -39,6 +40,22 @@ interface ExtendedProject extends ProjectInfo {
 }
 
 export default function ProjectsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="py-16 text-center text-sm text-muted-foreground">
+          加载中…
+        </div>
+      }
+    >
+      <ProjectsPageContent />
+    </Suspense>
+  );
+}
+
+function ProjectsPageContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [showArchived, setShowArchived] = useState(false);
   const { data, isLoading, isError } = useProjects({ show_archived: showArchived });
   const createMutation = useCreateProject();
@@ -49,6 +66,21 @@ export default function ProjectsPage() {
   const [dialog, setDialog] = useState<DialogMode | null>(null);
   const [pendingRemoveId, setPendingRemoveId] = useState<string | null>(null);
   const [pendingArchiveId, setPendingArchiveId] = useState<string | null>(null);
+  const handledActionRef = useRef(false);
+
+  // 首次进入时若 URL 携带 action=create 则自动打开新建项目弹窗
+  useEffect(() => {
+    if (handledActionRef.current) return;
+    const action = searchParams.get("action");
+    if (action === "create") {
+      handledActionRef.current = true;
+      setDialog("new");
+      const sp = new URLSearchParams(searchParams.toString());
+      sp.delete("action");
+      const qs = sp.toString();
+      router.replace(qs ? `/projects?${qs}` : "/projects", { scroll: false });
+    }
+  }, [searchParams, router]);
 
   const projects = (data?.projects ?? []) as ExtendedProject[];
   const total = projects.length;
@@ -62,66 +94,41 @@ export default function ProjectsPage() {
   );
 
   return (
-    <main className="mx-auto max-w-7xl px-2 py-2">
-      {/* Editorial hero */}
-      <header className="mb-10 border-b-2 border-zinc-900 pb-6">
-        <div className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
+    <main className="mx-auto max-w-7xl px-2 py-2 space-y-8">
+      {/* Header */}
+      <header>
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div className="min-w-0 flex-1">
-            <div className="font-mono text-[11px] tracking-[0.4em] text-zinc-500">
-              WORKSPACE · CATALOG
-            </div>
-            <h1 className="mt-2 font-serif text-5xl font-bold leading-none tracking-tight text-zinc-900">
-              Projects<span className="text-emerald-600">.</span>
-            </h1>
-            <p className="mt-3 max-w-xl text-sm text-zinc-600">
-              关注的目录，按活跃排序
+            <h1 className="text-2xl font-semibold tracking-tight">项目</h1>
+            <p className="text-sm text-muted-foreground mt-1">
+              关注的目录，按活跃排序 · 共 {total} 个项目，{registeredCount} 个已注册
+              {showArchived && archivedCount > 0 ? ` · ${archivedCount} 已归档` : ""}
             </p>
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-2">
-            <span className="font-mono text-[10px] tracking-widest text-zinc-500">
-              {total} TOTAL · {registeredCount} REGISTERED
-              {showArchived && archivedCount > 0 ? ` · ${archivedCount} ARCHIVED` : ""}
-            </span>
-            <Button
-              variant="outline"
-              className={
-                showArchived
-                  ? "border-2 border-zinc-900 bg-zinc-900 text-white shadow-[3px_3px_0_0_rgba(24,24,27,1)] hover:bg-zinc-800"
-                  : "border-2 border-zinc-900 bg-white shadow-[3px_3px_0_0_rgba(24,24,27,1)] hover:bg-zinc-100"
-              }
-              onClick={() => setShowArchived((v) => !v)}
-            >
-              {showArchived ? "◉ 隐藏归档" : "○ 显示归档"}
+            <Button variant="outline" onClick={() => setShowArchived((v) => !v)}>
+              {showArchived ? "隐藏归档" : "显示归档"}
             </Button>
-            <Button
-              variant="outline"
-              className="border-2 border-zinc-900 bg-white shadow-[3px_3px_0_0_rgba(24,24,27,1)] hover:bg-zinc-100"
-              onClick={() => setDialog("register")}
-            >
+            <Button variant="outline" onClick={() => setDialog("register")}>
               ＋ 添加已有
             </Button>
-            <Button
-              className="border-2 border-zinc-900 bg-emerald-600 text-white shadow-[3px_3px_0_0_rgba(24,24,27,1)] hover:bg-emerald-700"
-              onClick={() => setDialog("new")}
-            >
-              ＋ 新建项目
-            </Button>
+            <Button onClick={() => setDialog("new")}>＋ 新建项目</Button>
           </div>
         </div>
       </header>
 
       {isLoading ? (
-        <div className="py-16 text-center font-mono text-xs tracking-widest text-zinc-500">
-          ◐ LOADING…
+        <div className="py-16 text-center text-sm text-muted-foreground">
+          加载中…
         </div>
       ) : isError ? (
-        <div className="py-16 text-center font-mono text-xs text-rose-600">
-          ✕ FAILED TO LOAD
+        <div className="py-16 text-center text-sm text-destructive">
+          加载失败
         </div>
       ) : projects.length === 0 ? (
         <EmptyState onAdd={() => setDialog("register")} onCreate={() => setDialog("new")} />
       ) : (
-        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {projects.map((project, idx) => (
             <ProjectCardItem
               key={project.id}
@@ -197,49 +204,37 @@ function ProjectCardItem({
     <Card
       className={
         project.archived
-          ? "group relative border-2 border-zinc-400 bg-zinc-50 opacity-80 shadow-[6px_6px_0_0_rgba(24,24,27,0.4)] transition-transform hover:-translate-y-0.5"
-          : "group relative border-2 border-zinc-900 shadow-[6px_6px_0_0_rgba(24,24,27,0.92)] transition-transform hover:-translate-y-0.5 hover:shadow-[8px_8px_0_0_rgba(24,24,27,0.92)]"
+          ? "group relative bg-card rounded-xl shadow-card opacity-70 transition-smooth hover:opacity-100 hover:shadow-card-hover"
+          : "group relative bg-card rounded-xl shadow-card transition-smooth hover:shadow-card-hover"
       }
     >
       <CardContent className="p-0">
         <Link href={`/projects/${project.id}`} className="block p-5">
           <div className="mb-3 flex items-start justify-between gap-2">
             <div className="min-w-0 flex-1">
-              <div className="font-mono text-[10px] tracking-[0.3em] text-zinc-500">
+              <div className="text-xs text-muted-foreground">
                 №{String(index + 1).padStart(2, "0")} ·{" "}
-                {project.registered ? "REGISTERED" : "DISCOVERED"}
-                {project.archived ? " · ARCHIVED" : ""}
+                {project.registered ? "已注册" : "已发现"}
+                {project.archived ? " · 已归档" : ""}
               </div>
-              <h3 className="mt-1 truncate font-serif text-xl font-semibold text-zinc-900">
+              <h3 className="mt-1 truncate text-lg font-semibold tracking-tight">
                 {project.name}
               </h3>
             </div>
             {project.archived ? (
-              <Badge
-                variant="secondary"
-                className="border-2 border-zinc-400 bg-white text-zinc-500"
-              >
-                已归档
-              </Badge>
+              <Badge variant="secondary">已归档</Badge>
             ) : (
-              <Badge
-                variant={project.status === "active" ? "default" : "secondary"}
-                className={
-                  project.status === "active"
-                    ? "border-2 border-zinc-900 bg-emerald-600 text-white"
-                    : "border-2 border-zinc-900 bg-white text-zinc-700"
-                }
-              >
+              <Badge variant={project.status === "active" ? "default" : "secondary"}>
                 {project.status === "active" ? "活跃" : "空闲"}
               </Badge>
             )}
           </div>
 
-          <p className="mb-4 truncate rounded-sm bg-zinc-100 px-2 py-1 font-mono text-[11px] text-zinc-600">
+          <p className="mb-4 truncate rounded-md bg-muted px-2 py-1 font-mono text-[11px] text-muted-foreground">
             {project.cwd}
           </p>
 
-          <div className="grid grid-cols-4 gap-2 border-t border-zinc-200 pt-3 text-center">
+          <div className="grid grid-cols-4 gap-2 border-t border-border/50 pt-3 text-center">
             <Stat label="TASKS" value={project.task_count} />
             <Stat label="SESSIONS" value={project.session_count ?? 0} />
             {/* CHATS 列表不精确计算（性能问题），仅项目详情页显示准确值；这里为空时占位为 "—"。 */}
@@ -247,13 +242,13 @@ function ProjectCardItem({
             <Stat label="AGENTS" value={(project.agents ?? []).length} />
           </div>
 
-          <div className="mt-3 flex items-center justify-between text-[11px] text-zinc-500">
+          <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
             <span className="font-mono">{formatTime(project.last_active)}</span>
             <span className="flex flex-wrap gap-1">
               {(project.agents ?? []).slice(0, 4).map((a) => (
                 <span
                   key={a}
-                  className="rounded-sm border border-zinc-300 bg-white px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider"
+                  className="rounded-md border border-border bg-background px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider"
                 >
                   {a}
                 </span>
@@ -262,7 +257,7 @@ function ProjectCardItem({
           </div>
 
           {project.running_tasks > 0 && (
-            <p className="mt-2 inline-flex items-center gap-1 font-mono text-[11px] text-emerald-700">
+            <p className="mt-2 inline-flex items-center gap-1 text-xs text-emerald-600">
               <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
               {project.running_tasks} 个运行中
             </p>
@@ -278,9 +273,9 @@ function ProjectCardItem({
               e.stopPropagation();
               onRemove();
             }}
-            className="absolute right-2 top-2 rounded-sm border border-zinc-300 bg-white/90 px-2 py-0.5 font-mono text-[10px] tracking-wider text-zinc-600 opacity-0 transition-opacity hover:border-rose-500 hover:text-rose-600 group-hover:opacity-100 disabled:opacity-50"
+            className="absolute right-2 top-2 rounded-md border border-border bg-background/90 px-2 py-0.5 text-[10px] text-muted-foreground opacity-0 transition-smooth hover:border-destructive hover:text-destructive group-hover:opacity-100 disabled:opacity-50"
           >
-            {isRemoving ? "…" : "REMOVE"}
+            {isRemoving ? "…" : "移除"}
           </button>
         )}
 
@@ -295,10 +290,10 @@ function ProjectCardItem({
           className={
             "absolute right-2 " +
             (project.registered ? "top-9 " : "top-2 ") +
-            "rounded-sm border border-zinc-300 bg-white/90 px-2 py-0.5 font-mono text-[10px] tracking-wider text-zinc-600 opacity-0 transition-opacity hover:border-amber-500 hover:text-amber-600 group-hover:opacity-100 disabled:opacity-50"
+            "rounded-md border border-border bg-background/90 px-2 py-0.5 text-[10px] text-muted-foreground opacity-0 transition-smooth hover:text-foreground group-hover:opacity-100 disabled:opacity-50"
           }
         >
-          {isArchiving ? "…" : project.archived ? "UNARCHIVE" : "ARCHIVE"}
+          {isArchiving ? "…" : project.archived ? "取消归档" : "归档"}
         </button>
       </CardContent>
     </Card>
@@ -308,10 +303,10 @@ function ProjectCardItem({
 function Stat({ label, value }: { label: string; value: number | null }) {
   return (
     <div>
-      <div className="font-serif text-lg font-semibold text-zinc-900">
+      <div className="text-lg font-semibold tracking-tight">
         {value === null || value === undefined ? "—" : value}
       </div>
-      <div className="font-mono text-[10px] tracking-widest text-zinc-500">{label}</div>
+      <div className="text-[10px] uppercase tracking-widest text-muted-foreground">{label}</div>
     </div>
   );
 }
@@ -324,20 +319,14 @@ function EmptyState({
   onCreate: () => void;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center border-2 border-dashed border-zinc-300 py-20 text-center">
-      <div className="font-mono text-[11px] tracking-[0.3em] text-zinc-400">
-        EMPTY · NO PROJECTS YET
-      </div>
-      <p className="mt-3 font-serif text-2xl text-zinc-700">
+    <div className="flex flex-col items-center justify-center bg-card rounded-xl shadow-card py-20 text-center">
+      <p className="text-sm text-muted-foreground">暂无项目</p>
+      <p className="mt-2 text-base font-medium">
         关注一个目录，开始编排你的 Agent 工作
       </p>
       <div className="mt-6 flex gap-2">
-        <Button variant="outline" className="border-2 border-zinc-900" onClick={onAdd}>
-          ＋ 添加已有
-        </Button>
-        <Button className="border-2 border-zinc-900 bg-emerald-600 text-white" onClick={onCreate}>
-          ＋ 新建项目
-        </Button>
+        <Button variant="outline" onClick={onAdd}>＋ 添加已有</Button>
+        <Button onClick={onCreate}>＋ 新建项目</Button>
       </div>
     </div>
   );
@@ -388,28 +377,28 @@ function ProjectDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
       onClick={onClose}
     >
       <div
-        className="relative w-full max-w-lg border-2 border-zinc-900 bg-white shadow-[12px_12px_0_0_rgba(24,24,27,0.92)]"
+        className="relative w-full max-w-lg rounded-xl shadow-2xl border border-border/50 bg-card"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b-2 border-zinc-900 bg-zinc-950 px-5 py-3 text-white">
-          <span className="font-mono text-[11px] tracking-[0.3em]">
+        <div className="flex items-center justify-between border-b border-border/50 px-5 py-3">
+          <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
             {mode === "new" ? "NEW · PROJECT" : "REGISTER · PROJECT"}
           </span>
           <button
             onClick={onClose}
-            className="font-mono text-sm text-zinc-300 hover:text-white"
+            className="text-sm text-muted-foreground hover:text-foreground transition-smooth"
           >
             ✕
           </button>
         </div>
         <div className="space-y-5 p-6">
           <div>
-            <h2 className="font-serif text-2xl font-semibold text-zinc-900">{title}</h2>
-            <p className="mt-1 text-sm text-zinc-500">{subtitle}</p>
+            <h2 className="text-xl font-semibold tracking-tight">{title}</h2>
+            <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
           </div>
 
           <Field label="项目路径 (绝对路径)" required>
@@ -418,7 +407,7 @@ function ProjectDialog({
               placeholder="/Users/your/path/to/project"
               value={cwd}
               onChange={(e) => setCwd(e.target.value)}
-              className="border-2 border-zinc-900 font-mono text-sm"
+              className="rounded-lg border-border/50 focus:ring-2 focus:ring-ring font-mono text-sm"
             />
           </Field>
 
@@ -427,7 +416,7 @@ function ProjectDialog({
               placeholder="默认使用目录名"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="border-2 border-zinc-900"
+              className="rounded-lg border-border/50 focus:ring-2 focus:ring-ring"
             />
           </Field>
 
@@ -436,25 +425,21 @@ function ProjectDialog({
               placeholder="frontend, infra, demo"
               value={tagsRaw}
               onChange={(e) => setTagsRaw(e.target.value)}
-              className="border-2 border-zinc-900 font-mono text-sm"
+              className="rounded-lg border-border/50 focus:ring-2 focus:ring-ring font-mono text-sm"
             />
           </Field>
 
           {error && (
-            <div className="border border-rose-500 bg-rose-50 px-3 py-2 font-mono text-xs text-rose-700">
+            <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
               ✕ {error}
             </div>
           )}
 
-          <div className="flex justify-end gap-2 border-t border-zinc-200 pt-4">
-            <Button variant="outline" className="border-2 border-zinc-900" onClick={onClose}>
+          <div className="flex justify-end gap-2 border-t border-border/50 pt-4">
+            <Button variant="outline" onClick={onClose}>
               取消
             </Button>
-            <Button
-              disabled={isPending}
-              className="border-2 border-zinc-900 bg-emerald-600 text-white shadow-[3px_3px_0_0_rgba(24,24,27,1)] hover:bg-emerald-700"
-              onClick={submit}
-            >
+            <Button disabled={isPending} onClick={submit}>
               {isPending ? "保存中…" : mode === "new" ? "创建" : "添加"}
             </Button>
           </div>
@@ -475,9 +460,9 @@ function Field({
 }) {
   return (
     <label className="block">
-      <span className="mb-1.5 block font-mono text-[11px] tracking-widest text-zinc-600">
+      <span className="mb-1.5 block text-sm font-medium text-foreground">
         {label}
-        {required && <span className="ml-1 text-rose-600">*</span>}
+        {required && <span className="ml-1 text-destructive">*</span>}
       </span>
       {children}
     </label>

@@ -48,16 +48,16 @@ export function PlanList({ plans, onCreate }: PlanListProps) {
 
   if (plans.length === 0) {
     return (
-      <div className="border border-zinc-900 bg-white p-12 text-center shadow-[6px_6px_0_0_rgba(24,24,27,0.92)]">
-        <div className="font-mono text-[10px] tracking-[0.3em] text-zinc-500">
-          ◇ NO PLANS YET
+      <div className="bg-card rounded-xl p-12 text-center">
+        <div className="text-xs font-medium text-muted-foreground">
+          暂无 Plan
         </div>
-        <p className="mt-3 text-sm text-zinc-700">
-          Create your first multi-task plan with dependency graph & approvals.
+        <p className="mt-3 text-sm text-muted-foreground">
+          创建你的第一个多任务计划，支持依赖图与审批。
         </p>
         {onCreate && (
           <Button className="mt-4" onClick={onCreate}>
-            ▶ 新建 Plan
+            + 新建 Plan
           </Button>
         )}
       </div>
@@ -65,8 +65,8 @@ export function PlanList({ plans, onCreate }: PlanListProps) {
   }
 
   return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      {plans.map((plan, idx) => {
+    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 p-4">
+      {plans.map((plan) => {
         const tone =
           STATUS_TONE[plan.status] ?? { dot: "bg-slate-400", label: plan.status };
         const taskCount = parseTaskCount(plan.definition);
@@ -75,56 +75,44 @@ export function PlanList({ plans, onCreate }: PlanListProps) {
           <button
             key={plan.id}
             onClick={() => router.push(`/plans/${plan.id}`)}
-            className="group relative overflow-hidden border border-zinc-900 bg-white text-left shadow-[6px_6px_0_0_rgba(24,24,27,0.92)] transition-transform duration-150 hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-[8px_8px_0_0_rgba(24,24,27,0.92)]"
+            className="group relative overflow-hidden bg-card rounded-lg p-4 shadow-sm hover:shadow-card-hover transition-smooth border border-border/50 text-left"
           >
-            {/* Top status bar */}
-            <div
-              className={`flex items-center justify-between ${tone.dot} px-3 py-1.5 text-white`}
-            >
-              <span className="font-mono text-[10px] tracking-[0.25em]">
-                PLAN · {tone.label}
+            {/* Header with status */}
+            <div className="flex items-center justify-between mb-3">
+              <span className="font-mono text-lg font-semibold tracking-tight text-foreground">
+                {plan.id.slice(0, 8)}
               </span>
-              <span className="font-mono text-[10px]">
-                {String(idx + 1).padStart(3, "0")}
+              <span className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted px-2 py-0.5 text-[10px] font-medium tracking-wider">
+                <span className={`inline-block h-2 w-2 rounded-full ${tone.dot}`} />
+                {tone.label}
               </span>
             </div>
 
-            <div className="p-4">
-              {/* Big monospace ID */}
-              <div className="mb-3 font-mono text-[18px] font-bold leading-none tracking-tight text-zinc-900">
-                {plan.id.slice(0, 8)}
-                <span className="text-zinc-300">·</span>
-                <span className="text-[12px] font-medium text-zinc-500">
-                  {plan.id.slice(8, 14)}
-                </span>
-              </div>
+            {/* Stats row */}
+            <div className="flex items-center gap-4 border-t border-border/50 pt-3 text-[11px]">
+              <Stat label="任务" value={String(taskCount)} />
+              <Stat label="并发" value={String(plan.max_parallel)} />
+              <Stat label="模型" value={plan.model || "—"} />
+            </div>
 
-              {/* Stats row */}
-              <div className="flex items-center gap-4 border-y border-dashed border-zinc-300 py-3 font-mono text-[11px]">
-                <Stat label="TASKS" value={String(taskCount)} />
-                <Stat label="PARALLEL" value={String(plan.max_parallel)} />
-                <Stat label="MODEL" value={plan.model || "—"} />
+            {/* Meta */}
+            <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
+              <div className="text-muted-foreground">创建</div>
+              <div className="text-right text-foreground">
+                {formatTime(plan.created_at)}
               </div>
+              <div className="text-muted-foreground">完成</div>
+              <div className="text-right text-foreground">
+                {formatTime(plan.completed_at)}
+              </div>
+            </div>
 
-              {/* Meta */}
-              <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
-                <div className="text-zinc-500">CREATED</div>
-                <div className="text-right text-zinc-800">
-                  {formatTime(plan.created_at)}
-                </div>
-                <div className="text-zinc-500">FINISHED</div>
-                <div className="text-right text-zinc-800">
-                  {formatTime(plan.completed_at)}
-                </div>
-              </div>
-
-              {/* CTA */}
-              <div className="mt-4 flex items-center justify-between font-mono text-[10px] tracking-widest text-zinc-700">
-                <span className="opacity-0 transition-opacity group-hover:opacity-100">
-                  → INSPECT DAG
-                </span>
-                <span>{plan.workspace_id || "default"}</span>
-              </div>
+            {/* Footer */}
+            <div className="mt-3 flex items-center justify-between text-[10px] text-muted-foreground">
+              <span className="opacity-0 transition-opacity group-hover:opacity-100">
+                查看详情 →
+              </span>
+              <span>{plan.workspace_id || "default"}</span>
             </div>
           </button>
         );
@@ -136,8 +124,8 @@ export function PlanList({ plans, onCreate }: PlanListProps) {
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div className="text-[9px] tracking-widest text-zinc-500">{label}</div>
-      <div className="text-[13px] font-bold text-zinc-900">{value}</div>
+      <div className="text-[10px] text-muted-foreground">{label}</div>
+      <div className="text-[13px] font-semibold text-foreground">{value}</div>
     </div>
   );
 }

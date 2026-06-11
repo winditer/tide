@@ -100,12 +100,13 @@ export function PlanCreateForm({ onSuccess }: PlanCreateFormProps) {
       {/* Global params */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <div>
-          <Label>PROJECT · CWD</Label>
+          <Label>项目目录</Label>
           <Input
             list={cwdListId}
             placeholder="选择或输入工作目录…"
             value={cwd}
             onChange={(e) => setCwd(e.target.value)}
+            className="rounded-lg"
           />
           <datalist id={cwdListId}>
             {projectOptions.map((p) => (
@@ -115,16 +116,16 @@ export function PlanCreateForm({ onSuccess }: PlanCreateFormProps) {
             ))}
           </datalist>
           {projectOptions.length > 0 && (
-            <div className="mt-1 flex flex-wrap gap-1 font-mono text-[10px] tracking-widest text-zinc-500">
+            <div className="mt-1.5 flex flex-wrap gap-1 text-[10px] text-muted-foreground">
               {projectOptions.slice(0, 4).map((p) => (
                 <button
                   key={p.id}
                   type="button"
                   onClick={() => setCwd(p.cwd)}
-                  className={`border px-1.5 py-0.5 transition-colors ${
+                  className={`rounded-md border px-1.5 py-0.5 transition-colors ${
                     cwd === p.cwd
-                      ? "border-zinc-900 bg-zinc-900 text-white"
-                      : "border-zinc-300 hover:border-zinc-900"
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border hover:border-foreground"
                   }`}
                   title={p.cwd}
                 >
@@ -135,7 +136,7 @@ export function PlanCreateForm({ onSuccess }: PlanCreateFormProps) {
           )}
         </div>
         <div>
-          <Label>MODEL</Label>
+          <Label>模型</Label>
           <div className="space-y-1">
             <Select
               options={MODEL_PRESETS}
@@ -149,6 +150,7 @@ export function PlanCreateForm({ onSuccess }: PlanCreateFormProps) {
             <Input
               placeholder="或自定义，如 o4-mini"
               value={model}
+              className="rounded-lg"
               onChange={(e) => {
                 setModel(e.target.value);
                 setModelPreset("");
@@ -157,11 +159,12 @@ export function PlanCreateForm({ onSuccess }: PlanCreateFormProps) {
           </div>
         </div>
         <div>
-          <Label>MAX PARALLEL</Label>
+          <Label>最大并发</Label>
           <Input
             type="number"
             min={1}
             value={maxParallel}
+            className="rounded-lg"
             onChange={(e) => setMaxParallel(e.target.value)}
           />
         </div>
@@ -170,44 +173,45 @@ export function PlanCreateForm({ onSuccess }: PlanCreateFormProps) {
       {/* Task rows */}
       <div className="space-y-3">
         <div className="flex items-center justify-between">
-          <Label className="!mb-0">TASKS · {rows.length}</Label>
+          <Label className="!mb-0">任务 · {rows.length}</Label>
           <button
             type="button"
             onClick={addRow}
-            className="font-mono text-[10px] tracking-widest text-zinc-700 underline-offset-4 hover:underline"
+            className="text-xs text-muted-foreground hover:text-foreground transition-smooth"
           >
-            + ADD TASK
+            + 添加任务
           </button>
         </div>
 
         {rows.map((row, idx) => (
           <div
             key={idx}
-            className="border border-zinc-900 bg-white shadow-[3px_3px_0_0_rgba(24,24,27,0.92)]"
+            className="rounded-lg border border-border/50 bg-card shadow-sm"
           >
-            <div className="flex items-center justify-between border-b border-dashed border-zinc-300 bg-zinc-50 px-3 py-1.5">
-              <span className="font-mono text-[10px] tracking-widest text-zinc-700">
+            <div className="flex items-center justify-between border-b border-border/50 bg-muted/30 px-3 py-1.5 rounded-t-lg">
+              <span className="text-[10px] font-medium text-muted-foreground">
                 #{String(idx).padStart(2, "0")}
               </span>
               {rows.length > 1 && (
                 <button
                   type="button"
                   onClick={() => removeRow(idx)}
-                  className="font-mono text-[10px] tracking-widest text-rose-600 hover:underline"
+                  className="text-[10px] text-destructive hover:underline"
                 >
-                  ✕ REMOVE
+                  ✕ 删除
                 </button>
               )}
             </div>
             <div className="space-y-2 p-3">
               <Input
-                placeholder="Title (短描述)"
+                placeholder="标题（短描述）"
+                className="rounded-lg"
                 value={row.title}
                 onChange={(e) => updateRow(idx, { title: e.target.value })}
               />
               <textarea
-                className="flex min-h-[64px] w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-[12px] ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                placeholder="Prompt (任务指令)"
+                className="flex min-h-[64px] w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-[12px] ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                placeholder="Prompt（任务指令）"
                 value={row.prompt}
                 onChange={(e) => updateRow(idx, { prompt: e.target.value })}
               />
@@ -221,11 +225,13 @@ export function PlanCreateForm({ onSuccess }: PlanCreateFormProps) {
                 />
                 <Input
                   placeholder="Phase (0)"
+                  className="rounded-lg"
                   value={row.phase}
                   onChange={(e) => updateRow(idx, { phase: e.target.value })}
                 />
                 <Input
-                  placeholder="Depends on (e.g. 0,1)"
+                  placeholder="Depends on (0,1)"
+                  className="rounded-lg"
                   value={row.depends_on}
                   onChange={(e) =>
                     updateRow(idx, { depends_on: e.target.value })
@@ -244,7 +250,7 @@ export function PlanCreateForm({ onSuccess }: PlanCreateFormProps) {
       </div>
 
       {create.isError && (
-        <p className="font-mono text-[11px] text-rose-600">
+        <p className="text-xs text-destructive">
           创建失败：{String(create.error)}
         </p>
       )}
@@ -261,7 +267,7 @@ function Label({
 }) {
   return (
     <div
-      className={`mb-1 font-mono text-[10px] tracking-widest text-zinc-500 ${className}`}
+      className={`mb-1.5 text-xs font-medium text-muted-foreground ${className}`}
     >
       {children}
     </div>

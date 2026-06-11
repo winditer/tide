@@ -1,14 +1,14 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ChatMessage } from "@tide/core";
 import { SimpleMarkdown } from "../shared/SimpleMarkdown";
 
 interface ChatMessageListProps {
   messages: ChatMessage[];
   emptyHint?: string;
-  onApprove?: (approvalId: string) => void;
-  onReject?: (approvalId: string) => void;
+  onApprove?: (approvalId: string, comment?: string) => void;
+  onReject?: (approvalId: string, comment?: string) => void;
 }
 
 function formatTime(iso: string): string {
@@ -37,7 +37,7 @@ export function ChatMessageList({ messages, emptyHint, onApprove, onReject }: Ch
         className="flex h-full items-center justify-center px-4 py-6"
       >
         <div className="max-w-[260px] text-center">
-          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full border-2 border-zinc-900 bg-yellow-300 shadow-[3px_3px_0_0_rgba(0,0,0,1)]">
+          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
             <svg
               xmlns="http://www.w3.org/2000/svg"
               width="22"
@@ -45,7 +45,7 @@ export function ChatMessageList({ messages, emptyHint, onApprove, onReject }: Ch
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
-              strokeWidth="2.5"
+              strokeWidth="2"
               strokeLinecap="round"
               strokeLinejoin="round"
               aria-hidden="true"
@@ -53,10 +53,10 @@ export function ChatMessageList({ messages, emptyHint, onApprove, onReject }: Ch
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
             </svg>
           </div>
-          <div className="font-mono text-[10px] tracking-[0.3em] text-zinc-500">
-            EMPTY · CHAT
+          <div className="text-xs text-muted-foreground">
+            暂无对话
           </div>
-          <div className="mt-1 text-sm text-zinc-700">
+          <div className="mt-1 text-sm text-foreground">
             {emptyHint || "输入消息开启对话"}
           </div>
         </div>
@@ -67,7 +67,7 @@ export function ChatMessageList({ messages, emptyHint, onApprove, onReject }: Ch
   return (
     <div
       ref={scrollRef}
-      className="flex h-full flex-col gap-3 overflow-y-auto px-3 py-3"
+      className="flex h-full flex-col gap-4 overflow-y-auto px-4 py-4"
     >
       {messages.map((msg) => (
         <MessageBubble key={msg.id} message={msg} onApprove={onApprove} onReject={onReject} />
@@ -78,8 +78,8 @@ export function ChatMessageList({ messages, emptyHint, onApprove, onReject }: Ch
 
 interface MessageBubbleProps {
   message: ChatMessage;
-  onApprove?: (approvalId: string) => void;
-  onReject?: (approvalId: string) => void;
+  onApprove?: (approvalId: string, comment?: string) => void;
+  onReject?: (approvalId: string, comment?: string) => void;
 }
 
 function MessageBubble({ message, onApprove, onReject }: MessageBubbleProps) {
@@ -95,15 +95,35 @@ function MessageBubble({ message, onApprove, onReject }: MessageBubbleProps) {
     (message.interactive.status === "approved" ||
       message.interactive.status === "rejected");
 
+  const [approvalComment, setApprovalComment] = useState("");
+  const [approvalError, setApprovalError] = useState<string | null>(null);
+
+  const handleApproveClick = () => {
+    setApprovalError(null);
+    const id = message.interactive?.approvalId;
+    if (!id) return;
+    onApprove?.(id, approvalComment.trim() || undefined);
+  };
+  const handleRejectClick = () => {
+    const id = message.interactive?.approvalId;
+    if (!id) return;
+    if (!approvalComment.trim()) {
+      setApprovalError("拒绝时请填写审批意见");
+      return;
+    }
+    setApprovalError(null);
+    onReject?.(id, approvalComment.trim());
+  };
+
   if (isUser) {
     return (
       <div className="flex flex-col items-end">
-        <div className="max-w-[80%] rounded-xl border-2 border-zinc-900 bg-zinc-900 px-3 py-2 text-sm leading-relaxed text-white shadow-[3px_3px_0_0_rgba(0,0,0,1)]">
+        <div className="max-w-[80%] rounded-2xl rounded-br-md bg-primary px-4 py-2 text-sm leading-relaxed text-primary-foreground shadow-sm">
           <pre className="whitespace-pre-wrap break-words font-sans">
             {message.content}
           </pre>
         </div>
-        <div className="mt-1 font-mono text-[10px] tracking-widest text-zinc-400">
+        <div className="mt-1 text-xs text-muted-foreground">
           {formatTime(message.timestamp)}
         </div>
       </div>
@@ -114,21 +134,21 @@ function MessageBubble({ message, onApprove, onReject }: MessageBubbleProps) {
     <div className="flex flex-col items-start">
       <div
         className={
-          "max-w-[80%] rounded-xl border-2 px-3 py-2 text-sm leading-relaxed text-zinc-900 shadow-[3px_3px_0_0_rgba(0,0,0,1)] " +
+          "max-w-[80%] rounded-2xl rounded-bl-md border px-4 py-2 text-sm leading-relaxed text-foreground shadow-sm " +
           (isFailed
-            ? "border-red-500 bg-red-50"
+            ? "border-destructive/40 bg-destructive/5"
             : hasApprovalPending
-              ? "border-amber-500 bg-amber-50"
+              ? "border-amber-300/60 bg-amber-50"
               : isPendingOrRunning
-                ? "border-zinc-900 bg-yellow-50"
-                : "border-zinc-900 bg-zinc-100")
+                ? "border-border/50 bg-card"
+                : "border-border/50 bg-card")
         }
       >
         {isPendingOrRunning && !message.content ? (
           <div className="flex items-center gap-2">
-            <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-zinc-900" />
-            <span className="font-mono text-[11px] tracking-widest text-zinc-700">
-              EXECUTING\u2026
+            <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
+            <span className="text-xs text-muted-foreground">
+              执行中…
             </span>
           </div>
         ) : (
@@ -139,58 +159,79 @@ function MessageBubble({ message, onApprove, onReject }: MessageBubbleProps) {
           />
         )}
 
-        {/* Interactive approval buttons */}
+        {/* Interactive approval input + buttons */}
         {hasApprovalPending && message.interactive?.approvalId && (
-          <div className="mt-2 flex gap-2 border-t border-amber-200 pt-2">
-            <button
-              type="button"
-              onClick={() => onApprove?.(message.interactive!.approvalId!)}
-              className="px-3 py-1 bg-emerald-500 text-white text-xs font-mono font-bold border-2 border-zinc-900 rounded shadow-[2px_2px_0_0_rgba(0,0,0,1)] hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-[1px_1px_0_0_rgba(0,0,0,1)] transition-all active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
-            >
-              APPROVE
-            </button>
-            <button
-              type="button"
-              onClick={() => onReject?.(message.interactive!.approvalId!)}
-              className="px-3 py-1 bg-red-500 text-white text-xs font-mono font-bold border-2 border-zinc-900 rounded shadow-[2px_2px_0_0_rgba(0,0,0,1)] hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-[1px_1px_0_0_rgba(0,0,0,1)] transition-all active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
-            >
-              REJECT
-            </button>
+          <div className="mt-2 space-y-2 border-t border-amber-200/60 pt-2">
+            <textarea
+              value={approvalComment}
+              onChange={(e) => {
+                setApprovalComment(e.target.value);
+                if (approvalError) setApprovalError(null);
+              }}
+              rows={2}
+              placeholder="审批意见（拒绝时必填）…"
+              className="w-full resize-none rounded-md border border-amber-200/70 bg-white/80 px-2 py-1 text-[11px] leading-relaxed text-foreground placeholder:text-muted-foreground/60 focus:border-amber-400 focus:outline-none focus:ring-1 focus:ring-amber-400"
+            />
+            {approvalError && (
+              <p className="text-[11px] text-destructive">{approvalError}</p>
+            )}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={handleApproveClick}
+                className="rounded-md bg-emerald-500 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-emerald-600"
+              >
+                通过
+              </button>
+              <button
+                type="button"
+                onClick={handleRejectClick}
+                className="rounded-md bg-destructive px-3 py-1 text-xs font-medium text-destructive-foreground transition-colors hover:bg-destructive/90"
+              >
+                拒绝
+              </button>
+            </div>
           </div>
         )}
 
         {/* Resolved approval status badge */}
         {isApprovalResolved && (
-          <div className="mt-2 border-t border-zinc-200 pt-2">
+          <div className="mt-2 border-t border-border/50 pt-2">
             <span
               className={
-                "inline-block px-2 py-0.5 text-[10px] font-mono font-bold border-2 rounded " +
+                "inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium " +
                 (message.interactive!.status === "approved"
-                  ? "border-emerald-600 bg-emerald-100 text-emerald-700"
-                  : "border-red-600 bg-red-100 text-red-700")
+                  ? "bg-emerald-50 text-emerald-700"
+                  : "bg-destructive/10 text-destructive")
               }
             >
               {message.interactive!.status === "approved"
-                ? "\u2705 APPROVED"
-                : "\u274C REJECTED"}
+                ? "✓ 已通过"
+                : "✕ 已拒绝"}
             </span>
           </div>
         )}
       </div>
-      <div className="mt-1 flex items-center gap-2 font-mono text-[10px] tracking-widest text-zinc-400">
+      <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
         <span>{formatTime(message.timestamp)}</span>
         {message.status && (
           <span
             className={
-              "rounded border px-1 py-px " +
+              "rounded-md px-1.5 py-px text-[10px] font-medium " +
               (message.status === "completed"
-                ? "border-emerald-500 text-emerald-600"
+                ? "bg-emerald-50 text-emerald-700"
                 : message.status === "failed"
-                  ? "border-red-500 text-red-600"
-                  : "border-zinc-400 text-zinc-500")
+                  ? "bg-destructive/10 text-destructive"
+                  : "bg-muted text-muted-foreground")
             }
           >
-            {message.status.toUpperCase()}
+            {message.status === "completed"
+              ? "完成"
+              : message.status === "failed"
+                ? "失败"
+                : message.status === "running"
+                  ? "运行中"
+                  : "等待中"}
           </span>
         )}
       </div>

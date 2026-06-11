@@ -61,31 +61,32 @@ export function WorkflowCreateForm({
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
-        <label className="mb-1.5 block font-mono text-[10px] tracking-[0.2em] text-zinc-700">
-          NAME *
+        <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
+          名称 *
         </label>
         <Input
           placeholder="如：代码评审流水线"
           value={name}
           onChange={(e) => setName(e.target.value)}
           required
+          className="rounded-lg"
         />
       </div>
 
       <div>
-        <label className="mb-1.5 block font-mono text-[10px] tracking-[0.2em] text-zinc-700">
-          DESCRIPTION
+        <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
+          描述
         </label>
         <textarea
-          className="flex min-h-[80px] w-full rounded-none border-2 border-zinc-900 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900"
+          className="flex min-h-[80px] w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           placeholder="描述工作流的用途与触发条件…"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
         />
       </div>
 
-      <div className="border border-dashed border-zinc-300 bg-zinc-50 px-3 py-2 font-mono text-[10px] leading-relaxed tracking-wider text-zinc-600">
-        ◇ 创建后将进入可视化编辑器，包含 START → END 起始模板。
+      <div className="rounded-lg border border-border/50 bg-muted/30 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+        创建后将进入可视化编辑器，包含 START → END 起始模板。
       </div>
 
       <div className="flex items-center justify-end gap-2">
@@ -103,8 +104,8 @@ export function WorkflowCreateForm({
       </div>
 
       {create.isError && (
-        <p className="font-mono text-xs text-rose-600">
-          ✕ 创建失败：{String(create.error)}
+        <p className="text-xs text-destructive">
+          创建失败：{String(create.error)}
         </p>
       )}
     </form>

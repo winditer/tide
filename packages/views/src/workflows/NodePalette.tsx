@@ -6,7 +6,6 @@ interface PaletteItem {
   type: WorkflowNodeType;
   label: string;
   icon: string;
-  glyph: string;
   description: string;
   swatch: string;
 }
@@ -16,7 +15,6 @@ const ITEMS: PaletteItem[] = [
     type: "start",
     label: "Start",
     icon: "▶",
-    glyph: "○",
     description: "工作流入口",
     swatch: "bg-emerald-500",
   },
@@ -24,15 +22,13 @@ const ITEMS: PaletteItem[] = [
     type: "agent",
     label: "Agent",
     icon: "🤖",
-    glyph: "◰",
     description: "执行 AI 任务",
-    swatch: "bg-zinc-900",
+    swatch: "bg-primary",
   },
   {
     type: "approval",
     label: "Approval",
     icon: "🛡",
-    glyph: "◫",
     description: "人工审批",
     swatch: "bg-violet-600",
   },
@@ -40,7 +36,6 @@ const ITEMS: PaletteItem[] = [
     type: "condition",
     label: "Condition",
     icon: "◆",
-    glyph: "◆",
     description: "分支判断",
     swatch: "bg-amber-500",
   },
@@ -48,7 +43,6 @@ const ITEMS: PaletteItem[] = [
     type: "parallel",
     label: "Fork",
     icon: "＋",
-    glyph: "✚",
     description: "并行分发",
     swatch: "bg-cyan-600",
   },
@@ -56,7 +50,6 @@ const ITEMS: PaletteItem[] = [
     type: "parallel_join",
     label: "Join",
     icon: "－",
-    glyph: "—",
     description: "并行汇合",
     swatch: "bg-indigo-600",
   },
@@ -64,7 +57,6 @@ const ITEMS: PaletteItem[] = [
     type: "delay",
     label: "Delay",
     icon: "⏱",
-    glyph: "≡",
     description: "等待时间",
     swatch: "bg-orange-500",
   },
@@ -72,7 +64,6 @@ const ITEMS: PaletteItem[] = [
     type: "stage",
     label: "Stage",
     icon: "✦",
-    glyph: "◰",
     description: "工作项阶段",
     swatch: "bg-violet-500",
   },
@@ -80,7 +71,6 @@ const ITEMS: PaletteItem[] = [
     type: "end",
     label: "End",
     icon: "■",
-    glyph: "●",
     description: "工作流终止",
     swatch: "bg-rose-600",
   },
@@ -101,17 +91,17 @@ export function NodePalette({ onAddNode }: NodePaletteProps) {
   };
 
   return (
-    <div className="flex h-full w-[220px] flex-col border-r-2 border-zinc-900 bg-white">
+    <div className="flex h-full w-[220px] flex-col border-r border-border/50 bg-card">
       {/* Header */}
-      <div className="border-b-2 border-zinc-900 bg-zinc-950 px-3 py-3 text-white">
-        <div className="font-mono text-[10px] tracking-[0.3em] text-zinc-400">
-          NODE
+      <div className="border-b border-border/50 px-3 py-3">
+        <div className="text-[10px] font-medium text-muted-foreground">
+          节点面板
         </div>
-        <div className="mt-0.5 font-mono text-[13px] font-bold tracking-[0.2em]">
-          ◳ PALETTE
+        <div className="mt-0.5 text-sm font-semibold text-foreground">
+          拖拽添加
         </div>
-        <div className="mt-1 font-mono text-[9px] tracking-widest text-zinc-500">
-          DRAG → CANVAS
+        <div className="mt-1 text-[9px] text-muted-foreground">
+          拖拽到画布或双击添加
         </div>
       </div>
 
@@ -124,31 +114,21 @@ export function NodePalette({ onAddNode }: NodePaletteProps) {
             onDragStart={(e) => handleDragStart(e, item.type)}
             onDoubleClick={() => onAddNode?.(item.type)}
             className={[
-              "group mb-2 cursor-grab select-none border border-zinc-900 bg-white",
-              "shadow-[3px_3px_0_0_rgba(24,24,27,0.92)]",
-              "transition-all duration-150",
-              "hover:translate-x-[-1px] hover:translate-y-[-1px]",
-              "hover:shadow-[4px_4px_0_0_rgba(24,24,27,0.92)]",
-              "active:translate-x-[1px] active:translate-y-[1px]",
-              "active:shadow-[2px_2px_0_0_rgba(24,24,27,0.92)]",
+              "group mb-2 cursor-grab select-none rounded-lg border border-border/50 bg-card",
+              "shadow-sm hover:shadow-card-hover transition-smooth",
             ].join(" ")}
           >
             {/* Top accent bar */}
-            <div className={`h-1 ${item.swatch}`} />
+            <div className={`h-1 rounded-t-lg ${item.swatch}`} />
             <div className="flex items-center gap-2 px-2.5 py-2">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center border border-zinc-900 bg-zinc-50 text-base">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border/50 bg-muted/30 text-base">
                 {item.icon}
               </div>
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-1.5">
-                  <span className="font-mono text-[9px] tracking-[0.2em] text-zinc-500">
-                    {item.glyph}
-                  </span>
-                  <span className="text-[12px] font-bold text-zinc-900">
-                    {item.label}
-                  </span>
+                <div className="text-xs font-medium text-foreground">
+                  {item.label}
                 </div>
-                <div className="mt-0.5 truncate text-[10px] text-zinc-500">
+                <div className="mt-0.5 truncate text-[10px] text-muted-foreground">
                   {item.description}
                 </div>
               </div>
@@ -158,8 +138,8 @@ export function NodePalette({ onAddNode }: NodePaletteProps) {
       </div>
 
       {/* Footer hint */}
-      <div className="border-t border-dashed border-zinc-300 bg-zinc-50 px-3 py-2 font-mono text-[9px] leading-relaxed tracking-wider text-zinc-500">
-        ◇ DRAG OR DOUBLE-CLICK TO ADD
+      <div className="border-t border-border/50 bg-muted/30 px-3 py-2 text-[9px] leading-relaxed text-muted-foreground">
+        拖拽或双击添加节点
       </div>
     </div>
   );

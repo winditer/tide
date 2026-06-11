@@ -813,12 +813,17 @@ class WorkflowEngine:
     # ── template & condition ─────────────────────────────
 
     def _render_template(self, template: str, context: dict) -> str:
-        """渲染 {{path.to.value}} 模板。"""
+        """渲染模板占位符。
+
+        支持两种语法：
+        - 双花括号：{{path.to.value}}
+        - 单花括号：{path.to.value}（仅匹配合法标识符点路径，避免与 JSON/代码冲突）
+        """
         if not template:
             return ""
 
-        def replace_match(match):
-            path = match.group(1).strip()
+        def resolve(path: str) -> str:
+            path = (path or "").strip()
             # 容忍 "context.xxx" 前缀
             if path.startswith("context."):
                 path = path[len("context."):]
@@ -834,7 +839,13 @@ class WorkflowEngine:
                 return json.dumps(obj, ensure_ascii=False)
             return str(obj)
 
-        return re.sub(r"\{\{(.*?)\}\}", replace_match, template)
+        rendered = re.sub(r"\{\{\s*([^{}]+?)\s*\}\}", lambda m: resolve(m.group(1)), template)
+        rendered = re.sub(
+            r"\{\s*([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\s*\}",
+            lambda m: resolve(m.group(1)),
+            rendered,
+        )
+        return rendered
 
     def _resolve_path(self, path: str, context: dict):
         if path.startswith("context."):

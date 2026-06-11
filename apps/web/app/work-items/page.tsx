@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button, Select } from "@tide/ui";
 import { useProjects, type ProjectInfo } from "@tide/core";
 import {
@@ -10,18 +10,69 @@ import {
 } from "@tide/views";
 import type { WorkItem } from "@tide/core";
 
+const LAST_PROJECT_STORAGE_KEY = "tide:work-items:last-project-id";
+
+/** 取 last_active 最新的项目 id；为空时退化为列表第一个。 */
+function pickMostRecentProjectId(projects: ProjectInfo[]): string {
+  if (projects.length === 0) return "";
+  const sorted = [...projects].sort((a, b) => {
+    const av = a.last_active || "";
+    const bv = b.last_active || "";
+    if (av === bv) return 0;
+    return av < bv ? 1 : -1;
+  });
+  return sorted[0]?.id ?? "";
+}
+
 export default function WorkItemsPage() {
   const { data: projectsData, isLoading: projectsLoading } = useProjects();
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
   const [showCreate, setShowCreate] = useState(false);
   const [detailItemId, setDetailItemId] = useState<string | null>(null);
+  const [didInit, setDidInit] = useState(false);
 
-  const projects: ProjectInfo[] = projectsData?.projects ?? [];
+  const projects: ProjectInfo[] = useMemo(
+    () => projectsData?.projects ?? [],
+    [projectsData],
+  );
 
-  // Auto-select first project if none selected
-  if (!selectedProjectId && projects.length > 0 && !projectsLoading) {
-    // Use effect-free approach: let user pick
-  }
+  // 默认选中：localStorage 上次选择 > last_active 最新的项目
+  useEffect(() => {
+    if (didInit || projectsLoading || projects.length === 0) return;
+
+    let next = "";
+    try {
+      const saved =
+        typeof window !== "undefined"
+          ? window.localStorage.getItem(LAST_PROJECT_STORAGE_KEY)
+          : null;
+      if (saved && projects.some((p) => p.id === saved)) {
+        next = saved;
+      }
+    } catch {
+      // ignore localStorage 异常（隐私模式 / SSR）
+    }
+
+    if (!next) {
+      next = pickMostRecentProjectId(projects);
+    }
+
+    if (next) setSelectedProjectId(next);
+    setDidInit(true);
+  }, [projects, projectsLoading, didInit]);
+
+  // 选中项目时持久化，便于下次进入恢复
+  useEffect(() => {
+    if (!selectedProjectId) return;
+    try {
+      window.localStorage.setItem(
+        LAST_PROJECT_STORAGE_KEY,
+        selectedProjectId,
+      );
+    } catch {
+      // ignore
+    }
+  }, [selectedProjectId]);
 
   const projectOptions = [
     { value: "", label: "选择项目…" },
@@ -33,18 +84,13 @@ export default function WorkItemsPage() {
   };
 
   return (
-    <main className="mx-auto max-w-7xl px-2 py-2">
-      {/* Editorial hero */}
-      <header className="mb-8 border-b-2 border-zinc-900 pb-6">
-        <div className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
+    <main className="mx-auto max-w-7xl px-2 py-2 space-y-8">
+      {/* Header */}
+      <header>
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <div className="font-mono text-[11px] tracking-[0.4em] text-zinc-500">
-              WORKFLOW · KANBAN
-            </div>
-            <h1 className="mt-2 font-serif text-5xl font-bold leading-none tracking-tight text-zinc-900">
-              Work Items<span className="text-emerald-600">.</span>
-            </h1>
-            <p className="mt-3 max-w-xl text-sm text-zinc-600">
+            <h1 className="text-2xl font-semibold tracking-tight">工作项</h1>
+            <p className="text-sm text-muted-foreground mt-1">
               可视化管理项目中的工作项，拖拽卡片即可流转状态。
             </p>
           </div>
@@ -53,11 +99,10 @@ export default function WorkItemsPage() {
               value={selectedProjectId}
               onChange={(e) => setSelectedProjectId(e.target.value)}
               options={projectOptions}
-              className="min-w-[200px] border-2 border-zinc-900 shadow-[3px_3px_0_0_rgba(24,24,27,1)]"
+              className="min-w-[200px]"
             />
             <Button
               disabled={!selectedProjectId}
-              className="border-2 border-zinc-900 bg-emerald-600 text-white shadow-[3px_3px_0_0_rgba(24,24,27,1)] hover:bg-emerald-700"
               onClick={() => setShowCreate(true)}
             >
               ＋ 新建工作项
@@ -68,15 +113,13 @@ export default function WorkItemsPage() {
 
       {/* Board content */}
       {projectsLoading ? (
-        <div className="py-16 text-center font-mono text-xs tracking-widest text-zinc-500">
-          ◐ LOADING PROJECTS…
+        <div className="py-16 text-center text-sm text-muted-foreground">
+          加载项目中…
         </div>
       ) : !selectedProjectId ? (
-        <div className="flex flex-col items-center justify-center border-2 border-dashed border-zinc-300 py-20 text-center">
-          <div className="font-mono text-[11px] tracking-[0.3em] text-zinc-400">
-            SELECT A PROJECT
-          </div>
-          <p className="mt-3 font-serif text-xl text-zinc-600">
+        <div className="flex flex-col items-center justify-center rounded-xl bg-card shadow-card py-20 text-center">
+          <p className="text-sm text-muted-foreground">请选择项目</p>
+          <p className="mt-2 text-base font-medium">
             请选择一个项目以查看其工作项看板
           </p>
         </div>

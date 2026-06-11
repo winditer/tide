@@ -5,8 +5,6 @@ import { useRouter } from "next/navigation";
 import {
   Badge,
   Button,
-  Card,
-  CardContent,
 } from "@tide/ui";
 import {
   useSessionQuery,
@@ -303,37 +301,36 @@ export default function SessionDetailPage({
     `Session ${shortenId(session.session_id)}`;
 
   return (
-    <main className="mx-auto max-w-6xl space-y-5">
+    <main className="mx-auto max-w-6xl space-y-8">
       {/* Header */}
-      <header className="border-b border-zinc-200 pb-5">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="sm" onClick={() => router.push("/sessions")}>
-            ← 会话
-          </Button>
-          <span className="font-mono text-[10px] tracking-[0.32em] text-zinc-500">
-            CHAT · {shortenId(session.session_id)}
-          </span>
-        </div>
+      <header>
+        <button
+          onClick={() => router.push("/sessions")}
+          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-smooth"
+        >
+          ← 返回会话列表
+        </button>
         <div className="mt-3 flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <h1 className="font-serif text-2xl tracking-tight text-zinc-900">
+          <div className="min-w-0">
+            <h1 className="text-2xl font-semibold tracking-tight">
               {title}
             </h1>
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <span className="rounded border border-zinc-300 bg-zinc-50 px-1.5 py-0.5 font-mono text-[10px] tracking-wider text-zinc-700">
+              <span className="font-mono text-[11px]">{shortenId(session.session_id)}</span>
+              <span className="text-muted-foreground/60">·</span>
+              <span className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-medium tracking-wider text-muted-foreground">
                 {projectName}
               </span>
               {session.agent_id && (
-                <span className="rounded border border-zinc-300 bg-zinc-50 px-1.5 py-0.5 font-mono text-[10px] tracking-wider text-zinc-700">
+                <span className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-medium tracking-wider text-muted-foreground">
                   {AGENT_LABEL[session.agent_id] ?? session.agent_id}
                 </span>
               )}
               <Badge variant={STATUS_VARIANT[status] ?? "outline"} className="text-[10px]">
                 {STATUS_LABEL[status] ?? status}
               </Badge>
-              <span className="font-mono text-[10px] text-zinc-400">
-                · 最近活跃 {formatTime(session.last_active)}
-              </span>
+              <span className="text-muted-foreground/60">·</span>
+              <span>最近活跃 {formatTime(session.last_active)}</span>
             </div>
           </div>
           <Button variant="outline" size="sm" onClick={() => refetch()}>
@@ -342,18 +339,15 @@ export default function SessionDetailPage({
         </div>
       </header>
 
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_320px]">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
         {/* Conversation */}
-        <Card className="overflow-hidden">
+        <div className="bg-card rounded-xl shadow-card overflow-hidden">
           <div
             ref={scrollRef}
-            className="max-h-[68vh] overflow-y-auto bg-[radial-gradient(circle_at_top,rgba(24,24,27,0.04),transparent_60%)] px-5 py-6"
+            className="max-h-[68vh] overflow-y-auto px-5 py-6"
           >
             {messages.length === 0 ? (
               <div className="flex h-48 flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
-                <span className="font-mono text-[10px] tracking-widest text-zinc-400">
-                  NO MESSAGES
-                </span>
                 <span>暂无对话历史 — 会话文件可能尚未生成或无法读取</span>
               </div>
             ) : (
@@ -364,49 +358,39 @@ export default function SessionDetailPage({
               </div>
             )}
           </div>
-        </Card>
+        </div>
 
         {/* Sidebar */}
         <aside className="space-y-4">
-          <Card>
-            <CardContent className="space-y-3 p-4">
-              <div className="font-mono text-[10px] tracking-[0.28em] text-zinc-500">
-                META
-              </div>
-              <MetaRow label="Session" value={session.session_id} mono />
-              <MetaRow label="Agent" value={AGENT_LABEL[session.agent_id ?? ""] ?? session.agent_id ?? "—"} />
-              <MetaRow label="项目" value={projectName} />
-              <MetaRow label="工作目录" value={session.cwd ?? "—"} mono small />
-              <MetaRow label="创建时间" value={formatFull(session.created_at)} />
-              <MetaRow label="最近活跃" value={formatFull(session.last_active)} />
-              {session.file && (
-                <MetaRow label="会话文件" value={session.file} mono small />
-              )}
-              <MetaRow label="来源" value={session.source ?? "—"} />
-            </CardContent>
-          </Card>
+          <div className="bg-card rounded-xl shadow-card p-4 space-y-3">
+            <h2 className="text-base font-medium">元信息</h2>
+            <MetaRow label="Session" value={session.session_id} mono />
+            <MetaRow label="Agent" value={AGENT_LABEL[session.agent_id ?? ""] ?? session.agent_id ?? "—"} />
+            <MetaRow label="项目" value={projectName} />
+            <MetaRow label="工作目录" value={session.cwd ?? "—"} mono small />
+            <MetaRow label="创建时间" value={formatFull(session.created_at)} />
+            <MetaRow label="最近活跃" value={formatFull(session.last_active)} />
+            {session.file && (
+              <MetaRow label="会话文件" value={session.file} mono small />
+            )}
+            <MetaRow label="来源" value={session.source ?? "—"} />
+          </div>
 
-          <Card>
-            <CardContent className="space-y-3 p-4">
-              <div className="flex items-center justify-between">
-                <div className="font-mono text-[10px] tracking-[0.28em] text-zinc-500">
-                  TASKS
-                </div>
-                <span className="font-mono text-[10px] text-zinc-400">
-                  {tasks.length}
-                </span>
-              </div>
-              {tasks.length === 0 ? (
-                <p className="text-xs text-muted-foreground">无关联任务</p>
-              ) : (
-                <ul className="space-y-2">
-                  {tasks.map((t) => (
-                    <RelatedTaskRow key={t.id} task={t} />
-                  ))}
-                </ul>
-              )}
-            </CardContent>
-          </Card>
+          <div className="bg-card rounded-xl shadow-card p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-base font-medium">关联任务</h2>
+              <span className="text-xs text-muted-foreground">{tasks.length}</span>
+            </div>
+            {tasks.length === 0 ? (
+              <p className="text-xs text-muted-foreground">无关联任务</p>
+            ) : (
+              <ul className="space-y-2">
+                {tasks.map((t) => (
+                  <RelatedTaskRow key={t.id} task={t} />
+                ))}
+              </ul>
+            )}
+          </div>
         </aside>
       </div>
     </main>
@@ -426,14 +410,14 @@ function MetaRow({
 }) {
   return (
     <div className="flex flex-col gap-0.5">
-      <span className="font-mono text-[10px] tracking-widest text-zinc-400">
+      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
         {label}
       </span>
       <span
         className={[
-          "break-all text-zinc-800",
+          "break-all",
           mono ? "font-mono" : "",
-          small ? "text-[11px]" : "text-[13px]",
+          small ? "text-[11px] text-muted-foreground" : "text-[13px]",
         ]
           .filter(Boolean)
           .join(" ")}
@@ -450,10 +434,10 @@ function RelatedTaskRow({ task }: { task: SessionRelatedTask }) {
     <li>
       <a
         href={`/tasks/${task.id}`}
-        className="block rounded border border-zinc-200 bg-white p-2.5 transition hover:border-zinc-900 hover:shadow-[2px_2px_0_0_rgba(24,24,27,0.92)]"
+        className="block rounded-lg border border-border/50 p-2.5 hover:bg-muted/50 hover:border-border transition-smooth"
       >
         <div className="flex items-start justify-between gap-2">
-          <span className="line-clamp-2 text-[12.5px] text-zinc-800">
+          <span className="line-clamp-2 text-[12.5px]">
             {task.prompt || "（无 prompt）"}
           </span>
           <Badge
@@ -463,7 +447,7 @@ function RelatedTaskRow({ task }: { task: SessionRelatedTask }) {
             {STATUS_LABEL[status] ?? status}
           </Badge>
         </div>
-        <div className="mt-1 flex items-center justify-between font-mono text-[10px] text-zinc-400">
+        <div className="mt-1 flex items-center justify-between font-mono text-[10px] text-muted-foreground">
           <span>{shortenId(task.id)}</span>
           <span>{formatTime(task.created_at)}</span>
         </div>
@@ -480,7 +464,7 @@ function MessageBubble({ message }: { message: SessionMessage }) {
   if (isSystem) {
     return (
       <div className="flex justify-center">
-        <div className="max-w-[80%] rounded border border-dashed border-zinc-300 bg-zinc-50 px-3 py-2 text-center font-mono text-[11px] tracking-wide text-zinc-500">
+        <div className="max-w-[80%] rounded-md bg-muted px-3 py-2 text-center text-[11px] text-muted-foreground">
           [SYSTEM] {message.content}
         </div>
       </div>
@@ -492,23 +476,19 @@ function MessageBubble({ message }: { message: SessionMessage }) {
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div className={`flex max-w-[78%] flex-col gap-1 ${isUser ? "items-end" : "items-start"}`}>
-        <div
-          className={`flex items-center gap-2 font-mono text-[10px] tracking-widest ${
-            isUser ? "text-zinc-500" : "text-zinc-500"
-          }`}
-        >
-          <span>{isUser ? "USER" : isReasoning ? "REASONING" : "ASSISTANT"}</span>
-          <span className="text-zinc-400">·</span>
-          <span className="text-zinc-400">{labelTime}</span>
+        <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+          <span>{isUser ? "User" : isReasoning ? "Reasoning" : "Assistant"}</span>
+          <span className="text-muted-foreground/60">·</span>
+          <span>{labelTime}</span>
         </div>
         <div
           className={[
-            "rounded-md px-4 py-3 text-[14px] leading-relaxed shadow-[2px_2px_0_0_rgba(24,24,27,0.08)]",
+            "rounded-xl px-4 py-3 text-[14px] leading-relaxed transition-smooth",
             isUser
-              ? "border border-zinc-900 bg-zinc-900 text-zinc-50"
+              ? "bg-foreground text-background"
               : isReasoning
-                ? "border border-dashed border-zinc-300 bg-zinc-50 text-zinc-700"
-                : "border border-zinc-200 bg-white text-zinc-900",
+                ? "bg-muted/60 text-muted-foreground border border-dashed border-border/50"
+                : "bg-card border border-border/50",
           ].join(" ")}
         >
           <div

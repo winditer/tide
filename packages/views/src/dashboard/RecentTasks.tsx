@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { Badge, Card, CardContent, CardHeader, CardTitle } from "@tide/ui";
+import { ListChecks } from "lucide-react";
+import { Badge } from "@tide/ui";
 import { useRecentTasks } from "@tide/core";
 import type { RecentTask } from "@tide/core";
 
@@ -49,13 +50,13 @@ function TaskRow({ task }: { task: RecentTask }) {
   return (
     <Link
       href={`/tasks/${task.id}`}
-      className="flex items-center gap-3 rounded-md px-3 py-2.5 hover:bg-accent transition-colors"
+      className="flex items-center gap-3 px-5 py-3 transition-smooth hover:bg-muted/50"
     >
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm">{truncate(task.prompt)}</p>
-        <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
+        <p className="truncate text-sm font-medium">{truncate(task.prompt)}</p>
+        <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
           {task.agent_id && (
-            <span className="font-mono bg-secondary rounded px-1.5 py-0.5">
+            <span className="rounded bg-secondary px-1.5 py-0.5 font-mono">
               {task.agent_id}
             </span>
           )}
@@ -74,25 +75,36 @@ export function RecentTasks() {
   const tasks = data?.tasks ?? [];
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">最近任务</CardTitle>
-      </CardHeader>
-      <CardContent className="px-2 pb-2">
+    <section className="overflow-hidden rounded-xl border border-gray-200/60 bg-white/80 shadow-sm backdrop-blur-sm">
+      <header className="flex items-center justify-between border-b border-gray-200/60 px-5 py-4">
+        <div className="flex items-center gap-2">
+          <ListChecks className="h-4 w-4 text-indigo-600" />
+          <h2 className="text-sm font-semibold tracking-tight text-gray-900">
+            最近任务
+          </h2>
+        </div>
+        <Link
+          href="/tasks"
+          className="text-xs font-medium text-indigo-600 transition-colors hover:text-indigo-700"
+        >
+          查看全部 →
+        </Link>
+      </header>
+      <div className="px-0 py-0">
         {isLoading ? (
-          <div className="py-8 text-center text-sm text-muted-foreground">加载中...</div>
+          <div className="py-10 text-center text-sm text-gray-400">加载中...</div>
         ) : isError ? (
-          <div className="py-8 text-center text-sm text-destructive">加载失败</div>
+          <div className="py-10 text-center text-sm text-red-500">加载失败</div>
         ) : tasks.length === 0 ? (
-          <div className="py-8 text-center text-sm text-muted-foreground">暂无任务</div>
+          <div className="py-10 text-center text-sm text-gray-400">暂无任务</div>
         ) : (
-          <div className="divide-y">
+          <div className="divide-y divide-gray-200/60">
             {tasks.map((task) => (
               <TaskRow key={task.id} task={task} />
             ))}
           </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   );
 }

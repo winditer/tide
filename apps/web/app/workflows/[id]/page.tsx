@@ -35,9 +35,7 @@ export default function WorkflowEditorPage() {
   if (isLoading) {
     return (
       <div className="flex h-full items-center justify-center">
-        <div className="font-mono text-xs tracking-widest text-zinc-500">
-          ◐ LOADING WORKFLOW…
-        </div>
+        <div className="text-sm text-muted-foreground">加载工作流中…</div>
       </div>
     );
   }
@@ -45,9 +43,7 @@ export default function WorkflowEditorPage() {
   if (isError || !workflow) {
     return (
       <div className="flex h-full items-center justify-center">
-        <div className="font-mono text-xs text-rose-600">
-          ✕ 加载失败 — {String(error)}
-        </div>
+        <div className="text-sm text-destructive">加载失败 — {String(error)}</div>
       </div>
     );
   }
@@ -81,37 +77,31 @@ export default function WorkflowEditorPage() {
   };
 
   return (
-    <div className="flex h-[calc(100vh-7rem)] flex-col gap-4">
+    <div className="flex h-[calc(100vh-7rem)] flex-col gap-6">
       {/* Header strip */}
-      <div className="flex items-center justify-between border-2 border-zinc-900 bg-white px-4 py-3 shadow-[5px_5px_0_0_rgba(24,24,27,0.92)]">
+      <div className="flex items-center justify-between bg-card rounded-xl shadow-card px-5 py-4">
         <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => router.push("/workflows")}
-              className="font-mono text-[11px] tracking-widest text-zinc-500 hover:text-zinc-900"
-            >
-              ◀ WORKFLOWS
-            </button>
-            <span className="font-mono text-[11px] text-zinc-300">/</span>
-            <span className="font-mono text-[11px] tracking-widest text-zinc-700">
-              EDIT
-            </span>
-          </div>
-          <div className="mt-0.5 flex items-center gap-2">
-            <h1 className="truncate text-xl font-black tracking-tight text-zinc-900">
+          <button
+            onClick={() => router.push("/workflows")}
+            className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-smooth"
+          >
+            ← 返回工作流列表
+          </button>
+          <div className="mt-2 flex items-center gap-2">
+            <h1 className="truncate text-2xl font-semibold tracking-tight">
               {workflow.name}
             </h1>
-            <span className="border border-zinc-300 bg-zinc-50 px-1.5 py-[1px] font-mono text-[10px] tracking-widest text-zinc-700">
+            <span className="rounded-md border border-border bg-muted px-1.5 py-[1px] font-mono text-[10px] tracking-widest text-muted-foreground">
               v{workflow.version}
             </span>
             {dirty && (
-              <span className="border border-amber-500 bg-amber-50 px-1.5 py-[1px] font-mono text-[10px] tracking-widest text-amber-800">
-                ◇ UNSAVED
+              <span className="rounded-md border border-amber-500/50 bg-amber-50 px-1.5 py-[1px] font-mono text-[10px] tracking-widest text-amber-700">
+                未保存
               </span>
             )}
           </div>
           {workflow.description && (
-            <p className="mt-1 max-w-2xl truncate text-xs text-zinc-600">
+            <p className="mt-1 max-w-2xl truncate text-sm text-muted-foreground">
               {workflow.description}
             </p>
           )}

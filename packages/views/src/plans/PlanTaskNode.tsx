@@ -103,11 +103,12 @@ function PlanTaskNodeImpl({ data, selected }: NodeProps) {
   return (
     <div
       className={[
-        "group relative w-[260px] select-none",
-        "border border-zinc-900",
-        "bg-white shadow-[6px_6px_0_0_rgba(24,24,27,0.92)]",
-        "transition-transform duration-150",
-        selected ? "translate-x-[-2px] translate-y-[-2px]" : "",
+        "group relative w-[260px] select-none overflow-hidden",
+        "rounded-lg border border-border/60 bg-card shadow-sm",
+        "transition-all duration-150",
+        selected
+          ? "ring-2 ring-indigo-400/60 shadow-md -translate-y-0.5"
+          : "hover:shadow-md hover:-translate-y-0.5",
       ].join(" ")}
     >
       {/* Top status stripe */}
@@ -124,7 +125,7 @@ function PlanTaskNodeImpl({ data, selected }: NodeProps) {
       <div className={`relative px-4 py-3 ${t.surface}`}>
         {/* Index badge */}
         <div className="mb-2 flex items-center justify-between">
-          <span className="font-mono text-[10px] tracking-widest text-zinc-500">
+          <span className="font-mono text-[10px] tracking-widest text-muted-foreground">
             {idx != null
               ? `#${String(idx).padStart(2, "0")}`
               : "#--"}
@@ -132,7 +133,7 @@ function PlanTaskNodeImpl({ data, selected }: NodeProps) {
             <span className="text-zinc-700">PHASE {phase}</span>
           </span>
           {agent && (
-            <span className="rounded-sm border border-zinc-300 bg-white px-1.5 py-[1px] font-mono text-[9px] uppercase tracking-wider text-zinc-700">
+            <span className="rounded-md border border-border/60 bg-card px-1.5 py-[1px] font-mono text-[9px] uppercase tracking-wider text-muted-foreground">
               {agent}
             </span>
           )}
@@ -144,7 +145,7 @@ function PlanTaskNodeImpl({ data, selected }: NodeProps) {
         </div>
 
         {/* Hover hint */}
-        <div className="mt-2 font-mono text-[9px] tracking-widest text-zinc-400 opacity-0 transition-opacity group-hover:opacity-100">
+        <div className="mt-2 font-mono text-[9px] tracking-widest text-muted-foreground/70 opacity-0 transition-opacity group-hover:opacity-100">
           → CLICK TO INSPECT
         </div>
       </div>
@@ -153,12 +154,12 @@ function PlanTaskNodeImpl({ data, selected }: NodeProps) {
       <Handle
         type="target"
         position={Position.Top}
-        className={`!h-2 !w-2 !rounded-none !border-0 ${t.accent}`}
+        className={`!h-2 !w-2 !rounded-full !border-0 ${t.accent}`}
       />
       <Handle
         type="source"
         position={Position.Bottom}
-        className={`!h-2 !w-2 !rounded-none !border-0 ${t.accent}`}
+        className={`!h-2 !w-2 !rounded-full !border-0 ${t.accent}`}
       />
     </div>
   );

@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button, Select } from "@tide/ui";
 import { usePlans, useProjects } from "@tide/core";
 import { PlanList, PlanCreateForm } from "@tide/views";
@@ -12,10 +13,22 @@ const STATUS_FILTERS = [
   { label: "Stopped", value: "stopped" },
 ];
 
-export default function PlansPage() {
+function PlansPageInner() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
   const [status, setStatus] = useState("");
   const [project, setProject] = useState("");
   const [showCreate, setShowCreate] = useState(false);
+
+  // Auto-open create dialog when ?action=create is present
+  useEffect(() => {
+    if (searchParams.get("action") === "create") {
+      setShowCreate(true);
+      // Strip the query param so refreshing doesn't re-open
+      router.replace("/plans");
+    }
+  }, [searchParams, router]);
 
   const { data: projectsData } = useProjects();
   const projectOptions = useMemo(() => {
@@ -41,44 +54,39 @@ export default function PlansPage() {
   };
 
   return (
-    <main className="mx-auto max-w-7xl px-2 py-2">
-      {/* Editorial header */}
-      <header className="mb-8 border-b-2 border-zinc-900 pb-6">
-        <div className="flex items-end justify-between gap-6">
-          <div>
-            <div className="font-mono text-[11px] tracking-[0.4em] text-zinc-500">
-              MULTI-AGENT · ORCHESTRATION
-            </div>
-            <h1 className="mt-2 font-serif text-5xl font-bold leading-none tracking-tight text-zinc-900">
-              Plan<span className="text-amber-500">.</span>
-            </h1>
-            <p className="mt-3 max-w-xl text-sm text-zinc-600">
-              将复杂工作分解为带依赖的任务图谱。审批、并行、可视化时间线一气呵成。
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className="font-mono text-[10px] tracking-widest text-zinc-500">
-              {data?.length ?? 0} ITEMS
-            </span>
-            <Button onClick={() => setShowCreate(true)}>+ 新建 Plan</Button>
-          </div>
+    <div className="space-y-8">
+      {/* Header */}
+      <header className="flex items-end justify-between gap-4">
+        <div className="space-y-1">
+          <h1 className="text-2xl font-semibold tracking-tight">Plan 管理</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            将复杂工作分解为带依赖的任务图谱，审批、并行、可视化时间线一气呵成。
+          </p>
         </div>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-muted-foreground">
+            {data?.length ?? 0} 个 Plan
+          </span>
+          <Button onClick={() => setShowCreate(true)}>+ 新建 Plan</Button>
+        </div>
+      </header>
 
-        {/* Filter strip */}
-        <div className="mt-6 flex flex-wrap items-end gap-4 font-mono text-[11px]">
+      {/* Filters */}
+      <div className="bg-card rounded-xl shadow-card p-5 transition-smooth">
+        <div className="flex flex-wrap items-end gap-6">
           {/* Status filter — segmented buttons */}
           <div>
-            <div className="mb-1 tracking-widest text-zinc-500">STATUS</div>
-            <div className="flex items-center gap-1">
+            <div className="mb-2 text-xs font-medium text-muted-foreground">状态</div>
+            <div className="flex items-center gap-1 rounded-lg bg-muted/60 p-1 h-9">
               {STATUS_FILTERS.map((f) => (
                 <button
                   key={f.value}
                   onClick={() => setStatus(f.value)}
                   className={[
-                    "border border-zinc-900 px-3 py-1 transition-colors",
+                    "rounded-md px-3 py-1 text-xs transition-smooth h-7",
                     status === f.value
-                      ? "bg-zinc-900 text-white"
-                      : "bg-white text-zinc-700 hover:bg-zinc-100",
+                      ? "bg-card text-foreground shadow-card"
+                      : "text-muted-foreground hover:text-foreground",
                   ].join(" ")}
                 >
                   {f.label}
@@ -89,12 +97,12 @@ export default function PlansPage() {
 
           {/* Project filter — Select */}
           <div className="min-w-[260px] flex-1 max-w-md">
-            <div className="mb-1 tracking-widest text-zinc-500">PROJECT</div>
+            <div className="mb-2 text-xs font-medium text-muted-foreground">项目</div>
             <Select
               options={projectOptions}
               value={project}
               onChange={(e) => setProject(e.target.value)}
-              className="h-[30px] rounded-none border-zinc-900 px-2 py-0 font-mono text-[11px]"
+              className="h-9"
             />
           </div>
 
@@ -104,44 +112,44 @@ export default function PlansPage() {
             disabled={!hasActiveFilter}
             onClick={handleReset}
             className={[
-              "border border-zinc-900 px-3 py-1 tracking-widest transition-colors",
+              "rounded-md px-3 py-1.5 text-xs transition-smooth",
               hasActiveFilter
-                ? "bg-white text-zinc-700 hover:bg-zinc-900 hover:text-white"
-                : "cursor-not-allowed bg-zinc-100 text-zinc-400",
+                ? "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                : "cursor-not-allowed text-muted-foreground/50",
             ].join(" ")}
           >
-            ✕ CLEAR
+            清空筛选
           </button>
         </div>
-      </header>
+      </div>
 
       {/* Body */}
       {isLoading ? (
-        <div className="py-16 text-center font-mono text-xs tracking-widest text-zinc-500">
-          ◐ LOADING…
+        <div className="bg-card rounded-xl shadow-card py-16 text-center text-sm text-muted-foreground transition-smooth">
+          加载中...
         </div>
       ) : isError ? (
-        <div className="py-16 text-center font-mono text-xs text-rose-600">
-          ✕ FAILED TO LOAD PLANS
+        <div className="bg-card rounded-xl shadow-card py-16 text-center text-sm text-destructive transition-smooth">
+          加载失败，请重试
         </div>
       ) : (
-        <PlanList
-          plans={data ?? []}
-          onCreate={() => setShowCreate(true)}
-        />
+        <div className="bg-card rounded-xl shadow-card overflow-hidden hover:shadow-card-hover transition-smooth">
+          <PlanList
+            plans={data ?? []}
+            onCreate={() => setShowCreate(true)}
+          />
+        </div>
       )}
 
       {/* Create dialog */}
       {showCreate && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="relative max-h-[90vh] w-full max-w-3xl overflow-auto border-2 border-zinc-900 bg-white shadow-[12px_12px_0_0_rgba(24,24,27,0.92)]">
-            <div className="sticky top-0 z-10 flex items-center justify-between border-b-2 border-zinc-900 bg-zinc-950 px-5 py-3 text-white">
-              <span className="font-mono text-[11px] tracking-[0.3em]">
-                NEW · PLAN COMPOSITION
-              </span>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="relative max-h-[90vh] w-full max-w-3xl overflow-auto bg-card rounded-xl shadow-card-hover">
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border/50 bg-card px-5 py-3">
+              <span className="text-sm font-semibold">新建 Plan</span>
               <button
                 onClick={() => setShowCreate(false)}
-                className="font-mono text-sm text-zinc-300 hover:text-white"
+                className="text-muted-foreground hover:text-foreground transition-smooth"
               >
                 ✕
               </button>
@@ -157,6 +165,20 @@ export default function PlansPage() {
           </div>
         </div>
       )}
-    </main>
+    </div>
+  );
+}
+
+export default function PlansPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="bg-card rounded-xl shadow-card py-16 text-center text-sm text-muted-foreground">
+          加载中...
+        </div>
+      }
+    >
+      <PlansPageInner />
+    </Suspense>
   );
 }

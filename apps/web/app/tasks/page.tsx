@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@tide/ui";
 import {
@@ -8,6 +8,12 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+} from "@tide/ui";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
 } from "@tide/ui";
 import { useTasksQuery } from "@tide/core";
 import {
@@ -26,11 +32,26 @@ const FILTER_KEYS: (keyof TaskFiltersValue)[] = [
   "created_before",
 ];
 
+/**
+ * 工作台“待审批”卡片链接到 ``/tasks?status=pending_approval``，但实际
+ * 数据库中代表“待人工确认”的状态值是 ``review``（详见 TaskFilters
+ * 的 STATUS_OPTIONS）。这里在解析 URL 时做一次别名映射，保证跳转后
+ * 状态筛选生效。
+ */
+const STATUS_ALIASES: Record<string, string> = {
+  pending_approval: "review",
+};
+
 function readFiltersFromParams(params: URLSearchParams): TaskFiltersValue {
   const out: TaskFiltersValue = {};
   for (const key of FILTER_KEYS) {
     const v = params.get(key);
-    if (v) out[key] = v;
+    if (!v) continue;
+    if (key === "status" && STATUS_ALIASES[v]) {
+      out[key] = STATUS_ALIASES[v];
+    } else {
+      out[key] = v;
+    }
   }
   return out;
 }
@@ -41,6 +62,14 @@ function readPageFromParams(params: URLSearchParams): number {
 }
 
 export default function TasksPage() {
+  return (
+    <Suspense fallback={<div className="mx-auto max-w-6xl px-6 py-8 text-center text-muted-foreground">加载中...</div>}>
+      <TasksPageContent />
+    </Suspense>
+  );
+}
+
+function TasksPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -59,7 +88,14 @@ export default function TasksPage() {
 
   const [filters, setFilters] = useState<TaskFiltersValue>(initialFilters);
   const [page, setPage] = useState(initialPage);
-  const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const initialAction = useMemo(
+    () => searchParams.get("action"),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+  const [showCreateDialog, setShowCreateDialog] = useState(
+    initialAction === "create",
+  );
 
   // debounce filters → debouncedFilters
   const [debouncedFilters, setDebouncedFilters] =
@@ -151,23 +187,14 @@ export default function TasksPage() {
       </Card>
 
       {/* Create Task Dialog */}
-      {showCreateDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="mx-4 w-full max-w-lg rounded-lg border bg-background p-6 shadow-lg">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-lg font-semibold">创建任务</h2>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setShowCreateDialog(false)}
-              >
-                ✕
-              </Button>
-            </div>
-            <TaskCreateForm onSuccess={() => setShowCreateDialog(false)} />
-          </div>
-        </div>
-      )}
+      <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>创建任务</DialogTitle>
+          </DialogHeader>
+          <TaskCreateForm onSuccess={() => setShowCreateDialog(false)} />
+        </DialogContent>
+      </Dialog>
     </main>
   );
 }

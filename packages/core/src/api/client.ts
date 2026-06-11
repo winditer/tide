@@ -1,5 +1,5 @@
 const BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+  process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 
 export class ApiError extends Error {
   constructor(
@@ -13,16 +13,21 @@ export class ApiError extends Error {
 }
 
 async function handleResponse<T>(response: Response): Promise<T> {
-  if (!response.ok) {
-    let body: unknown;
+  // Read body as text exactly once to avoid "body stream already read" errors
+  const raw = await response.text();
+  const parse = (): unknown => {
+    if (!raw) return null;
     try {
-      body = await response.json();
+      return JSON.parse(raw);
     } catch {
-      body = await response.text();
+      return raw;
     }
-    throw new ApiError(response.status, response.statusText, body);
+  };
+
+  if (!response.ok) {
+    throw new ApiError(response.status, response.statusText, parse());
   }
-  return response.json() as Promise<T>;
+  return parse() as T;
 }
 
 export const apiClient = {

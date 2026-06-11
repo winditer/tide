@@ -86,14 +86,15 @@ export function BoardCard({ card, index }: BoardCardProps) {
           ref={provided.innerRef}
           {...provided.draggableProps}
           {...provided.dragHandleProps}
+          style={provided.draggableProps.style as React.CSSProperties}
           onClick={handleClick}
           role={href ? "button" : undefined}
           tabIndex={href ? 0 : undefined}
-          className={`group rounded-lg border bg-card p-3 shadow-sm transition-all ${
+          className={`group rounded-lg border border-border/50 bg-card p-3 shadow-card transition-smooth ${
             snapshot.isDragging
-              ? "shadow-md ring-2 ring-primary/20"
+              ? "shadow-card-hover ring-2 ring-primary/30 -rotate-1"
               : href
-                ? "cursor-pointer hover:border-primary/40 hover:shadow-md"
+                ? "cursor-pointer hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-card-hover"
                 : ""
           }`}
         >

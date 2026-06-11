@@ -147,8 +147,8 @@ export interface UseChatResult {
     overrides?: SendMessageOverrides
   ) => Promise<void>;
   clearHistory: () => void;
-  approveTask: (approvalId: string) => Promise<void>;
-  rejectTask: (approvalId: string) => Promise<void>;
+  approveTask: (approvalId: string, comment?: string) => Promise<void>;
+  rejectTask: (approvalId: string, comment?: string) => Promise<void>;
 }
 
 export function useChat(options: UseChatOptions = {}): UseChatResult {
@@ -513,9 +513,9 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
     setHasUnread(false);
   }, []);
 
-  const approveTask = useCallback(async (approvalId: string) => {
+  const approveTask = useCallback(async (approvalId: string, comment?: string) => {
     try {
-      await approveApproval(approvalId);
+      await approveApproval(approvalId, undefined, comment);
       setMessages((prev) =>
         prev.map((m) => {
           if (!m.interactive || m.interactive.approvalId !== approvalId) return m;
@@ -549,9 +549,9 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
     }
   }, []);
 
-  const rejectTask = useCallback(async (approvalId: string) => {
+  const rejectTask = useCallback(async (approvalId: string, comment?: string) => {
     try {
-      await rejectApproval(approvalId);
+      await rejectApproval(approvalId, undefined, comment);
       setMessages((prev) =>
         prev.map((m) => {
           if (!m.interactive || m.interactive.approvalId !== approvalId) return m;

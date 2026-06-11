@@ -112,17 +112,20 @@ export function AgentBoard() {
         />
       ) : (
         <DragDropContext onDragEnd={handleDragEnd}>
-        <div className="space-y-6">
+        <div className="space-y-5">
           {filteredSwimlanes.map((swimlane) => (
             <div
               key={swimlane.agent}
-              className={`rounded-lg border p-4 ${
-                swimlane.idle ? "border-dashed opacity-60" : ""
+              className={`rounded-xl border border-border/60 bg-card/60 p-4 shadow-card transition-smooth ${
+                swimlane.idle ? "border-dashed opacity-60" : "hover:shadow-card-hover"
               }`}
             >
               {/* Swimlane header */}
-              <div className="mb-3 flex items-center gap-2">
-                <span className="text-sm font-semibold">{swimlane.agent}</span>
+              <div className="mb-3 flex items-center gap-2 border-b border-border/40 pb-3">
+                <span className="flex h-6 w-6 items-center justify-center rounded-md bg-primary/10 text-[11px] font-semibold uppercase text-primary">
+                  {swimlane.agent.slice(0, 2)}
+                </span>
+                <span className="text-sm font-semibold tracking-tight">{swimlane.agent}</span>
                 {swimlane.idle && (
                   <Badge variant="outline" className="text-xs">
                     空闲
@@ -130,7 +133,7 @@ export function AgentBoard() {
                 )}
               </div>
               {/* Columns */}
-              <div className="flex gap-4 overflow-x-auto pb-2">
+              <div className="flex gap-5 overflow-x-auto pb-2">
                 {swimlane.columns.map((column) => (
                   <BoardColumn key={column.id} column={column} />
                 ))}

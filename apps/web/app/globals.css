@@ -3,29 +3,59 @@
 @source "../../../packages";
 
 @theme {
-  --color-background: hsl(0 0% 100%);
-  --color-foreground: hsl(240 10% 3.9%);
+  /* 基础色 - 微暖灰白背景 */
+  --color-background: hsl(220 14% 96%);
+  --color-foreground: hsl(224 71% 4%);
+
+  /* 卡片 - 纯白 */
   --color-card: hsl(0 0% 100%);
-  --color-card-foreground: hsl(240 10% 3.9%);
+  --color-card-foreground: hsl(224 71% 4%);
+
+  /* 弹出层 */
   --color-popover: hsl(0 0% 100%);
-  --color-popover-foreground: hsl(240 10% 3.9%);
-  --color-primary: hsl(240 5.9% 10%);
-  --color-primary-foreground: hsl(0 0% 98%);
-  --color-secondary: hsl(240 4.8% 95.9%);
-  --color-secondary-foreground: hsl(240 5.9% 10%);
-  --color-muted: hsl(240 4.8% 95.9%);
-  --color-muted-foreground: hsl(240 3.8% 46.1%);
-  --color-accent: hsl(240 4.8% 95.9%);
-  --color-accent-foreground: hsl(240 5.9% 10%);
-  --color-destructive: hsl(0 84.2% 60.2%);
-  --color-destructive-foreground: hsl(0 0% 98%);
-  --color-border: hsl(240 5.9% 90%);
-  --color-input: hsl(240 5.9% 90%);
-  --color-ring: hsl(240 5.9% 10%);
-  --radius-sm: calc(0.5rem - 4px);
-  --radius-md: calc(0.5rem - 2px);
+  --color-popover-foreground: hsl(224 71% 4%);
+
+  /* 主色 - 靛蓝 */
+  --color-primary: hsl(238 76% 62%);
+  --color-primary-foreground: hsl(0 0% 100%);
+
+  /* 次要色 */
+  --color-secondary: hsl(220 14% 96%);
+  --color-secondary-foreground: hsl(224 71% 4%);
+
+  /* 柔和色 */
+  --color-muted: hsl(220 14% 96%);
+  --color-muted-foreground: hsl(220 9% 46%);
+
+  /* 强调色 */
+  --color-accent: hsl(220 14% 96%);
+  --color-accent-foreground: hsl(224 71% 4%);
+
+  /* 销毁色 */
+  --color-destructive: hsl(0 84% 60%);
+  --color-destructive-foreground: hsl(0 0% 100%);
+
+  /* 边框和输入框 */
+  --color-border: hsl(220 13% 91%);
+  --color-input: hsl(220 13% 91%);
+  --color-ring: hsl(238 76% 62%);
+
+  /* 侧边栏专用色 */
+  --color-sidebar: hsl(224 71% 4%);
+  --color-sidebar-foreground: hsl(220 14% 96%);
+  --color-sidebar-muted: hsl(215 28% 17%);
+  --color-sidebar-accent: hsl(238 76% 62%);
+  --color-sidebar-border: hsl(215 28% 17%);
+
+  /* 圆角 */
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
   --radius-lg: 0.5rem;
-  --radius-xl: calc(0.5rem + 4px);
+  --radius-xl: 0.75rem;
+
+  /* 动画 */
+  --animate-accordion-down: accordion-down 0.2s ease-out;
+  --animate-accordion-up: accordion-up 0.2s ease-out;
 }
 
 @layer base {
@@ -35,5 +65,40 @@
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);
+    font-feature-settings: "rlig" 1, "calt" 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
+}
+
+/* 现代卡片阴影 */
+@layer utilities {
+  .shadow-card {
+    box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.04), 0 1px 2px -1px rgb(0 0 0 / 0.04);
+  }
+  .shadow-card-hover {
+    box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.07), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+  }
+
+  /* 毛玻璃效果 */
+  .glass {
+    backdrop-filter: blur(12px) saturate(180%);
+    -webkit-backdrop-filter: blur(12px) saturate(180%);
+    background-color: rgba(255, 255, 255, 0.8);
+  }
+
+  /* 平滑过渡 */
+  .transition-smooth {
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+}
+
+@keyframes accordion-down {
+  from { height: 0; }
+  to { height: var(--radix-accordion-content-height); }
+}
+
+@keyframes accordion-up {
+  from { height: var(--radix-accordion-content-height); }
+  to { height: 0; }
 }

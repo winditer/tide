@@ -112,3 +112,72 @@ export function getSessions(params?: GetSessionsParams): Promise<SessionsRespons
   const query = searchParams.toString();
   return apiClient.get<SessionsResponse>(`/api/sessions${query ? `?${query}` : ""}`);
 }
+
+// ---------- 工作台增强接口 ----------
+
+export interface ActiveProject {
+  id: string;
+  name: string;
+  description: string;
+  task_count: number;
+  running_count: number;
+  last_active: string | null;
+}
+
+export interface ActivityEvent {
+  id: number;
+  event_type: string;
+  task_id: string | null;
+  task_title: string | null;
+  project_name: string | null;
+  payload: Record<string, unknown> | null;
+  created_at: string | null;
+}
+
+export interface TaskStatusDistribution {
+  queued: number;
+  running: number;
+  completed: number;
+  failed: number;
+  cancelled: number;
+  review: number;
+  [key: string]: number;
+}
+
+export interface UpcomingSchedule {
+  id: string;
+  name: string;
+  schedule_type: string;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  enabled: boolean;
+  run_count: number;
+}
+
+export function fetchActiveProjects(limit = 5): Promise<ActiveProject[]> {
+  return apiClient.get<ActiveProject[]>(
+    `/api/dashboard/active-projects?limit=${limit}`,
+  );
+}
+
+export function fetchActivityTimeline(
+  limit = 15,
+): Promise<ActivityEvent[]> {
+  return apiClient.get<ActivityEvent[]>(
+    `/api/dashboard/activity-timeline?limit=${limit}`,
+  );
+}
+
+export function fetchTaskStatusDistribution(): Promise<TaskStatusDistribution> {
+  return apiClient.get<TaskStatusDistribution>(
+    `/api/dashboard/task-status-distribution`,
+  );
+}
+
+export function fetchUpcomingSchedules(
+  limit = 5,
+): Promise<UpcomingSchedule[]> {
+  return apiClient.get<UpcomingSchedule[]>(
+    `/api/dashboard/upcoming-schedules?limit=${limit}`,
+  );
+}

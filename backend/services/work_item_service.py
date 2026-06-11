@@ -151,16 +151,20 @@ class WorkItemService:
         return None
 
     def _render_prompt_template(self, template: str, item: dict) -> str:
-        """渲染 prompt 模板，支持 {{title}}, {{description}} 等变量。
+        """渲染 prompt 模板。
+
+        支持以下占位符语法：
+        - 双花括号：{{title}}、{{item.description}}
+        - 单花括号：{title}、{item.description}（仅匹配标识符/点路径，避免与 JSON/代码中的 `{}` 冲突）
 
         缺失变量一律 fallback 为空字符串，绝不抛异常，避免静默吞掉 agent 触发。
         """
         if not template:
             return ""
 
-        def replace_match(match):
+        def resolve(key: str) -> str:
             try:
-                key = match.group(1).strip()
+                key = (key or "").strip()
                 # 支持 item.xxx 前缀
                 if key.startswith("item."):
                     key = key[len("item."):]
@@ -175,7 +179,15 @@ class WorkItemService:
                 return ""
 
         try:
-            return re.sub(r"\{\{(.*?)\}\}", replace_match, template)
+            # 先处理 {{...}}
+            rendered = re.sub(r"\{\{\s*([^{}]+?)\s*\}\}", lambda m: resolve(m.group(1)), template)
+            # 再处理 {identifier(.identifier)*}（限制为合法标识符路径，避免误伤 JSON/代码）
+            rendered = re.sub(
+                r"\{\s*([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\s*\}",
+                lambda m: resolve(m.group(1)),
+                rendered,
+            )
+            return rendered
         except Exception:
             logger.exception("_render_prompt_template failed, returning original template")
             return template
@@ -948,12 +960,20 @@ class WorkItemService:
             "Polling timed out for task %s after 2h, giving up.", task_id[:8],
         )
 
-    async def on_work_item_approval_resolved(self, approval_id: str, approved: bool):
-        """审批完成回调：通过则推进到下一节点，拒绝则保持。"""
-        # approval detail 中存储了 work_item_id 和 node_id
-        try:
-            from backend.services.approval_service import approval_service
+    async def on_work_item_approval_resolved(
+        self,
+        approval_id: str,
+        approved: bool,
+        comment: Optional[str] = None,
+    ):
+        """审批完成回调：
 
+        - 将审批结果 + 意见写回该审批节点对应的 transition.output，作为工作项日志。
+        - 无论通过/拒绝，均推进到下游节点：
+            * 个出口：走唯一下游（例如拒绝 → 结束节点亦能正常结束）
+            * 多出口：优先按边的 condition/label 匹配 approved/rejected。
+        """
+        try:
             # 获取审批详情
             async with async_session_factory() as session:
                 result = await session.execute(
@@ -974,32 +994,121 @@ class WorkItemService:
             if not work_item_id or not node_id:
                 return
 
-            if not approved:
-                logger.info("Approval rejected for work item %s, staying at node %s",
-                           work_item_id[:8], node_id[:8])
-                return
+            # 1. 写入审批日志（追写到审批节点对应 transition 的 output）
+            comment_text = (comment or "").strip()
+            verdict = "通过" if approved else "拒绝"
+            log_line = f"[审批{verdict}] {comment_text}".rstrip()
+            await self._append_approval_log(work_item_id, node_id, log_line)
 
-            # 通过：推进到下游节点
+            # 2. 加载工作项与定义
             item = await self.get_work_item(work_item_id)
             if not item:
                 return
-
             definition = await self._load_workflow_definition(item["workflow_id"])
             if not definition:
                 return
 
-            downstream = self._get_downstream_nodes(definition, node_id)
-            if downstream:
-                next_node = downstream[0]
-                await self.transition_work_item(
-                    work_item_id,
-                    next_node["id"],
-                    operator="system",
-                    trigger_type="approval_approved",
+            # 3. 选择下游边 / 节点
+            target_node = self._select_approval_downstream(definition, node_id, approved)
+            if not target_node:
+                logger.info(
+                    "Approval %s for work item %s resolved (%s) but no downstream node, staying.",
+                    approval_id[:8], work_item_id[:8], verdict,
                 )
+                return
+
+            await self.transition_work_item(
+                work_item_id,
+                target_node["id"],
+                operator="system",
+                trigger_type=("approval_approved" if approved else "approval_rejected"),
+            )
 
         except Exception as exc:
             logger.exception("Failed to handle approval resolved: %s", exc)
+
+    async def _append_approval_log(
+        self, work_item_id: str, node_id: str, log_line: str
+    ) -> None:
+        """将审批结果追写到审批节点对应 transition 的 output 字段。
+
+        选择该工作项最近一条 to_node_id == node_id 的 transition（即进入审批节点的流转记录），
+        在其 output 末尾追加一行审批日志。如果找不到，则雲量忽略。
+        """
+        try:
+            async with async_session_factory() as session:
+                row = (
+                    await session.execute(
+                        text(
+                            """
+                            SELECT id, output FROM work_item_transitions
+                            WHERE work_item_id = :item_id AND to_node_id = :node_id
+                            ORDER BY created_at DESC
+                            LIMIT 1
+                            """
+                        ),
+                        {"item_id": work_item_id, "node_id": node_id},
+                    )
+                ).fetchone()
+                if not row:
+                    return
+                m = dict(row._mapping)
+                tid = m["id"]
+                prev = (m.get("output") or "").rstrip()
+                new_output = (prev + ("\n" if prev else "") + log_line).strip()
+                await session.execute(
+                    text(
+                        "UPDATE work_item_transitions SET output = :output WHERE id = :id"
+                    ),
+                    {"output": new_output, "id": tid},
+                )
+                await session.commit()
+        except Exception:
+            logger.exception(
+                "_append_approval_log failed work_item=%s node=%s",
+                (work_item_id or "")[:8], (node_id or "")[:8],
+            )
+
+    def _select_approval_downstream(
+        self, definition: dict, node_id: str, approved: bool,
+    ) -> Optional[dict]:
+        """从审批节点选择下游节点。
+
+        多出口时则优先根据边上的 condition/label 区分 approved/rejected。
+        单出口时返回唯一下游。无出口时返回 None。
+        """
+        edges = definition.get("edges", [])
+        nodes = definition.get("nodes", [])
+        node_map = {n["id"]: n for n in nodes}
+        outgoing = [e for e in edges if e.get("source") == node_id]
+        if not outgoing:
+            return None
+
+        if len(outgoing) == 1:
+            return node_map.get(outgoing[0].get("target")) if outgoing[0].get("target") else None
+
+        approved_keys = {"approved", "approve", "通过", "yes", "true"}
+        rejected_keys = {"rejected", "reject", "拒绝", "no", "false", "denied"}
+        target_keys = approved_keys if approved else rejected_keys
+
+        def edge_matches(edge: dict) -> bool:
+            data = edge.get("data") or {}
+            for k in ("condition", "branch", "result", "value"):
+                v = data.get(k)
+                if isinstance(v, str) and v.strip().lower() in target_keys:
+                    return True
+            label = edge.get("label")
+            if isinstance(label, str) and label.strip().lower() in target_keys:
+                return True
+            label_data = data.get("label")
+            if isinstance(label_data, str) and label_data.strip().lower() in target_keys:
+                return True
+            return False
+
+        chosen = next((e for e in outgoing if edge_matches(e)), None)
+        if not chosen:
+            chosen = outgoing[0]
+        return node_map.get(chosen.get("target")) if chosen.get("target") else None
 
     # ── 项目-工作流绑定 ──────────────────────────────────
 

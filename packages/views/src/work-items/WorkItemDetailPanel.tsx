@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { Button, Badge, Input } from "@tide/ui";
 import {
@@ -38,6 +39,21 @@ function formatTime(iso: string | null | undefined) {
   } catch {
     return iso;
   }
+}
+
+/** 从 transition.output 中尝试解析 session_id（兼容 JSON 与文本两种格式） */
+function extractSessionId(output: string | null | undefined): string | null {
+  if (!output) return null;
+  try {
+    const parsed = JSON.parse(output);
+    if (parsed && typeof parsed === "object" && typeof parsed.session_id === "string") {
+      return parsed.session_id;
+    }
+  } catch {
+    // not JSON, fall through
+  }
+  const m = output.match(/session[_-]?id["'\s:=]+([0-9a-fA-F-]{8,})/);
+  return m ? m[1] : null;
 }
 
 interface WorkItemDetailPanelProps {
@@ -105,19 +121,18 @@ export function WorkItemDetailPanel({
             <Input
               value={editTitle}
               onChange={(e) => setEditTitle(e.target.value)}
-              className="border-2 border-zinc-900 text-lg font-semibold"
+              className="h-11 rounded-lg border-0 bg-muted/50 text-lg font-semibold focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0"
             />
             <textarea
               value={editDescription}
               onChange={(e) => setEditDescription(e.target.value)}
               rows={4}
-              className="w-full rounded-md border-2 border-zinc-900 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400"
+              className="w-full rounded-lg border-0 bg-muted/50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
               placeholder="描述"
             />
             <div className="flex gap-2">
               <Button
                 size="sm"
-                className="border-2 border-zinc-900 bg-emerald-600 text-white"
                 onClick={saveEdit}
                 disabled={updateMutation.isPending}
               >
@@ -126,7 +141,6 @@ export function WorkItemDetailPanel({
               <Button
                 size="sm"
                 variant="outline"
-                className="border-2 border-zinc-900"
                 onClick={() => setEditing(false)}
               >
                 取消
@@ -135,25 +149,22 @@ export function WorkItemDetailPanel({
           </div>
         ) : (
           <div>
-            <h2 className="font-serif text-2xl font-bold text-zinc-900">
+            <h2 className="text-2xl font-semibold tracking-tight text-foreground">
               {item.title}
             </h2>
             {item.description && (
-              <p className="mt-2 text-sm text-zinc-600">{item.description}</p>
+              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                {item.description}
+              </p>
             )}
-            <div className="mt-3 flex gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                className="border-2 border-zinc-900"
-                onClick={startEditing}
-              >
+            <div className="mt-4 flex gap-2">
+              <Button size="sm" variant="outline" onClick={startEditing}>
                 编辑
               </Button>
               <Button
                 size="sm"
                 variant="outline"
-                className="border-2 border-rose-500 text-rose-600 hover:bg-rose-50"
+                className="border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive"
                 onClick={handleDelete}
                 disabled={deleteMutation.isPending}
               >
@@ -164,13 +175,13 @@ export function WorkItemDetailPanel({
         )}
 
         {/* Metadata */}
-        <div className="grid grid-cols-2 gap-3 border-t border-zinc-200 pt-4">
+        <div className="grid grid-cols-2 gap-4 rounded-xl border border-border/50 bg-muted/30 p-4">
           <MetaItem label="优先级">
-            <span className={`font-medium ${prio.color}`}>{prio.label}</span>
+            <span className={`text-sm font-medium ${prio.color}`}>{prio.label}</span>
           </MetaItem>
           <MetaItem label="负责人">
-            <span className="font-mono text-sm">
-              {item.assignee || "未分配"}
+            <span className="text-sm">
+              {item.assignee || <span className="text-muted-foreground">未分配</span>}
             </span>
           </MetaItem>
           <MetaItem label="来源">
@@ -179,7 +190,7 @@ export function WorkItemDetailPanel({
             </Badge>
           </MetaItem>
           <MetaItem label="创建时间">
-            <span className="font-mono text-[11px]">
+            <span className="text-xs tabular-nums text-muted-foreground">
               {formatTime(item.created_at)}
             </span>
           </MetaItem>
@@ -187,16 +198,16 @@ export function WorkItemDetailPanel({
 
         {/* Tags */}
         {item.tags && item.tags.length > 0 && (
-          <div className="border-t border-zinc-200 pt-4">
-            <div className="mb-2 font-mono text-[11px] tracking-widest text-zinc-500">
-              TAGS
+          <div>
+            <div className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              标签
             </div>
             <div className="flex flex-wrap gap-1.5">
               {item.tags.map((tag) => (
                 <Badge
                   key={tag}
                   variant="outline"
-                  className="border-zinc-300 text-xs"
+                  className="rounded-md border-border/60 text-xs"
                 >
                   {tag}
                 </Badge>
@@ -209,44 +220,71 @@ export function WorkItemDetailPanel({
         <WorkItemApprovalSection item={item} />
 
         {/* Transitions */}
-        <div className="border-t border-zinc-200 pt-4">
-          <div className="mb-3 font-mono text-[11px] tracking-widest text-zinc-500">
-            TRANSITION HISTORY
+        <div>
+          <div className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            流转历史
           </div>
           {transitions && transitions.length > 0 ? (
             <div className="space-y-2">
-              {transitions.map((t: WorkItemTransition) => (
-                <div
-                  key={t.id}
-                  className="rounded border border-zinc-200 bg-zinc-50 px-3 py-2"
-                >
-                  <div className="flex items-center gap-3 text-xs">
-                    <span className="font-mono text-zinc-500">
-                      {t.from_node_id ?? "—"}
-                    </span>
-                    <span className="text-zinc-400">→</span>
-                    <span className="font-mono font-medium text-zinc-800">
-                      {t.to_node_id}
-                    </span>
-                    <span className="ml-auto font-mono text-[10px] text-zinc-400">
-                      {formatTime(t.created_at)}
-                    </span>
+              {transitions.map((t: WorkItemTransition) => {
+                // 流转记录中可能包含关联任务（agent 节点会触发 task），
+                // 输出字段也可能内嵌 session_id；提取后渲染快捷链接。
+                const sessionId = extractSessionId(t.output);
+                return (
+                  <div
+                    key={t.id}
+                    className="rounded-lg border border-border/50 bg-card p-3 shadow-card transition-smooth hover:shadow-card-hover"
+                  >
+                    <div className="flex items-center gap-3 text-xs">
+                      <span className="rounded-md bg-muted/60 px-2 py-0.5 font-mono text-muted-foreground">
+                        {t.from_node_id ?? "—"}
+                      </span>
+                      <span className="text-muted-foreground/60">→</span>
+                      <span className="rounded-md bg-primary/10 px-2 py-0.5 font-mono font-medium text-primary">
+                        {t.to_node_id}
+                      </span>
+                      <span className="ml-auto text-[10px] tabular-nums text-muted-foreground">
+                        {formatTime(t.created_at)}
+                      </span>
+                    </div>
+                    {(t.task_id || sessionId) && (
+                      <div className="mt-2 flex flex-wrap items-center gap-3">
+                        {t.task_id && (
+                          <Link
+                            href={`/tasks/${t.task_id}`}
+                            className="text-primary text-xs hover:underline transition-smooth"
+                          >
+                            → 查看任务 {t.task_id.slice(0, 8)}
+                          </Link>
+                        )}
+                        {sessionId && (
+                          <Link
+                            href={`/sessions/${sessionId}`}
+                            className="text-primary text-xs hover:underline transition-smooth"
+                          >
+                            → 查看会话 {sessionId.slice(0, 8)}
+                          </Link>
+                        )}
+                      </div>
+                    )}
+                    {t.output && (
+                      <details className="mt-2">
+                        <summary className="cursor-pointer text-[11px] font-medium text-primary hover:text-primary/80">
+                          查看输出
+                        </summary>
+                        <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg border border-border/40 bg-zinc-950 p-3 font-mono text-[11px] leading-relaxed text-zinc-100">
+                          {t.output}
+                        </pre>
+                      </details>
+                    )}
                   </div>
-                  {t.output && (
-                    <details className="mt-2">
-                      <summary className="cursor-pointer font-mono text-[10px] tracking-widest text-emerald-700 hover:text-emerald-900">
-                        ▸ OUTPUT
-                      </summary>
-                      <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded border border-zinc-800 bg-zinc-900 p-2 font-mono text-[11px] leading-relaxed text-zinc-100">
-                        {t.output}
-                      </pre>
-                    </details>
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
-            <div className="text-xs text-zinc-400">暂无流转记录</div>
+            <div className="rounded-lg border border-dashed border-border/60 bg-muted/20 px-4 py-6 text-center text-xs text-muted-foreground">
+              暂无流转记录
+            </div>
           )}
         </div>
       </div>
@@ -259,12 +297,12 @@ interface WorkItemApprovalSectionProps {
 }
 
 function WorkItemApprovalSection({ item }: WorkItemApprovalSectionProps) {
-  // 1. 判断当前节点是否为 approval 类型
-  const { data: workflow } = useWorkflow(item.workflow_id);
+  // 1. 拉取 workflow 以识别当前节点是否为审批节点（仅作为辅助判断、
+  //    提供“节点名称”展示；workflow_id 为空时应跳过请求。
+  const { data: workflow } = useWorkflow(item.workflow_id || "");
   const currentNode = workflow?.definition?.nodes?.find(
     (n) => n.id === item.current_node_id
   );
-  const isApprovalNode = currentNode?.type === "approval";
 
   // 2. 拉取 pending 审批列表，筛选出当前工作项的审批
   const { data: approvalsData } = useApprovals({ status: "pending" });
@@ -279,66 +317,111 @@ function WorkItemApprovalSection({ item }: WorkItemApprovalSectionProps) {
 
   const approveMutation = useApproveApproval();
   const rejectMutation = useRejectApproval();
+  const [comment, setComment] = useState("");
+  const [rejectError, setRejectError] = useState<string | null>(null);
 
-  if (!isApprovalNode || !approval) {
+  // 只要存在匹配的 pending 审批就展示入口。之前同时要求
+  // “当前节点为 approval 类型”导致 workflow 定义节点 type 不一致时
+  // 入口丢失。以是否存在实际的 pending approval 为唯一权威源。
+  if (!approval) {
     return null;
   }
 
   const detail = parseApprovalDetail(approval);
   const reason = (detail.reason as string | undefined) || "";
   const isPending = approveMutation.isPending || rejectMutation.isPending;
+  const isApprovalNode = currentNode?.type === "approval";
 
   const handleApprove = () => {
-    approveMutation.mutate({ id: approval.id });
+    setRejectError(null);
+    approveMutation.mutate({
+      id: approval.id,
+      comment: comment.trim() || undefined,
+    });
   };
   const handleReject = () => {
-    rejectMutation.mutate({ id: approval.id });
+    if (!comment.trim()) {
+      setRejectError("拒绝时请填写审批意见");
+      return;
+    }
+    setRejectError(null);
+    rejectMutation.mutate({
+      id: approval.id,
+      comment: comment.trim(),
+    });
   };
 
   const error = approveMutation.error || rejectMutation.error;
+  const nodeLabel =
+    currentNode?.data?.label ||
+    item.current_node_id ||
+    (isApprovalNode ? "审批节点" : "待人工确认");
 
   return (
-    <div className="border-t border-zinc-200 pt-4">
-      <div className="border-2 border-zinc-900 bg-amber-50 p-4 shadow-[4px_4px_0_0_rgba(24,24,27,1)]">
+    <div>
+      <div className="rounded-xl border border-amber-200/70 bg-amber-50/60 p-4 shadow-card">
         <div className="flex items-center justify-between">
-          <span className="font-mono text-[11px] tracking-widest text-zinc-900">
-            APPROVAL · PENDING
+          <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-amber-800">
+            <span className="flex h-2 w-2 animate-pulse rounded-full bg-amber-500" />
+            待审批
           </span>
           <Badge
             variant="outline"
-            className="border-2 border-zinc-900 bg-white font-mono text-[10px] tracking-widest"
+            className="rounded-md border-amber-200 bg-background text-[10px] text-amber-800"
           >
-            {currentNode?.data?.label || item.current_node_id}
+            {nodeLabel}
           </Badge>
         </div>
 
         {reason && (
-          <p className="mt-3 border-l-2 border-zinc-900 bg-white px-3 py-2 font-mono text-xs text-zinc-800">
+          <p className="mt-3 rounded-lg border-l-2 border-amber-400 bg-background/70 px-3 py-2 text-xs text-foreground/80">
             {reason}
           </p>
         )}
 
+        {/* 审批意见输入 */}
+        <div className="mt-3">
+          <label className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-amber-800/80">
+            审批意见<span className="ml-1 text-amber-700/70">（拒绝时必填）</span>
+          </label>
+          <textarea
+            value={comment}
+            onChange={(e) => {
+              setComment(e.target.value);
+              if (rejectError) setRejectError(null);
+            }}
+            rows={2}
+            placeholder="请输入审批意见…"
+            className="w-full resize-none rounded-lg border border-amber-200/70 bg-background/80 px-2.5 py-1.5 text-xs leading-relaxed text-foreground placeholder:text-muted-foreground/60 focus:border-amber-400 focus:outline-none focus:ring-1 focus:ring-amber-400"
+            disabled={isPending}
+          />
+          {rejectError && (
+            <p className="mt-1 text-[11px] text-destructive">{rejectError}</p>
+          )}
+        </div>
+
         <div className="mt-4 flex gap-2">
           <Button
             size="sm"
-            className="flex-1 border-2 border-zinc-900 bg-emerald-500 font-mono text-xs tracking-widest text-white shadow-[2px_2px_0_0_rgba(24,24,27,1)] hover:bg-emerald-600"
+            className="flex-1 bg-emerald-600 text-white shadow-card transition-smooth hover:bg-emerald-700 hover:shadow-card-hover"
             onClick={handleApprove}
             disabled={isPending}
           >
-            {approveMutation.isPending ? "◐ APPROVING…" : "✓ APPROVE"}
+            {approveMutation.isPending ? "审批中…" : "✓ 通过"}
           </Button>
           <Button
             size="sm"
-            className="flex-1 border-2 border-zinc-900 bg-rose-500 font-mono text-xs tracking-widest text-white shadow-[2px_2px_0_0_rgba(24,24,27,1)] hover:bg-rose-600"
+            variant="outline"
+            className="flex-1 border-destructive/30 text-destructive transition-smooth hover:bg-destructive/10 hover:text-destructive"
             onClick={handleReject}
             disabled={isPending}
           >
-            {rejectMutation.isPending ? "◐ REJECTING…" : "✕ REJECT"}
+            {rejectMutation.isPending ? "拒绝中…" : "✕ 拒绝"}
           </Button>
         </div>
 
         {error && (
-          <p className="mt-2 font-mono text-[11px] text-rose-700">
+          <p className="mt-2 text-[11px] text-destructive">
             操作失败：{String(error)}
           </p>
         )}
@@ -356,20 +439,21 @@ function PanelShell({
 }) {
   return (
     <div
-      className="fixed inset-0 z-50 flex justify-end bg-black/40"
+      className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-sm animate-in fade-in-0"
       onClick={onClose}
     >
       <div
-        className="h-full w-full max-w-lg overflow-y-auto border-l-2 border-zinc-900 bg-white p-6 shadow-[-8px_0_24px_rgba(0,0,0,0.15)]"
+        className="h-full w-full max-w-lg overflow-y-auto rounded-l-2xl border-l border-border/50 bg-card p-6 shadow-2xl animate-in slide-in-from-right-10"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-4 flex items-center justify-between">
-          <span className="font-mono text-[11px] tracking-[0.3em] text-zinc-500">
-            WORK ITEM · DETAIL
+        <div className="mb-6 flex items-center justify-between border-b border-border/40 pb-4">
+          <span className="text-xs font-medium uppercase tracking-[0.3em] text-muted-foreground">
+            工作项详情
           </span>
           <button
             onClick={onClose}
-            className="font-mono text-sm text-zinc-400 hover:text-zinc-900"
+            aria-label="关闭"
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
           >
             ✕
           </button>
@@ -389,10 +473,10 @@ function MetaItem({
 }) {
   return (
     <div>
-      <div className="font-mono text-[10px] tracking-widest text-zinc-500">
+      <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
         {label}
       </div>
-      <div className="mt-0.5">{children}</div>
+      <div className="mt-1">{children}</div>
     </div>
   );
 }

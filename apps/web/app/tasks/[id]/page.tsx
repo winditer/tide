@@ -331,39 +331,37 @@ export default function TaskDetailPage({
   };
 
   return (
-    <main className="mx-auto max-w-5xl px-6 py-8 space-y-6">
+    <main className="mx-auto max-w-5xl px-6 py-8 space-y-8">
       {/* ── Header ────────────────────────────────────── */}
-      <header className="border-b border-zinc-200 pb-5">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="sm" onClick={() => router.push("/tasks")}>
-            ← 任务
-          </Button>
-          <span className="font-mono text-[10px] tracking-[0.32em] text-zinc-500">
-            TASK · {shortenId(task.id)}
-          </span>
-        </div>
+      <header>
+        <button
+          onClick={() => router.push("/tasks")}
+          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-smooth"
+        >
+          ← 返回任务列表
+        </button>
         <div className="mt-3 flex flex-wrap items-end justify-between gap-4">
           <div className="min-w-0">
-            <h1 className="font-serif text-2xl tracking-tight text-zinc-900">
+            <h1 className="text-2xl font-semibold tracking-tight">
               任务详情
             </h1>
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <span className="inline-flex items-center gap-1.5 rounded border border-zinc-300 bg-zinc-50 px-1.5 py-0.5 font-mono text-[10px] tracking-wider text-zinc-700">
+              <span className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] tracking-wider">
                 <span className={`h-1.5 w-1.5 rounded-full ${STATUS_DOT[status] ?? "bg-zinc-400"} ${status === "running" ? "animate-pulse" : ""}`} />
                 {STATUS_LABEL[status] ?? status}
               </span>
               {task.agent_id && (
-                <span className="rounded border border-zinc-300 bg-zinc-50 px-1.5 py-0.5 font-mono text-[10px] tracking-wider text-zinc-700">
+                <span className="rounded-md border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] tracking-wider">
                   {task.agent_id}
                 </span>
               )}
               {task.model && (
-                <span className="rounded border border-zinc-300 bg-zinc-50 px-1.5 py-0.5 font-mono text-[10px] tracking-wider text-zinc-700">
+                <span className="rounded-md border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] tracking-wider">
                   {task.model}
                 </span>
               )}
-              <span className="font-mono text-[10px] text-zinc-400">
-                · 创建 {formatShort(task.created_at)}
+              <span className="font-mono text-[10px]">
+                · ID {shortenId(task.id)} · 创建 {formatShort(task.created_at)}
               </span>
             </div>
           </div>
@@ -374,7 +372,7 @@ export default function TaskDetailPage({
       </header>
 
       {/* ── Vital Stats: 开始时间 / 耗时 / 完成时间 ─────────── */}
-      <section className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <section className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <StatCell
           label="开始时间"
           primary={formatShort(startTime)}
@@ -401,88 +399,74 @@ export default function TaskDetailPage({
       </section>
 
       {/* ── Meta + Prompt ──────────────────────────────── */}
-      <section className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_280px]">
-        <Card>
-          <CardContent className="space-y-3 p-5">
-            <div className="flex items-baseline justify-between">
-              <span className="font-mono text-[10px] tracking-[0.28em] text-zinc-500">
-                PROMPT
-              </span>
-              <span className="font-mono text-[10px] text-zinc-400">
-                {task.prompt.length} chars
-              </span>
-            </div>
-            <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded border border-zinc-200 bg-zinc-50 p-4 font-mono text-[12.5px] leading-relaxed text-zinc-800">
-              {task.prompt}
-            </pre>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="space-y-3 p-5">
-            <span className="font-mono text-[10px] tracking-[0.28em] text-zinc-500">
-              META
+      <section className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_280px]">
+        <div className="bg-card rounded-xl shadow-card p-6 space-y-3">
+          <div className="flex items-baseline justify-between">
+            <span className="text-base font-medium">Prompt</span>
+            <span className="font-mono text-[10px] text-muted-foreground">
+              {task.prompt.length} chars
             </span>
-            <MetaRow label="ID" value={task.id} mono small />
-            <MetaRow label="工作目录" value={task.cwd ?? "—"} mono small />
-            <MetaRow label="Session" value={task.session_id ?? "—"} mono small />
-            <MetaRow label="Plan" value={task.plan_id ?? "—"} mono small />
-            <MetaRow label="Branch" value={task.branch_name ?? "—"} mono small />
-          </CardContent>
-        </Card>
+          </div>
+          <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted p-4 font-mono text-[12.5px] leading-relaxed text-foreground">
+            {task.prompt}
+          </pre>
+        </div>
+
+        <div className="bg-card rounded-xl shadow-card p-6 space-y-3">
+          <span className="text-base font-medium">元信息</span>
+          <MetaRow label="ID" value={task.id} mono small />
+          <MetaRow label="工作目录" value={task.cwd ?? "—"} mono small />
+          <MetaRow label="Session" value={task.session_id ?? "—"} mono small />
+          <MetaRow label="Plan" value={task.plan_id ?? "—"} mono small />
+          <MetaRow label="Branch" value={task.branch_name ?? "—"} mono small />
+        </div>
       </section>
 
       {/* ── 附件 ────────────────────────────────────────── */}
       {attachments.length > 0 && (
-        <Card>
-          <CardContent className="space-y-3 p-5">
-            <div className="flex items-baseline justify-between">
-              <span className="font-mono text-[10px] tracking-[0.28em] text-zinc-500">
-                ATTACHMENTS
-              </span>
-              <span className="font-mono text-[10px] text-zinc-400">
-                {attachments.length}
-              </span>
-            </div>
-            <ul className="space-y-1.5 text-sm">
-              {attachments.map((a) => (
-                <li
-                  key={a}
-                  className="break-all rounded border border-zinc-200 bg-zinc-50 px-3 py-1.5 font-mono text-[11.5px] text-zinc-700"
-                >
-                  {a}
-                </li>
-              ))}
-            </ul>
-          </CardContent>
-        </Card>
+        <div className="bg-card rounded-xl shadow-card p-6 space-y-3">
+          <div className="flex items-baseline justify-between">
+            <span className="text-base font-medium">附件</span>
+            <span className="font-mono text-[10px] text-muted-foreground">
+              {attachments.length}
+            </span>
+          </div>
+          <ul className="space-y-1.5 text-sm">
+            {attachments.map((a) => (
+              <li
+                key={a}
+                className="break-all rounded-lg bg-muted px-3 py-1.5 font-mono text-[11.5px] text-foreground"
+              >
+                {a}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {/* ── 任务结果 ─────────────────────────────────────── */}
       {result && (
-        <Card className="overflow-hidden">
-          <div className="flex items-center justify-between border-b border-zinc-200 bg-zinc-50 px-5 py-3">
+        <div className="bg-card rounded-xl shadow-card overflow-hidden">
+          <div className="flex items-center justify-between border-b border-border/50 bg-muted/30 px-6 py-3">
             <div className="flex items-center gap-3">
-              <span className="font-mono text-[10px] tracking-[0.28em] text-zinc-600">
-                RESULT
-              </span>
-              <span className="font-mono text-[10px] text-zinc-400">
+              <span className="text-base font-medium">运行结果</span>
+              <span className="font-mono text-[10px] text-muted-foreground">
                 {result.length.toLocaleString()} chars · {resultLines} lines
               </span>
             </div>
             <div className="flex items-center gap-2">
               <button
                 onClick={handleCopyResult}
-                className="rounded border border-zinc-300 bg-white px-2.5 py-1 font-mono text-[10px] tracking-widest text-zinc-700 transition hover:border-zinc-900 hover:shadow-[2px_2px_0_0_rgba(24,24,27,0.92)]"
+                className="rounded-md border border-border bg-background px-2.5 py-1 text-xs text-muted-foreground transition-smooth hover:text-foreground"
               >
-                {resultCopied ? "COPIED" : "COPY"}
+                {resultCopied ? "已复制" : "复制"}
               </button>
               {resultLong && (
                 <button
                   onClick={() => setResultExpanded((v) => !v)}
-                  className="rounded border border-zinc-900 bg-zinc-900 px-2.5 py-1 font-mono text-[10px] tracking-widest text-zinc-50 transition hover:bg-zinc-700"
+                  className="rounded-md bg-foreground px-2.5 py-1 text-xs text-background transition-smooth hover:opacity-90"
                 >
-                  {resultExpanded ? "COLLAPSE" : "EXPAND"}
+                  {resultExpanded ? "收起" : "展开"}
                 </button>
               )}
             </div>
@@ -490,7 +474,7 @@ export default function TaskDetailPage({
           <div className="relative">
             <div
               className={[
-                "px-5 py-5",
+                "px-6 py-5",
                 resultLong && !resultExpanded ? "max-h-[420px] overflow-hidden" : "",
               ]
                 .filter(Boolean)
@@ -501,31 +485,27 @@ export default function TaskDetailPage({
               </div>
             </div>
             {resultLong && !resultExpanded && (
-              <div className="pointer-events-none absolute inset-x-0 bottom-0 flex h-24 items-end justify-center bg-gradient-to-t from-white to-transparent pb-3">
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 flex h-24 items-end justify-center bg-gradient-to-t from-card to-transparent pb-3">
                 <button
                   onClick={() => setResultExpanded(true)}
-                  className="pointer-events-auto rounded border border-zinc-900 bg-white px-3 py-1.5 font-mono text-[11px] tracking-widest text-zinc-900 shadow-[2px_2px_0_0_rgba(24,24,27,0.92)] transition hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-[1px_1px_0_0_rgba(24,24,27,0.92)]"
+                  className="pointer-events-auto rounded-md bg-card px-3 py-1.5 text-xs shadow-card transition-smooth hover:shadow-card-hover"
                 >
                   展开剩余 {(result.length - RESULT_COLLAPSE_THRESHOLD).toLocaleString()} 字符
                 </button>
               </div>
             )}
           </div>
-        </Card>
+        </div>
       )}
 
       {/* ── Diff Summary（如果有） ───────────────────────── */}
       {task.diff_summary && (
-        <Card>
-          <CardContent className="space-y-3 p-5">
-            <span className="font-mono text-[10px] tracking-[0.28em] text-zinc-500">
-              DIFF SUMMARY
-            </span>
-            <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded border border-zinc-200 bg-zinc-50 p-4 font-mono text-[12px] leading-relaxed text-zinc-800">
-              {task.diff_summary}
-            </pre>
-          </CardContent>
-        </Card>
+        <div className="bg-card rounded-xl shadow-card p-6 space-y-3">
+          <span className="text-base font-medium">Diff 概要</span>
+          <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted p-4 font-mono text-[12px] leading-relaxed text-foreground">
+            {task.diff_summary}
+          </pre>
+        </div>
       )}
 
       {/* ── Approval ────────────────────────────────────── */}
@@ -534,7 +514,7 @@ export default function TaskDetailPage({
       )}
 
       {/* ── Actions ─────────────────────────────────────── */}
-      <div className="flex flex-wrap gap-3 border-t border-zinc-200 pt-5">
+      <div className="flex flex-wrap gap-3 border-t border-border/50 pt-6">
         {canStop && (
           <Button
             variant="destructive"
@@ -590,18 +570,16 @@ function StatCell({
   return (
     <div
       className={[
-        "relative rounded border bg-white p-4 transition",
-        highlight
-          ? "border-zinc-900 shadow-[3px_3px_0_0_rgba(24,24,27,0.92)]"
-          : "border-zinc-200",
+        "relative rounded-xl bg-card p-5 transition-smooth",
+        highlight ? "shadow-card-hover" : "shadow-card",
       ].join(" ")}
     >
       <div className="flex items-center gap-2">
-        <span className="font-mono text-[10px] tracking-[0.28em] text-zinc-500">
+        <span className="text-xs uppercase tracking-widest text-muted-foreground">
           {label}
         </span>
         {live && (
-          <span className="inline-flex items-center gap-1 font-mono text-[9px] tracking-widest text-emerald-600">
+          <span className="inline-flex items-center gap-1 text-[10px] tracking-widest text-emerald-600">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
             LIVE
           </span>
@@ -609,14 +587,14 @@ function StatCell({
       </div>
       <div
         className={[
-          "mt-1.5 font-serif tracking-tight text-zinc-900",
+          "mt-2 font-semibold tracking-tight text-foreground",
           highlight ? "text-2xl" : "text-lg",
         ].join(" ")}
       >
         {primary}
       </div>
       {secondary && (
-        <div className="mt-0.5 font-mono text-[10.5px] text-zinc-500">
+        <div className="mt-1 font-mono text-[10.5px] text-muted-foreground">
           {secondary}
         </div>
       )}
@@ -637,12 +615,12 @@ function MetaRow({
 }) {
   return (
     <div className="flex flex-col gap-0.5">
-      <span className="font-mono text-[10px] tracking-widest text-zinc-400">
+      <span className="text-[10px] uppercase tracking-widest text-muted-foreground">
         {label}
       </span>
       <span
         className={[
-          "break-all text-zinc-800",
+          "break-all text-foreground",
           mono ? "font-mono" : "",
           small ? "text-[11px]" : "text-[13px]",
         ]

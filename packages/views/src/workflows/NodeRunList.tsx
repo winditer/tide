@@ -28,67 +28,67 @@ export function NodeRunList({
   const runs: WorkflowNodeRun[] = run.node_runs ?? [];
 
   return (
-    <div className="overflow-hidden border-2 border-zinc-900 bg-white shadow-[6px_6px_0_0_rgba(24,24,27,0.92)]">
-      <div className="flex items-center justify-between border-b-2 border-zinc-900 bg-zinc-950 px-4 py-2.5 text-white">
+    <div className="overflow-hidden bg-card rounded-xl shadow-card border border-border/50">
+      <div className="flex items-center justify-between border-b border-border/50 px-4 py-3">
         <div className="flex items-center gap-2">
-          <span className="inline-block h-2 w-2 bg-sky-400" />
-          <span className="font-mono text-[11px] tracking-[0.3em]">
-            ◴ NODE TRACE
+          <span className="inline-block h-2 w-2 rounded-full bg-sky-500" />
+          <span className="text-xs font-medium text-foreground">
+            节点执行记录
           </span>
         </div>
-        <span className="font-mono text-[10px] tracking-widest text-zinc-400">
-          {runs.length} NODES
+        <span className="text-[10px] text-muted-foreground">
+          {runs.length} 个节点
         </span>
       </div>
 
       <div className="max-h-[500px] overflow-y-auto">
         {runs.length === 0 ? (
-          <div className="px-4 py-8 text-center font-mono text-xs text-zinc-500">
-            ◇ 尚无节点执行记录
+          <div className="px-4 py-8 text-center text-xs text-muted-foreground">
+            尚无节点执行记录
           </div>
         ) : (
-          <ul className="divide-y divide-zinc-200">
+          <ul className="divide-y divide-border/50">
             {runs.map((nr) => {
               const tone = statusTone(nr.status);
               const needsApproval =
                 nr.node_type === "approval" && nr.status === "running";
               return (
-                <li key={nr.id} className="px-4 py-3">
+                <li key={nr.id} className="px-4 py-3 hover:bg-muted/30 transition-smooth">
                   <div className="flex items-center gap-3">
                     <div
-                      className={`flex h-6 w-6 shrink-0 items-center justify-center border border-zinc-900 ${tone.accent} ${tone.pulse}`}
+                      className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${tone.accent} ${tone.pulse}`}
                     >
-                      <span className="font-mono text-[10px] text-white">
+                      <span className="text-[10px] text-white">
                         {tone.glyph}
                       </span>
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <span className="truncate text-[13px] font-bold text-zinc-900">
+                        <span className="truncate text-sm font-medium text-foreground">
                           {nr.node_id}
                         </span>
-                        <span className="border border-zinc-300 bg-zinc-50 px-1.5 py-[1px] font-mono text-[9px] uppercase tracking-wider text-zinc-700">
+                        <span className="rounded-md border border-border bg-muted px-1.5 py-[1px] text-[9px] uppercase text-muted-foreground">
                           {nr.node_type}
                         </span>
                       </div>
-                      <div className="mt-0.5 flex items-center gap-3 font-mono text-[10px] text-zinc-600">
+                      <div className="mt-0.5 flex items-center gap-3 text-[10px] text-muted-foreground">
                         <span
-                          className={`px-1.5 py-[1px] ${
-                            STATUS_BG[nr.status] ?? "bg-zinc-100"
+                          className={`rounded-md px-1.5 py-[1px] ${
+                            STATUS_BG[nr.status] ?? "bg-muted"
                           }`}
                         >
                           {STATUS_LABEL[nr.status] ?? nr.status}
                         </span>
-                        <span>▸ {formatTime(nr.started_at)}</span>
-                        <span>◂ {formatTime(nr.finished_at)}</span>
+                        <span>开始 {formatTime(nr.started_at)}</span>
+                        <span>结束 {formatTime(nr.finished_at)}</span>
                       </div>
                       {nr.error && (
-                        <div className="mt-1.5 border border-rose-300 bg-rose-50 px-2 py-1 font-mono text-[10px] leading-relaxed text-rose-800">
-                          ✕ {String(nr.error)}
+                        <div className="mt-1.5 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] leading-relaxed text-rose-800">
+                          {String(nr.error)}
                         </div>
                       )}
                       {nr.output != null && (
-                        <pre className="mt-1.5 max-h-32 overflow-auto whitespace-pre-wrap break-words border border-zinc-200 bg-zinc-50 px-2 py-1 font-mono text-[10px] leading-relaxed text-zinc-800">
+                        <pre className="mt-1.5 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/50 bg-muted/30 px-2 py-1 font-mono text-[10px] leading-relaxed text-foreground">
                           {typeof nr.output === "string"
                             ? nr.output
                             : JSON.stringify(nr.output, null, 2)}
@@ -100,14 +100,14 @@ export function NodeRunList({
                         <button
                           disabled={isPending}
                           onClick={() => onApprove?.(nr.node_id)}
-                          className="border-2 border-emerald-700 bg-emerald-500 px-2 py-[2px] font-mono text-[10px] tracking-wider text-white shadow-[2px_2px_0_0_rgba(4,120,87,0.92)] hover:bg-emerald-400 disabled:opacity-50"
+                          className="rounded-md bg-emerald-500 px-2 py-1 text-[10px] font-medium text-white hover:bg-emerald-400 disabled:opacity-50 transition-smooth"
                         >
                           ✓ 批准
                         </button>
                         <button
                           disabled={isPending}
                           onClick={() => onReject?.(nr.node_id)}
-                          className="border-2 border-rose-700 bg-rose-500 px-2 py-[2px] font-mono text-[10px] tracking-wider text-white shadow-[2px_2px_0_0_rgba(190,18,60,0.92)] hover:bg-rose-400 disabled:opacity-50"
+                          className="rounded-md bg-rose-500 px-2 py-1 text-[10px] font-medium text-white hover:bg-rose-400 disabled:opacity-50 transition-smooth"
                         >
                           ✕ 拒绝
                         </button>

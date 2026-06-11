@@ -75,9 +75,8 @@ async function layoutGraph(
     type: "smoothstep",
     animated: false,
     style: {
-      stroke: "rgba(24,24,27,0.6)",
+      stroke: "rgba(99,102,241,0.55)",
       strokeWidth: 1.5,
-      strokeDasharray: "4 3",
     },
   }));
 
@@ -168,11 +167,11 @@ function DAGCanvas({ planId, onNodeClick, refetchInterval }: PlanDAGViewProps) {
         variant={BackgroundVariant.Dots}
         gap={20}
         size={1.2}
-        color="rgba(24,24,27,0.18)"
+        color="rgba(99,102,241,0.18)"
       />
       <Controls
         showInteractive={false}
-        className="!border !border-zinc-900 !bg-white !shadow-[3px_3px_0_0_rgba(24,24,27,0.92)]"
+        className="!rounded-lg !border !border-border/60 !bg-card !shadow-sm"
       />
       <MiniMap
         zoomable
@@ -195,7 +194,7 @@ function DAGCanvas({ planId, onNodeClick, refetchInterval }: PlanDAGViewProps) {
           };
           return m[status] ?? "#94a3b8";
         }}
-        className="!border !border-zinc-900 !bg-white !shadow-[3px_3px_0_0_rgba(24,24,27,0.92)]"
+        className="!rounded-lg !border !border-border/60 !bg-card !shadow-sm"
       />
     </ReactFlow>
   );
@@ -203,16 +202,10 @@ function DAGCanvas({ planId, onNodeClick, refetchInterval }: PlanDAGViewProps) {
 
 export function PlanDAGView(props: PlanDAGViewProps) {
   return (
-    <div className="relative h-full w-full overflow-hidden border border-zinc-900 bg-[radial-gradient(circle_at_1px_1px,rgba(24,24,27,0.08)_1px,transparent_0)] bg-[length:18px_18px]">
-      {/* Decorative corners */}
-      <CornerTick className="left-[-1px] top-[-1px]" />
-      <CornerTick className="right-[-1px] top-[-1px] rotate-90" />
-      <CornerTick className="left-[-1px] bottom-[-1px] -rotate-90" />
-      <CornerTick className="right-[-1px] bottom-[-1px] rotate-180" />
-
+    <div className="relative h-full w-full overflow-hidden rounded-xl border border-border/50 bg-muted/20">
       {/* Header strip */}
-      <div className="pointer-events-none absolute left-3 top-3 z-10 flex items-center gap-2 font-mono text-[10px] tracking-[0.25em] text-zinc-700">
-        <span className="inline-block h-2 w-2 bg-zinc-900" />
+      <div className="pointer-events-none absolute left-3 top-3 z-10 inline-flex items-center gap-2 rounded-md border border-border/60 bg-card/80 px-2 py-1 font-mono text-[10px] tracking-[0.18em] text-muted-foreground shadow-sm backdrop-blur">
+        <span className="inline-block h-1.5 w-1.5 rounded-full bg-indigo-500" />
         <span>DAG · LAYERED · ELK</span>
       </div>
 
@@ -220,20 +213,5 @@ export function PlanDAGView(props: PlanDAGViewProps) {
         <DAGCanvas {...props} />
       </ReactFlowProvider>
     </div>
-  );
-}
-
-function CornerTick({ className }: { className?: string }) {
-  return (
-    <svg
-      className={`pointer-events-none absolute h-4 w-4 ${className ?? ""}`}
-      viewBox="0 0 16 16"
-      fill="none"
-    >
-      <path
-        d="M0 0 L16 0 L16 1 L1 1 L1 16 L0 16 Z"
-        fill="rgb(24,24,27)"
-      />
-    </svg>
   );
 }

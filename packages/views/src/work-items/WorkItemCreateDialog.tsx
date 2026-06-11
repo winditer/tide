@@ -61,21 +61,27 @@ export function WorkItemCreateDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm animate-in fade-in-0"
       onClick={onClose}
     >
       <div
-        className="relative w-full max-w-lg border-2 border-zinc-900 bg-white shadow-[12px_12px_0_0_rgba(24,24,27,0.92)]"
+        className="relative w-full max-w-lg overflow-hidden rounded-xl border border-border/50 bg-card shadow-2xl animate-in zoom-in-95 fade-in-0"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between border-b-2 border-zinc-900 bg-zinc-950 px-5 py-3 text-white">
-          <span className="font-mono text-[11px] tracking-[0.3em]">
-            NEW · WORK ITEM
-          </span>
+        <div className="flex items-center justify-between border-b border-border/60 bg-muted/30 px-6 py-4">
+          <div>
+            <h2 className="text-lg font-semibold tracking-tight text-foreground">
+              新建工作项
+            </h2>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              在当前项目中创建一个新的工作项
+            </p>
+          </div>
           <button
             onClick={onClose}
-            className="font-mono text-sm text-zinc-300 hover:text-white"
+            aria-label="关闭"
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
           >
             ✕
           </button>
@@ -83,22 +89,13 @@ export function WorkItemCreateDialog({
 
         {/* Form */}
         <div className="space-y-5 p-6">
-          <div>
-            <h2 className="font-serif text-2xl font-semibold text-zinc-900">
-              新建工作项
-            </h2>
-            <p className="mt-1 text-sm text-zinc-500">
-              在当前项目中创建一个新的工作项
-            </p>
-          </div>
-
           <Field label="标题" required>
             <Input
               autoFocus
               placeholder="输入工作项标题"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              className="border-2 border-zinc-900 text-sm"
+              className="h-10 rounded-lg border-0 bg-muted/50 text-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0"
             />
           </Field>
 
@@ -108,7 +105,7 @@ export function WorkItemCreateDialog({
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               rows={3}
-              className="w-full rounded-md border-2 border-zinc-900 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400"
+              className="w-full rounded-lg border-0 bg-muted/50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             />
           </Field>
 
@@ -117,7 +114,7 @@ export function WorkItemCreateDialog({
               <Select
                 value={priority}
                 onChange={(e) => setPriority(e.target.value)}
-                className="border-2 border-zinc-900"
+                className="h-10 rounded-lg border-0 bg-muted/50 focus:ring-2 focus:ring-ring"
                 options={PRIORITY_OPTIONS}
               />
             </Field>
@@ -127,7 +124,7 @@ export function WorkItemCreateDialog({
                 placeholder="可选"
                 value={assignee}
                 onChange={(e) => setAssignee(e.target.value)}
-                className="border-2 border-zinc-900 text-sm"
+                className="h-10 rounded-lg border-0 bg-muted/50 text-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0"
               />
             </Field>
           </div>
@@ -137,32 +134,28 @@ export function WorkItemCreateDialog({
               placeholder="bug, feature, urgent"
               value={tagsRaw}
               onChange={(e) => setTagsRaw(e.target.value)}
-              className="border-2 border-zinc-900 font-mono text-sm"
+              className="h-10 rounded-lg border-0 bg-muted/50 text-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0"
             />
           </Field>
 
           {error && (
-            <div className="border border-rose-500 bg-rose-50 px-3 py-2 font-mono text-xs text-rose-700">
-              ✕ {error}
+            <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              {error}
             </div>
           )}
+        </div>
 
-          <div className="flex justify-end gap-2 border-t border-zinc-200 pt-4">
-            <Button
-              variant="outline"
-              className="border-2 border-zinc-900"
-              onClick={onClose}
-            >
-              取消
-            </Button>
-            <Button
-              disabled={createMutation.isPending}
-              className="border-2 border-zinc-900 bg-emerald-600 text-white shadow-[3px_3px_0_0_rgba(24,24,27,1)] hover:bg-emerald-700"
-              onClick={handleSubmit}
-            >
-              {createMutation.isPending ? "创建中…" : "创建"}
-            </Button>
-          </div>
+        {/* Footer */}
+        <div className="flex justify-end gap-2 border-t border-border/60 bg-muted/20 px-6 py-3">
+          <Button variant="outline" onClick={onClose}>
+            取消
+          </Button>
+          <Button
+            disabled={createMutation.isPending}
+            onClick={handleSubmit}
+          >
+            {createMutation.isPending ? "创建中…" : "创建工作项"}
+          </Button>
         </div>
       </div>
     </div>
@@ -180,9 +173,9 @@ function Field({
 }) {
   return (
     <label className="block">
-      <span className="mb-1.5 block font-mono text-[11px] tracking-widest text-zinc-600">
+      <span className="mb-1.5 block text-xs font-medium text-muted-foreground">
         {label}
-        {required && <span className="ml-1 text-rose-600">*</span>}
+        {required && <span className="ml-0.5 text-destructive">*</span>}
       </span>
       {children}
     </label>

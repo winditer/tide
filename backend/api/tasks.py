@@ -33,15 +33,18 @@ def _safe_upload_name(filename: str) -> str:
 @router.post("", response_model=TaskResponse)
 async def create_task(body: TaskCreate):
     """创建任务"""
-    result = await task_service.create_task(
-        workspace_id=body.workspace_id,
-        prompt=body.prompt,
-        agent_id=body.agent_id,
-        model=body.model or "",
-        cwd=body.cwd or "",
-        attachments=body.attachments,
-        session_id=body.session_id or "",
-    )
+    try:
+        result = await task_service.create_task(
+            workspace_id=body.workspace_id,
+            prompt=body.prompt,
+            agent_id=body.agent_id,
+            model=body.model or "",
+            cwd=body.cwd or "",
+            attachments=body.attachments,
+            session_id=body.session_id or "",
+        )
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     if not result:
         raise HTTPException(status_code=500, detail="Failed to create task")
     return result

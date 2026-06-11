@@ -33,8 +33,16 @@ export function useWs(): WsContextValue {
 
 export { WsContext };
 
-const WS_URL =
-  process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000/ws";
+function getWsUrl(): string {
+  if (process.env.NEXT_PUBLIC_WS_URL) {
+    return process.env.NEXT_PUBLIC_WS_URL;
+  }
+  if (typeof window === "undefined") {
+    return "";
+  }
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}/ws`;
+}
 
 const HEARTBEAT_INTERVAL = 30_000;
 const HEARTBEAT_TIMEOUT = 10_000;
@@ -114,7 +122,10 @@ export function WsProvider({ children }: { children: ReactNode }) {
   const connect = useCallback(() => {
     if (!mountedRef.current) return;
 
-    const ws = new WebSocket(WS_URL);
+    const wsUrl = getWsUrl();
+    if (!wsUrl) return;
+
+    const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
     setStatus("connecting");
 

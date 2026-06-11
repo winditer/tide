@@ -36,8 +36,15 @@ function invalidateApprovalRelated(qc: ReturnType<typeof useQueryClient>) {
 export function useApproveApproval() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, operatorId }: { id: string; operatorId?: string }) =>
-      approveApproval(id, operatorId),
+    mutationFn: ({
+      id,
+      operatorId,
+      comment,
+    }: {
+      id: string;
+      operatorId?: string;
+      comment?: string;
+    }) => approveApproval(id, operatorId, comment),
     onSuccess: () => invalidateApprovalRelated(qc),
   });
 }
@@ -45,8 +52,15 @@ export function useApproveApproval() {
 export function useRejectApproval() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, operatorId }: { id: string; operatorId?: string }) =>
-      rejectApproval(id, operatorId),
+    mutationFn: ({
+      id,
+      operatorId,
+      comment,
+    }: {
+      id: string;
+      operatorId?: string;
+      comment?: string;
+    }) => rejectApproval(id, operatorId, comment),
     onSuccess: () => invalidateApprovalRelated(qc),
   });
 }

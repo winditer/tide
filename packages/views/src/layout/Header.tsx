@@ -1,20 +1,23 @@
 "use client";
 
 import Link from "next/link";
+import { Menu, Settings, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { ConnectionStatus, Button } from "@tide/ui";
 import { useWs } from "@tide/core";
 
 interface HeaderProps {
   onMenuClick: () => void;
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
-export function Header({ onMenuClick }: HeaderProps) {
+export function Header({ onMenuClick, collapsed = false, onToggleCollapse }: HeaderProps) {
   const { status } = useWs();
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between border-b bg-card px-4">
-      {/* Left: Hamburger (mobile) */}
-      <div className="flex items-center gap-3">
+    <header className="glass sticky top-0 z-30 flex h-14 shrink-0 items-center justify-between border-b border-border/50 px-5">
+      {/* Left: Hamburger (mobile) + collapse toggle (desktop) + brand (mobile) */}
+      <div className="flex items-center gap-2">
         <Button
           variant="ghost"
           size="icon"
@@ -22,21 +25,36 @@ export function Header({ onMenuClick }: HeaderProps) {
           onClick={onMenuClick}
           aria-label="打开导航"
         >
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M3 5h14M3 10h14M3 15h14" />
-          </svg>
+          <Menu className="h-5 w-5" strokeWidth={2} />
         </Button>
-        <span className="text-sm font-medium lg:hidden">Tide</span>
+        {onToggleCollapse && (
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            title={collapsed ? "展开侧边栏" : "收起侧边栏"}
+            aria-label={collapsed ? "展开侧边栏" : "收起侧边栏"}
+            className="hidden lg:flex w-8 h-8 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-smooth"
+          >
+            {collapsed ? (
+              <ChevronsRight className="h-4 w-4" strokeWidth={2} />
+            ) : (
+              <ChevronsLeft className="h-4 w-4" strokeWidth={2} />
+            )}
+          </button>
+        )}
+        <span className="ml-1 text-sm font-semibold tracking-tight lg:hidden">Tide</span>
       </div>
 
       {/* Right: Connection + Settings */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-4">
         <ConnectionStatus status={status} />
-        <Link href="/settings" className="text-muted-foreground hover:text-foreground transition-colors">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
-            <circle cx="12" cy="12" r="3" />
-          </svg>
+        <div className="hidden h-5 w-px bg-border/60 lg:block" />
+        <Link
+          href="/settings"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-smooth hover:bg-accent hover:text-foreground"
+          aria-label="设置"
+        >
+          <Settings className="h-[18px] w-[18px]" strokeWidth={2} />
         </Link>
       </div>
     </header>

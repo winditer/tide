@@ -65,6 +65,10 @@ export {
   useAgents,
   useProjects,
   useSessions,
+  useActiveProjects,
+  useActivityTimeline,
+  useTaskStatusDistribution,
+  useUpcomingSchedules,
 } from "./hooks/use-dashboard";
 
 export {
@@ -73,6 +77,10 @@ export {
   getAgents,
   getProjects,
   getSessions,
+  fetchActiveProjects,
+  fetchActivityTimeline,
+  fetchTaskStatusDistribution,
+  fetchUpcomingSchedules,
 } from "./api/dashboard";
 export type {
   DashboardStats,
@@ -85,6 +93,10 @@ export type {
   SessionInfo,
   SessionsResponse,
   GetSessionsParams,
+  ActiveProject,
+  ActivityEvent,
+  TaskStatusDistribution,
+  UpcomingSchedule,
 } from "./api/dashboard";
 
 export {

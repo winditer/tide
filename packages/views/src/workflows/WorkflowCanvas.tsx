@@ -405,19 +405,19 @@ function CanvasInner({
   }, [onSave]);
 
   return (
-    <div className="flex h-full w-full overflow-hidden border-2 border-zinc-900 bg-white">
+    <div className="flex h-full w-full overflow-hidden rounded-xl border border-border/50 bg-card shadow-card">
       {!readOnly && <NodePalette onAddNode={(t) => handleAddNode(t)} />}
 
       {/* Canvas + Toolbar */}
       <div className="relative flex min-w-0 flex-1 flex-col">
         {/* Toolbar */}
-        <div className="flex items-center gap-2 border-b-2 border-zinc-900 bg-zinc-950 px-4 py-2 text-white">
-          <span className="inline-block h-2 w-2 bg-emerald-400" />
-          <span className="font-mono text-[11px] tracking-[0.3em]">
-            ◳ WORKFLOW{readOnly ? " · RUN" : " · EDIT"}
+        <div className="flex items-center gap-2 border-b border-border/50 bg-muted/30 px-4 py-2">
+          <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
+          <span className="text-xs font-medium text-foreground">
+            工作流{readOnly ? " · 运行" : " · 编辑"}
           </span>
           {subtitle && (
-            <span className="ml-2 truncate font-mono text-[10px] tracking-widest text-zinc-400">
+            <span className="ml-2 truncate text-xs text-muted-foreground">
               / {subtitle}
             </span>
           )}
@@ -428,7 +428,6 @@ function CanvasInner({
                 variant="outline"
                 disabled={isSaving}
                 onClick={handleSaveClick}
-                className="!border-white !bg-transparent !text-white hover:!bg-white hover:!text-zinc-900"
               >
                 {isSaving ? "保存中…" : "💾 保存"}
               </Button>
@@ -438,7 +437,6 @@ function CanvasInner({
                 size="sm"
                 disabled={isRunning}
                 onClick={onRun}
-                className="!bg-emerald-500 !text-white hover:!bg-emerald-400"
               >
                 {isRunning ? "运行中…" : "▶ 运行"}
               </Button>
@@ -449,7 +447,7 @@ function CanvasInner({
 
         <div
           ref={wrapperRef}
-          className="relative flex-1 bg-[radial-gradient(circle_at_1px_1px,rgba(24,24,27,0.08)_1px,transparent_0)] bg-[length:18px_18px]"
+          className="relative flex-1 bg-muted/20"
           onDrop={onDrop}
           onDragOver={onDragOver}
         >
@@ -480,7 +478,7 @@ function CanvasInner({
             />
             <Controls
               showInteractive={false}
-              className="!border !border-zinc-900 !bg-white !shadow-[3px_3px_0_0_rgba(24,24,27,0.92)]"
+              className="!border !border-border !bg-card !rounded-lg !shadow-card"
             />
             <MiniMap
               zoomable
@@ -500,18 +498,18 @@ function CanvasInner({
                 };
                 return m[status] ?? "#a1a1aa";
               }}
-              className="!border !border-zinc-900 !bg-white !shadow-[3px_3px_0_0_rgba(24,24,27,0.92)]"
+              className="!border !border-border !bg-card !rounded-lg !shadow-card"
             />
           </ReactFlow>
 
           {/* Empty hint */}
           {nodes.length === 0 && (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-              <div className="border-2 border-dashed border-zinc-400 bg-white px-8 py-6 text-center shadow-[6px_6px_0_0_rgba(24,24,27,0.92)]">
-                <div className="font-mono text-[11px] tracking-[0.3em] text-zinc-700">
-                  ◇ EMPTY CANVAS
+              <div className="rounded-xl border border-border/50 bg-card px-8 py-6 text-center shadow-card">
+                <div className="text-xs font-medium text-muted-foreground">
+                  空画布
                 </div>
-                <div className="mt-2 text-xs text-zinc-500">
+                <div className="mt-2 text-xs text-muted-foreground">
                   从左侧拖入节点开始构建工作流
                 </div>
               </div>

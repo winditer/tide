@@ -113,20 +113,20 @@ export function DiffViewer({ planId }: DiffViewerProps) {
 
   if (tasksWithDiff.length === 0) {
     return (
-      <div className="flex h-96 items-center justify-center border border-zinc-900 bg-white font-mono text-xs tracking-widest text-zinc-500">
+      <div className="flex h-96 items-center justify-center rounded-xl border border-border/50 bg-card font-mono text-xs tracking-widest text-muted-foreground">
         ◇ NO TASKS IN THIS PLAN
       </div>
     );
   }
 
   return (
-    <div className="border border-zinc-900 bg-white shadow-[6px_6px_0_0_rgba(24,24,27,0.92)]">
+    <div className="overflow-hidden rounded-xl border border-border/50 bg-card shadow-card">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-zinc-900 bg-zinc-950 px-4 py-2 text-white">
-        <span className="font-mono text-[10px] tracking-[0.3em]">
-          DIFF · MONACO
+      <div className="flex items-center justify-between border-b border-border/50 bg-muted/30 px-4 py-2.5">
+        <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          Diff · Monaco
         </span>
-        <span className="font-mono text-[10px] tracking-widest text-zinc-400">
+        <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
           {tasksWithDiff.length} TASK
           {tasksWithDiff.length !== 1 ? "S" : ""}
         </span>
@@ -134,9 +134,9 @@ export function DiffViewer({ planId }: DiffViewerProps) {
 
       <div className="grid grid-cols-[260px_1fr]">
         {/* Sidebar: task picker */}
-        <div className="border-r border-dashed border-zinc-300">
-          <div className="border-b border-dashed border-zinc-300 px-4 py-2 font-mono text-[10px] tracking-widest text-zinc-500">
-            TASKS
+        <div className="border-r border-border/50 bg-muted/10">
+          <div className="border-b border-border/50 bg-muted/30 px-4 py-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            Tasks
           </div>
           <div className="max-h-[600px] overflow-auto">
             {tasksWithDiff.map((t) => {
@@ -146,14 +146,14 @@ export function DiffViewer({ planId }: DiffViewerProps) {
                   key={t.task_id}
                   onClick={() => setSelectedTaskId(t.task_id)}
                   className={[
-                    "flex w-full items-center gap-2 border-b border-dashed border-zinc-200 px-4 py-2 text-left transition-colors",
+                    "flex w-full items-center gap-2 border-b border-border/40 px-4 py-2 text-left transition-colors",
                     active
-                      ? "bg-zinc-900 text-white"
-                      : "hover:bg-zinc-50",
+                      ? "bg-indigo-50 border-l-2 border-l-indigo-500 text-indigo-900"
+                      : "hover:bg-muted/40",
                   ].join(" ")}
                 >
                   <span
-                    className={`font-mono text-[10px] ${active ? "text-zinc-300" : "text-zinc-400"}`}
+                    className={`font-mono text-[10px] ${active ? "text-indigo-500" : "text-muted-foreground/70"}`}
                   >
                     #{String(t.task_index).padStart(2, "0")}
                   </span>
@@ -168,12 +168,12 @@ export function DiffViewer({ planId }: DiffViewerProps) {
 
         {/* Diff panel */}
         <div className="flex flex-col">
-          <div className="flex items-center justify-between border-b border-dashed border-zinc-300 px-4 py-2">
-            <span className="truncate font-mono text-[11px] text-zinc-700">
+          <div className="flex items-center justify-between border-b border-border/50 bg-muted/20 px-4 py-2">
+            <span className="truncate font-mono text-[11px] text-muted-foreground">
               {activeTask?.prompt?.slice(0, 80) ?? "—"}
             </span>
             {!activeTask?.diff_summary && (
-              <span className="ml-2 shrink-0 font-mono text-[10px] tracking-widest text-zinc-400">
+              <span className="ml-2 shrink-0 font-mono text-[10px] tracking-widest text-muted-foreground/70">
                 ◇ NO DIFF
               </span>
             )}
@@ -198,7 +198,7 @@ export function DiffViewer({ planId }: DiffViewerProps) {
                 }}
               />
             ) : (
-              <div className="flex h-full items-center justify-center font-mono text-xs tracking-widest text-zinc-400">
+              <div className="flex h-full items-center justify-center font-mono text-xs tracking-widest text-muted-foreground/70">
                 ◇ THIS TASK HAS NO DIFF SUMMARY
               </div>
             )}

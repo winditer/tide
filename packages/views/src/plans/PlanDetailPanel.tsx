@@ -93,27 +93,27 @@ export function PlanDetailPanel({
       <aside
         className={[
           "fixed right-0 top-0 z-50 flex h-full w-full max-w-[460px] flex-col",
-          "border-l-2 border-zinc-900 bg-white",
-          "shadow-[-12px_0_0_0_rgba(24,24,27,0.04)]",
+          "border-l border-border/50 bg-card",
+          "shadow-[-8px_0_24px_-4px_rgba(0,0,0,0.1)]",
           "animate-in slide-in-from-right duration-200",
         ].join(" ")}
       >
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-zinc-900 bg-zinc-950 px-5 py-4 text-white">
+        <div className="flex items-center justify-between border-b border-border/50 px-5 py-4">
           <div className="flex items-center gap-3">
-            <span className="font-mono text-[10px] tracking-[0.3em] text-zinc-400">
-              TASK / NODE
+            <span className="text-xs font-medium text-muted-foreground">
+              任务详情
             </span>
             <span
-              className={`inline-flex h-2 w-2 ${STATUS_COLOR[status] ?? "bg-slate-400"}`}
+              className={`inline-flex h-2 w-2 rounded-full ${STATUS_COLOR[status] ?? "bg-slate-400"}`}
             />
-            <span className="font-mono text-[11px] uppercase tracking-widest">
+            <span className="text-xs font-medium text-foreground">
               {STATUS_LABEL[status] ?? status}
             </span>
           </div>
           <button
             onClick={onClose}
-            className="font-mono text-sm text-zinc-300 hover:text-white"
+            className="text-sm text-muted-foreground hover:text-foreground transition-smooth"
           >
             ✕
           </button>
@@ -121,79 +121,79 @@ export function PlanDetailPanel({
 
         {/* Body */}
         <div className="flex-1 overflow-auto">
-          <div className="border-b border-dashed border-zinc-300 px-5 py-4">
-            <div className="font-mono text-[10px] tracking-widest text-zinc-500">
-              TITLE
+          <div className="border-b border-border/50 px-5 py-4">
+            <div className="text-[10px] font-medium text-muted-foreground">
+              标题
             </div>
-            <h3 className="mt-1 text-base font-bold leading-snug text-zinc-900">
+            <h3 className="mt-1 text-base font-semibold leading-snug text-foreground">
               {title}
             </h3>
           </div>
 
-          <div className="grid grid-cols-2 gap-x-4 gap-y-3 border-b border-dashed border-zinc-300 px-5 py-4 text-sm">
-            <Field label="AGENT" value={agent || "—"} mono />
+          <div className="grid grid-cols-2 gap-x-4 gap-y-3 border-b border-border/50 px-5 py-4 text-sm">
+            <Field label="Agent" value={agent || "—"} mono />
             <Field
-              label="MODEL"
+              label="模型"
               value={task?.model ?? "—"}
               mono
             />
             <Field
-              label="DURATION"
+              label="耗时"
               value={formatDuration(task?.duration_ms ?? null)}
               mono
             />
             <Field
-              label="PHASE"
+              label="阶段"
               value={String(nodeData?.phase ?? 0)}
               mono
             />
             <Field
-              label="STARTED"
+              label="开始"
               value={formatTime(task?.started_at ?? null)}
             />
             <Field
-              label="COMPLETED"
+              label="完成"
               value={formatTime(task?.completed_at ?? null)}
             />
           </div>
 
           {isLoading ? (
-            <div className="px-5 py-8 text-center font-mono text-xs text-zinc-500">
-              ◐ LOADING…
+            <div className="px-5 py-8 text-center text-xs text-muted-foreground">
+              加载中…
             </div>
           ) : task ? (
             <>
-              <Section title="PROMPT">
-                <pre className="whitespace-pre-wrap break-words rounded-sm border border-zinc-200 bg-zinc-50 p-3 font-mono text-[12px] leading-relaxed text-zinc-800">
+              <Section title="Prompt">
+                <pre className="whitespace-pre-wrap break-words rounded-lg border border-border/50 bg-muted/30 p-3 font-mono text-[12px] leading-relaxed text-foreground">
                   {task.prompt}
                 </pre>
               </Section>
 
               {task.result && (
-                <Section title="OUTPUT">
-                  <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-sm border border-zinc-200 bg-zinc-950 p-3 font-mono text-[12px] leading-relaxed text-emerald-200">
+                <Section title="输出">
+                  <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/50 bg-zinc-950 p-3 font-mono text-[12px] leading-relaxed text-emerald-200">
                     {task.result}
                   </pre>
                 </Section>
               )}
 
               {task.diff_summary && (
-                <Section title="DIFF SUMMARY">
-                  <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-sm border border-zinc-200 bg-zinc-50 p-3 font-mono text-[11px] text-zinc-700">
+                <Section title="Diff 摘要">
+                  <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/50 bg-muted/30 p-3 font-mono text-[11px] text-foreground">
                     {task.diff_summary}
                   </pre>
                 </Section>
               )}
             </>
           ) : (
-            <div className="px-5 py-8 text-center font-mono text-xs text-zinc-500">
-              ◇ NO TASK DETAILS
+            <div className="px-5 py-8 text-center text-xs text-muted-foreground">
+              暂无任务详情
             </div>
           )}
         </div>
 
         {/* Footer actions */}
-        <div className="flex flex-wrap items-center gap-2 border-t border-zinc-900 bg-zinc-50 px-5 py-3">
+        <div className="flex flex-wrap items-center gap-2 border-t border-border/50 bg-muted/30 px-5 py-3">
           {needsApproval && task && (
             <>
               <Button
@@ -233,7 +233,7 @@ export function PlanDetailPanel({
               ↻ 重试
             </Button>
           )}
-          <span className="ml-auto font-mono text-[10px] tracking-widest text-zinc-400">
+          <span className="ml-auto text-[10px] text-muted-foreground">
             ID · {task?.id?.slice(0, 8) ?? "—"}
           </span>
         </div>
@@ -253,11 +253,11 @@ function Field({
 }) {
   return (
     <div>
-      <div className="font-mono text-[10px] tracking-widest text-zinc-500">
+      <div className="text-[10px] font-medium text-muted-foreground">
         {label}
       </div>
       <div
-        className={`mt-0.5 truncate text-zinc-900 ${mono ? "font-mono text-[12px]" : "text-[13px]"}`}
+        className={`mt-0.5 truncate text-foreground ${mono ? "font-mono text-[12px]" : "text-[13px]"}`}
       >
         {value}
       </div>
@@ -273,8 +273,8 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <div className="border-b border-dashed border-zinc-300 px-5 py-4">
-      <div className="mb-2 font-mono text-[10px] tracking-widest text-zinc-500">
+    <div className="border-b border-border/50 px-5 py-4">
+      <div className="mb-2 text-[10px] font-medium text-muted-foreground">
         {title}
       </div>
       {children}

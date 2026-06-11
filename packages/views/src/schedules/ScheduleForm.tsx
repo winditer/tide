@@ -28,6 +28,48 @@ const TRIGGER_TYPE_OPTIONS = [
 
 const DEFAULT_TIMEZONE = "Asia/Shanghai";
 
+/** 默认 cron 示例：工作日 9 点 */
+const DEFAULT_CRON_EXAMPLE = "0 9 * * 1-5";
+
+/** 默认 interval 示例：每 1 小时 */
+const DEFAULT_INTERVAL_EXAMPLE = { hours: "1", minutes: "0" };
+
+/** 计算下一个整点的本地 ISO 时间，带时区偏移，例如 2026-06-11T10:00:00+08:00 */
+function nextHourLocalIso(): string {
+  const d = new Date();
+  d.setHours(d.getHours() + 1, 0, 0, 0);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const tzMin = -d.getTimezoneOffset();
+  const sign = tzMin >= 0 ? "+" : "-";
+  const tzh = pad(Math.floor(Math.abs(tzMin) / 60));
+  const tzm = pad(Math.abs(tzMin) % 60);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}${sign}${tzh}:${tzm}`;
+}
+
+/** 根据任务类型生成默认 task_config 示例 */
+function getTaskConfigExample(type: ScheduleTaskType): string {
+  switch (type) {
+    case "agent":
+      return JSON.stringify(
+        { prompt: "请描述需要执行的任务", agent_id: "codex", model: "", cwd: "" },
+        null,
+        2
+      );
+    case "plan":
+      return JSON.stringify(
+        { prompt: "计划任务内容", agent_id: "codex", max_parallel: 1 },
+        null,
+        2
+      );
+    case "status":
+      return JSON.stringify({ prompt: "查询当前任务状态" }, null, 2);
+    case "custom":
+      return JSON.stringify({ prompt: "自定义任务内容" }, null, 2);
+    default:
+      return "{}";
+  }
+}
+
 /** Simple cron expression to human-readable description (Chinese) */
 function cronToHuman(expr: string): string {
   if (!expr.trim()) return "";
@@ -76,6 +118,12 @@ export function ScheduleForm({ schedule, onSuccess, onCancel }: ScheduleFormProp
   const [taskType, setTaskType] = useState<ScheduleTaskType>("agent");
   const [taskConfig, setTaskConfig] = useState("{}");
 
+  // 记录用户是否手动修改过各分组字段，用于决定是否需要自动填充默认示例
+  const [touchedCron, setTouchedCron] = useState(false);
+  const [touchedInterval, setTouchedInterval] = useState(false);
+  const [touchedDate, setTouchedDate] = useState(false);
+  const [touchedTaskConfig, setTouchedTaskConfig] = useState(false);
+
   const createMutation = useCreateScheduleMutation();
   const updateMutation = useUpdateScheduleMutation();
 
@@ -99,8 +147,40 @@ export function ScheduleForm({ schedule, onSuccess, onCancel }: ScheduleFormProp
       }
       setTaskType((schedule.task_type as ScheduleTaskType) ?? "agent");
       setTaskConfig(JSON.stringify(schedule.task_config ?? {}, null, 2));
+      // 编辑模式下视为已手动设置过，避免被自动示例覆盖
+      setTouchedCron(true);
+      setTouchedInterval(true);
+      setTouchedDate(true);
+      setTouchedTaskConfig(true);
     }
   }, [schedule]);
+
+  // 切换触发类型时，若用户未手动修改过该分组字段，自动填充默认示例
+  useEffect(() => {
+    if (isEditMode) return;
+    if (triggerType === "cron" && !touchedCron && !cronExpr.trim()) {
+      setCronExpr(DEFAULT_CRON_EXAMPLE);
+    } else if (
+      triggerType === "interval" &&
+      !touchedInterval &&
+      (intervalHours === "" || intervalHours === "0") &&
+      (intervalMinutes === "" || intervalMinutes === "0")
+    ) {
+      setIntervalHours(DEFAULT_INTERVAL_EXAMPLE.hours);
+      setIntervalMinutes(DEFAULT_INTERVAL_EXAMPLE.minutes);
+    } else if (triggerType === "date" && !touchedDate && !runAt.trim()) {
+      setRunAt(nextHourLocalIso());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [triggerType, isEditMode]);
+
+  // 切换任务类型时，若用户未手动修改过 task_config，自动填充示例
+  useEffect(() => {
+    if (isEditMode) return;
+    if (touchedTaskConfig) return;
+    setTaskConfig(getTaskConfigExample(taskType));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskType, isEditMode]);
 
   const buildTriggerConfig = (): { ok: boolean; config?: Record<string, any>; error?: string } => {
     if (triggerType === "cron") {
@@ -219,9 +299,12 @@ export function ScheduleForm({ schedule, onSuccess, onCancel }: ScheduleFormProp
               Cron 表达式 *
             </label>
             <Input
-              placeholder="如: 0 9 * * * (每天9点)"
+              placeholder="如: 0 9 * * 1-5 （工作日 9 点）"
               value={cronExpr}
-              onChange={(e) => setCronExpr(e.target.value)}
+              onChange={(e) => {
+                setCronExpr(e.target.value);
+                setTouchedCron(true);
+              }}
               className="font-mono"
               required
             />
@@ -251,7 +334,10 @@ export function ScheduleForm({ schedule, onSuccess, onCancel }: ScheduleFormProp
               min="0"
               placeholder="0"
               value={intervalHours}
-              onChange={(e) => setIntervalHours(e.target.value)}
+              onChange={(e) => {
+                setIntervalHours(e.target.value);
+                setTouchedInterval(true);
+              }}
             />
           </div>
           <div>
@@ -261,7 +347,10 @@ export function ScheduleForm({ schedule, onSuccess, onCancel }: ScheduleFormProp
               min="0"
               placeholder="0"
               value={intervalMinutes}
-              onChange={(e) => setIntervalMinutes(e.target.value)}
+              onChange={(e) => {
+                setIntervalMinutes(e.target.value);
+                setTouchedInterval(true);
+              }}
             />
           </div>
         </div>
@@ -273,7 +362,10 @@ export function ScheduleForm({ schedule, onSuccess, onCancel }: ScheduleFormProp
           <Input
             placeholder="2026-06-10T15:00:00+08:00"
             value={runAt}
-            onChange={(e) => setRunAt(e.target.value)}
+            onChange={(e) => {
+              setRunAt(e.target.value);
+              setTouchedDate(true);
+            }}
             className="font-mono"
             required
           />
@@ -298,7 +390,10 @@ export function ScheduleForm({ schedule, onSuccess, onCancel }: ScheduleFormProp
           className="flex min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
           placeholder='{"prompt": "..."}'
           value={taskConfig}
-          onChange={(e) => setTaskConfig(e.target.value)}
+          onChange={(e) => {
+            setTaskConfig(e.target.value);
+            setTouchedTaskConfig(true);
+          }}
         />
       </div>
 

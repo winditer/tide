@@ -5,6 +5,10 @@ import {
   getAgents,
   getProjects,
   getSessions,
+  fetchActiveProjects,
+  fetchActivityTimeline,
+  fetchTaskStatusDistribution,
+  fetchUpcomingSchedules,
 } from "../api/dashboard";
 import type { GetSessionsParams } from "../api/dashboard";
 
@@ -41,5 +45,37 @@ export function useSessions(params?: GetSessionsParams) {
   return useQuery({
     queryKey: ["sessions", params],
     queryFn: () => getSessions(params),
+  });
+}
+
+export function useActiveProjects(limit = 5) {
+  return useQuery({
+    queryKey: ["dashboard", "active-projects", limit],
+    queryFn: () => fetchActiveProjects(limit),
+    refetchInterval: 30000,
+  });
+}
+
+export function useActivityTimeline(limit = 15) {
+  return useQuery({
+    queryKey: ["dashboard", "activity-timeline", limit],
+    queryFn: () => fetchActivityTimeline(limit),
+    refetchInterval: 15000,
+  });
+}
+
+export function useTaskStatusDistribution() {
+  return useQuery({
+    queryKey: ["dashboard", "task-status-distribution"],
+    queryFn: fetchTaskStatusDistribution,
+    refetchInterval: 10000,
+  });
+}
+
+export function useUpcomingSchedules(limit = 5) {
+  return useQuery({
+    queryKey: ["dashboard", "upcoming-schedules", limit],
+    queryFn: () => fetchUpcomingSchedules(limit),
+    refetchInterval: 60000,
   });
 }

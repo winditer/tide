@@ -5,37 +5,32 @@ import type { WorkflowRun } from "@tide/core";
 
 const STATUS_TONE: Record<
   string,
-  { label: string; bar: string; chip: string; glyph: string }
+  { label: string; bar: string; dot: string }
 > = {
   pending: {
-    label: "PENDING",
+    label: "等待",
     bar: "bg-zinc-400",
-    chip: "bg-zinc-100 text-zinc-700 border-zinc-400",
-    glyph: "◇",
+    dot: "bg-zinc-400",
   },
   running: {
-    label: "RUNNING",
+    label: "运行中",
     bar: "bg-sky-500",
-    chip: "bg-sky-100 text-sky-800 border-sky-500",
-    glyph: "▲",
+    dot: "bg-sky-500",
   },
   completed: {
-    label: "DONE",
+    label: "完成",
     bar: "bg-emerald-600",
-    chip: "bg-emerald-100 text-emerald-800 border-emerald-600",
-    glyph: "■",
+    dot: "bg-emerald-600",
   },
   failed: {
-    label: "FAILED",
+    label: "失败",
     bar: "bg-rose-600",
-    chip: "bg-rose-100 text-rose-800 border-rose-600",
-    glyph: "✕",
+    dot: "bg-rose-600",
   },
   cancelled: {
-    label: "CANCELLED",
+    label: "已取消",
     bar: "bg-zinc-500",
-    chip: "bg-zinc-100 text-zinc-700 border-zinc-400",
-    glyph: "□",
+    dot: "bg-zinc-500",
   },
 };
 
@@ -76,30 +71,30 @@ export function RunHistory({ workflowId, runs, isLoading }: RunHistoryProps) {
   const router = useRouter();
 
   return (
-    <div className="overflow-hidden border-2 border-zinc-900 bg-white shadow-[6px_6px_0_0_rgba(24,24,27,0.92)]">
+    <div className="overflow-hidden bg-card rounded-xl shadow-card border border-border/50">
       {/* Header */}
-      <div className="flex items-center justify-between border-b-2 border-zinc-900 bg-zinc-950 px-4 py-2.5 text-white">
+      <div className="flex items-center justify-between border-b border-border/50 px-4 py-3">
         <div className="flex items-center gap-2">
-          <span className="inline-block h-2 w-2 bg-amber-400" />
-          <span className="font-mono text-[11px] tracking-[0.3em]">
-            ◴ RUN HISTORY
+          <span className="inline-block h-2 w-2 rounded-full bg-amber-500" />
+          <span className="text-xs font-medium text-foreground">
+            运行历史
           </span>
         </div>
-        <span className="font-mono text-[10px] tracking-widest text-zinc-400">
-          {runs.length} ENTRIES
+        <span className="text-[10px] text-muted-foreground">
+          {runs.length} 条记录
         </span>
       </div>
 
       {isLoading ? (
-        <div className="px-4 py-8 text-center font-mono text-xs tracking-widest text-zinc-500">
-          ◐ LOADING…
+        <div className="px-4 py-8 text-center text-xs text-muted-foreground">
+          加载中…
         </div>
       ) : runs.length === 0 ? (
         <div className="px-4 py-12 text-center">
-          <div className="font-mono text-[11px] tracking-[0.3em] text-zinc-500">
-            ◇ NO RUNS YET
+          <div className="text-xs font-medium text-muted-foreground">
+            暂无运行记录
           </div>
-          <div className="mt-2 text-xs text-zinc-500">
+          <div className="mt-2 text-xs text-muted-foreground">
             点击「运行」按钮触发首次执行
           </div>
         </div>
@@ -107,28 +102,28 @@ export function RunHistory({ workflowId, runs, isLoading }: RunHistoryProps) {
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b-2 border-zinc-900 bg-zinc-50">
-                <th className="px-3 py-2 text-left font-mono text-[10px] tracking-[0.2em] text-zinc-700">
-                  STATUS
+              <tr className="border-b border-border/50 bg-muted/30">
+                <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground">
+                  状态
                 </th>
-                <th className="px-3 py-2 text-left font-mono text-[10px] tracking-[0.2em] text-zinc-700">
-                  RUN_ID
+                <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground">
+                  运行 ID
                 </th>
-                <th className="px-3 py-2 text-left font-mono text-[10px] tracking-[0.2em] text-zinc-700">
-                  STARTED
+                <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground">
+                  开始时间
                 </th>
-                <th className="px-3 py-2 text-left font-mono text-[10px] tracking-[0.2em] text-zinc-700">
-                  FINISHED
+                <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground">
+                  结束时间
                 </th>
-                <th className="px-3 py-2 text-left font-mono text-[10px] tracking-[0.2em] text-zinc-700">
-                  DURATION
+                <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground">
+                  耗时
                 </th>
-                <th className="px-3 py-2 text-left font-mono text-[10px] tracking-[0.2em] text-zinc-700">
-                  NODES
+                <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground">
+                  节点
                 </th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="divide-y divide-border/50">
               {runs.map((r) => {
                 const tone = STATUS_TONE[r.status] ?? STATUS_TONE.pending;
                 const total = r.node_runs?.length ?? 0;
@@ -138,39 +133,37 @@ export function RunHistory({ workflowId, runs, isLoading }: RunHistoryProps) {
                 return (
                   <tr
                     key={r.id}
-                    className="cursor-pointer border-b border-zinc-200 transition-colors hover:bg-zinc-50"
+                    className="cursor-pointer transition-colors hover:bg-muted/30"
                     onClick={() =>
                       router.push(`/workflows/${workflowId}/runs/${r.id}`)
                     }
                   >
-                    <td className="px-3 py-2.5">
-                      <span
-                        className={`inline-flex items-center gap-1.5 border px-2 py-[2px] font-mono text-[10px] tracking-[0.2em] ${tone.chip}`}
-                      >
-                        <span>{tone.glyph}</span>
-                        <span>{tone.label}</span>
+                    <td className="px-4 py-2.5">
+                      <span className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted px-2 py-0.5 text-[10px] font-medium">
+                        <span className={`h-1.5 w-1.5 rounded-full ${tone.dot}`} />
+                        {tone.label}
                       </span>
                     </td>
-                    <td className="px-3 py-2.5 font-mono text-[11px] text-zinc-800">
+                    <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">
                       {r.id.slice(0, 12)}
                     </td>
-                    <td className="px-3 py-2.5 font-mono text-[11px] text-zinc-700">
+                    <td className="px-4 py-2.5 text-xs text-muted-foreground">
                       {formatTime(r.started_at)}
                     </td>
-                    <td className="px-3 py-2.5 font-mono text-[11px] text-zinc-700">
+                    <td className="px-4 py-2.5 text-xs text-muted-foreground">
                       {formatTime(r.finished_at)}
                     </td>
-                    <td className="px-3 py-2.5 font-mono text-[11px] text-zinc-900">
+                    <td className="px-4 py-2.5 font-mono text-xs text-foreground">
                       {formatDuration(r.started_at, r.finished_at)}
                     </td>
-                    <td className="px-3 py-2.5">
+                    <td className="px-4 py-2.5">
                       <div className="flex items-center gap-2">
-                        <span className="font-mono text-[11px] text-zinc-700">
+                        <span className="text-xs text-muted-foreground">
                           {done}/{total}
                         </span>
-                        <div className="h-1.5 w-20 border border-zinc-300 bg-zinc-100">
+                        <div className="h-1.5 w-20 rounded-full bg-muted">
                           <div
-                            className={`h-full ${tone.bar}`}
+                            className={`h-full rounded-full ${tone.bar}`}
                             style={{
                               width: total
                                 ? `${Math.min(

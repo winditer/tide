@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   Badge,
   Button,
@@ -97,7 +97,22 @@ function deriveProjectName(session: SessionRow): string {
 }
 
 export default function SessionsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="py-16 text-center text-sm text-muted-foreground">
+          加载中…
+        </div>
+      }
+    >
+      <SessionsPageContent />
+    </Suspense>
+  );
+}
+
+function SessionsPageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const [tab, setTab] = useState<"project" | "chat">("project");
   const [project, setProject] = useState<string>("");
@@ -105,6 +120,22 @@ export default function SessionsPage() {
   const [showArchived, setShowArchived] = useState<boolean>(false);
   const [creating, setCreating] = useState<null | "convo" | "chat">(null);
   const [pendingArchiveId, setPendingArchiveId] = useState<string | null>(null);
+  const handledActionRef = useRef(false);
+
+  // 首次进入时若 URL 携带 action=create 则自动打开创建弹窗
+  useEffect(() => {
+    if (handledActionRef.current) return;
+    const action = searchParams.get("action");
+    if (action === "create") {
+      handledActionRef.current = true;
+      setCreating(tab === "chat" ? "chat" : "convo");
+      // 清理 URL 上的 action 参数，避免刷新重复触发
+      const sp = new URLSearchParams(searchParams.toString());
+      sp.delete("action");
+      const qs = sp.toString();
+      router.replace(qs ? `/sessions?${qs}` : "/sessions", { scroll: false });
+    }
+  }, [searchParams, router, tab]);
 
   const { data: projects } = useProjects();
   const { data: agents } = useAgents();
@@ -166,17 +197,12 @@ export default function SessionsPage() {
   }, [sessions, tab]);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {/* Header */}
-      <div className="flex items-end justify-between gap-6 border-b border-zinc-200 pb-5">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <div className="font-mono text-[10px] tracking-[0.32em] text-zinc-500">
-            CHATS · /sessions
-          </div>
-          <h1 className="mt-1 font-serif text-3xl tracking-tight text-zinc-900">
-            会话
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <h1 className="text-2xl font-semibold tracking-tight">会话</h1>
+          <p className="text-sm text-muted-foreground mt-1">
             浏览本地 Agent 的项目会话与普通对话，点击进入详情。
           </p>
         </div>
@@ -189,7 +215,7 @@ export default function SessionsPage() {
       <div
         role="tablist"
         aria-label="会话类型"
-        className="inline-flex items-stretch border border-zinc-900 bg-white shadow-[3px_3px_0_0_rgba(24,24,27,0.92)]"
+        className="inline-flex items-stretch rounded-xl bg-card shadow-card overflow-hidden"
       >
         <TabButton
           active={tab === "project"}
@@ -208,9 +234,9 @@ export default function SessionsPage() {
       </div>
 
       {/* Filters */}
-      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-zinc-200 bg-zinc-50/60 px-4 py-3">
-        <span className="font-mono text-[10px] tracking-widest text-zinc-500">
-          FILTERS
+      <div className="flex flex-wrap items-center gap-3 rounded-xl bg-card shadow-card px-4 py-3">
+        <span className="text-xs uppercase tracking-widest text-muted-foreground">
+          筛选
         </span>
         {tab === "project" && (
           <div className="min-w-[220px]">
@@ -247,20 +273,20 @@ export default function SessionsPage() {
               setProject("");
               setAgentId("");
             }}
-            className="font-mono text-[10px] tracking-widest text-zinc-700 underline-offset-4 hover:underline"
+            className="text-xs text-muted-foreground hover:text-foreground transition-smooth"
           >
-            ✕ CLEAR
+            ✕ 清除
           </button>
         )}
         <button
           type="button"
           onClick={() => setShowArchived((v) => !v)}
           className={
-            "font-mono text-[10px] tracking-widest underline-offset-4 hover:underline " +
-            (showArchived ? "text-amber-700" : "text-zinc-700")
+            "text-xs transition-smooth hover:text-foreground " +
+            (showArchived ? "text-amber-600" : "text-muted-foreground")
           }
         >
-          {showArchived ? "◉ 隐藏归档" : "○ 显示归档"}
+          {showArchived ? "隐藏归档" : "显示归档"}
         </button>
         <div className="ml-auto text-xs text-muted-foreground">
           共 {data?.total ?? 0} 个{tab === "project" ? "项目会话" : "普通对话"}
@@ -298,21 +324,18 @@ export default function SessionsPage() {
               <section key={group.cwd}>
                 <header className="mb-3 flex items-baseline justify-between">
                   <div className="flex items-baseline gap-3">
-                    <span className="font-mono text-[10px] tracking-[0.28em] text-zinc-500">
-                      PROJECT
-                    </span>
-                    <h2 className="font-serif text-lg text-zinc-900">
+                    <h2 className="text-lg font-semibold tracking-tight">
                       {group.name}
                     </h2>
-                    <span className="font-mono text-[11px] text-zinc-400">
-                      {group.sessions.length} sessions
+                    <span className="text-xs text-muted-foreground">
+                      {group.sessions.length} 个会话
                     </span>
                   </div>
-                  <span className="hidden truncate font-mono text-[11px] text-zinc-400 md:block">
+                  <span className="hidden truncate font-mono text-[11px] text-muted-foreground md:block">
                     {group.cwd}
                   </span>
                 </header>
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
                   {group.sessions.map((s) => (
                     <SessionCard
                       key={`${s.session_id}-${s.source ?? "?"}`}
@@ -353,22 +376,19 @@ export default function SessionsPage() {
       ) : (
         <section>
           <header className="mb-3 flex flex-wrap items-baseline gap-3">
-            <span className="font-mono text-[10px] tracking-[0.28em] text-zinc-500">
-              CHATS
-            </span>
-            <h2 className="font-serif text-lg text-zinc-900">普通对话</h2>
-            <span className="font-mono text-[11px] text-zinc-400">
-              {flatChats.length} chats
+            <h2 className="text-lg font-semibold tracking-tight">普通对话</h2>
+            <span className="text-xs text-muted-foreground">
+              {flatChats.length} 个对话
             </span>
             <button
               type="button"
               onClick={() => setCreating("chat")}
-              className="ml-auto inline-flex items-center gap-1.5 border border-zinc-900 bg-white px-3 py-1.5 font-mono text-[10px] tracking-widest text-zinc-900 shadow-[2px_2px_0_0_rgba(24,24,27,0.92)] transition hover:-translate-x-px hover:-translate-y-px hover:shadow-[3px_3px_0_0_rgba(24,24,27,0.92)]"
+              className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-card px-3 py-1.5 text-xs shadow-card transition-smooth hover:shadow-card-hover"
             >
-              <span aria-hidden>＋</span> NEW CHAT
+              <span aria-hidden>＋</span> 新建对话
             </button>
           </header>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
             {flatChats.map((s) => (
               <SessionCard
                 key={`${s.session_id}-${s.source ?? "?"}`}
@@ -426,27 +446,27 @@ function TabButton({ active, onClick, label, sub, count }: TabButtonProps) {
       aria-selected={active}
       onClick={onClick}
       className={
-        "flex items-center gap-3 px-5 py-2.5 transition-colors focus-visible:outline-none " +
+        "flex items-center gap-3 px-5 py-2.5 transition-smooth focus-visible:outline-none " +
         (active
-          ? "bg-zinc-900 text-zinc-50"
-          : "bg-white text-zinc-700 hover:bg-zinc-100")
+          ? "bg-foreground text-background"
+          : "bg-card text-foreground hover:bg-muted/50")
       }
     >
-      <span className="font-mono text-[11px] tracking-[0.24em]">{label}</span>
+      <span className="text-sm font-medium">{label}</span>
       <span
         className={
-          "font-serif text-[12px] " +
-          (active ? "text-zinc-300" : "text-zinc-500")
+          "text-xs " +
+          (active ? "text-background/70" : "text-muted-foreground")
         }
       >
         {sub}
       </span>
       <span
         className={
-          "min-w-[1.5rem] rounded-sm px-1.5 py-0.5 text-center font-mono text-[10px] " +
+          "min-w-[1.5rem] rounded-md px-1.5 py-0.5 text-center font-mono text-[10px] " +
           (active
-            ? "bg-zinc-50 text-zinc-900"
-            : "bg-zinc-100 text-zinc-700")
+            ? "bg-background/20 text-background"
+            : "bg-muted text-foreground")
         }
       >
         {count}
@@ -471,10 +491,10 @@ function SessionCard({ session, onOpen, isArchiving, onToggleArchive }: SessionC
   return (
     <div
       className={
-        "group relative flex h-full flex-col gap-3 rounded-md border p-4 text-left transition " +
+        "group relative flex h-full flex-col gap-3 rounded-xl bg-card p-4 text-left shadow-card transition-smooth " +
         (archived
-          ? "border-zinc-300 bg-zinc-50 opacity-80 hover:border-zinc-500"
-          : "border-zinc-200 bg-white hover:border-zinc-900 hover:shadow-[3px_3px_0_0_rgba(24,24,27,0.92)]")
+          ? "opacity-70 hover:opacity-100"
+          : "hover:shadow-card-hover")
       }
     >
       <button
@@ -483,11 +503,11 @@ function SessionCard({ session, onOpen, isArchiving, onToggleArchive }: SessionC
         className="flex flex-1 flex-col gap-3 text-left focus-visible:outline-none"
       >
         <div className="flex items-start justify-between gap-3">
-          <div className="line-clamp-2 font-serif text-[15px] leading-snug text-zinc-900">
+          <div className="line-clamp-2 text-[15px] font-medium leading-snug text-foreground">
             {title}
           </div>
           {archived ? (
-            <Badge variant="outline" className="shrink-0 border-zinc-400 text-[10px] text-zinc-500">
+            <Badge variant="outline" className="shrink-0 text-[10px]">
               已归档
             </Badge>
           ) : (
@@ -501,23 +521,23 @@ function SessionCard({ session, onOpen, isArchiving, onToggleArchive }: SessionC
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           {session.agent_id && (
-            <span className="rounded border border-zinc-300 bg-zinc-50 px-1.5 py-0.5 font-mono text-[10px] tracking-wider text-zinc-700">
+            <span className="rounded-md border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] tracking-wider">
               {AGENT_LABEL[session.agent_id] ?? session.agent_id}
             </span>
           )}
-          <span className="font-mono text-[10px] text-zinc-400">
+          <span className="font-mono text-[10px]">
             {shortenId(session.session_id)}
           </span>
           {session.task_count > 0 && (
-            <span className="font-mono text-[10px] text-zinc-500">
+            <span className="font-mono text-[10px]">
               · {session.task_count} 任务
             </span>
           )}
         </div>
-        <div className="mt-auto flex items-center justify-between text-[11px] text-zinc-500">
+        <div className="mt-auto flex items-center justify-between text-xs text-muted-foreground">
           <span>{relativeTime(session.last_active)}</span>
-          <span className="font-mono tracking-widest text-zinc-400 transition group-hover:text-zinc-900">
-            OPEN →
+          <span className="transition-smooth group-hover:text-foreground">
+            打开 →
           </span>
         </div>
       </button>
@@ -530,9 +550,9 @@ function SessionCard({ session, onOpen, isArchiving, onToggleArchive }: SessionC
             e.stopPropagation();
             onToggleArchive();
           }}
-          className="absolute right-2 top-2 rounded-sm border border-zinc-300 bg-white/90 px-2 py-0.5 font-mono text-[10px] tracking-wider text-zinc-600 opacity-0 transition hover:border-amber-500 hover:text-amber-600 group-hover:opacity-100 disabled:opacity-50"
+          className="absolute right-2 top-2 rounded-md border border-border bg-background/90 px-2 py-0.5 text-[10px] text-muted-foreground opacity-0 transition-smooth hover:text-foreground group-hover:opacity-100 disabled:opacity-50"
         >
-          {isArchiving ? "…" : archived ? "UNARCHIVE" : "ARCHIVE"}
+          {isArchiving ? "…" : archived ? "取消归档" : "归档"}
         </button>
       )}
     </div>
@@ -589,7 +609,7 @@ function CreateSessionDialog({ onClose, onCreated, defaultType = "convo" }: Crea
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/60 px-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/50 px-4 backdrop-blur-sm"
       role="dialog"
       aria-modal
       onClick={onClose}
@@ -597,21 +617,22 @@ function CreateSessionDialog({ onClose, onCreated, defaultType = "convo" }: Crea
       <form
         onSubmit={handleSubmit}
         onClick={(e) => e.stopPropagation()}
-        className="relative w-full max-w-lg space-y-5 border border-zinc-900 bg-white p-6 shadow-[6px_6px_0_0_rgba(24,24,27,0.92)]"
+        className="relative w-full max-w-lg space-y-5 rounded-xl border border-border/50 bg-background p-6 shadow-2xl"
       >
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="font-mono text-[10px] tracking-[0.32em] text-zinc-500">
-              {isChat ? "NEW CHAT" : "NEW SESSION"}
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              {isChat ? "New Chat" : "New Session"}
             </div>
-            <h3 className="font-serif text-xl text-zinc-900">
+            <h3 className="mt-1 text-lg font-semibold tracking-tight text-foreground">
               {isChat ? "开启新对话" : "开启新会话"}
             </h3>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="font-mono text-xs text-zinc-500 hover:text-zinc-900"
+            aria-label="关闭"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-smooth hover:bg-muted/50 hover:text-foreground"
           >
             ✕
           </button>
@@ -621,7 +642,7 @@ function CreateSessionDialog({ onClose, onCreated, defaultType = "convo" }: Crea
         <div
           role="radiogroup"
           aria-label="会话类型"
-          className="grid grid-cols-2 border border-zinc-900 bg-white text-left"
+          className="grid grid-cols-2 gap-1 rounded-lg border border-border/50 bg-muted/30 p-1"
         >
           <TypeToggle
             active={!isChat}
@@ -639,39 +660,42 @@ function CreateSessionDialog({ onClose, onCreated, defaultType = "convo" }: Crea
           />
         </div>
 
-        <div className="space-y-3">
+        <div className="space-y-4">
           {!isChat && (
-            <div>
-              <label className="mb-1 block font-mono text-[10px] tracking-widest text-zinc-500">
-                PROJECT
+            <div className="space-y-1.5">
+              <label className="block text-sm font-medium text-foreground">
+                项目
               </label>
               {projectOptions.length > 0 ? (
                 <Select
                   value={projectCwd}
                   onChange={(e) => setProjectCwd(e.target.value)}
                   options={projectOptions}
+                  className="rounded-lg border-border/50"
                 />
               ) : (
                 <Input
                   value={projectCwd}
                   onChange={(e) => setProjectCwd(e.target.value)}
                   placeholder="/absolute/path/to/project"
+                  className="rounded-lg border-border/50"
                 />
               )}
             </div>
           )}
           {isChat && (
-            <p className="border-l-2 border-zinc-900 bg-zinc-50 px-3 py-2 font-mono text-[10px] leading-relaxed tracking-wider text-zinc-600">
+            <p className="rounded-lg border border-border/50 bg-muted/30 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
               CHAT 不绑定项目，运行于全局工作目录。适合快问快答与临时任务。
             </p>
           )}
-          <div>
-            <label className="mb-1 block font-mono text-[10px] tracking-widest text-zinc-500">
-              AGENT
+          <div className="space-y-1.5">
+            <label className="block text-sm font-medium text-foreground">
+              Agent
             </label>
             <Select
               value={agentId}
               onChange={(e) => setAgentId(e.target.value)}
+              className="rounded-lg border-border/50"
               options={
                 agentOptions.length > 0
                   ? agentOptions
@@ -683,42 +707,44 @@ function CreateSessionDialog({ onClose, onCreated, defaultType = "convo" }: Crea
               }
             />
           </div>
-          <div>
-            <label className="mb-1 block font-mono text-[10px] tracking-widest text-zinc-500">
-              TITLE / PROMPT (可选)
+          <div className="space-y-1.5">
+            <label className="block text-sm font-medium text-foreground">
+              标题 / 提示词 <span className="text-muted-foreground font-normal">(可选)</span>
             </label>
             <Input
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder={isChat ? "对话主题或首条提问" : "开场白或会话主题"}
+              className="rounded-lg border-border/50"
             />
           </div>
         </div>
 
         {create.isError && (
-          <p className="font-mono text-[11px] text-rose-600">
+          <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
             创建失败：{String(create.error)}
           </p>
         )}
 
-        <div className="flex justify-end gap-2 pt-2">
-          <Button type="button" variant="outline" onClick={onClose}>
-            取消
-          </Button>
-          <Button
-            type="submit"
-            disabled={create.isPending || !canSubmit}
+        <div className="flex items-center justify-between gap-3 pt-1">
+          <Link
+            href="/projects"
+            className="text-xs text-muted-foreground transition-smooth hover:text-foreground hover:underline"
           >
-            {create.isPending ? "创建中…" : isChat ? "▶ 开启对话" : "▶ 创建会话"}
-          </Button>
+            管理项目 →
+          </Link>
+          <div className="flex gap-2">
+            <Button type="button" variant="outline" onClick={onClose}>
+              取消
+            </Button>
+            <Button
+              type="submit"
+              disabled={create.isPending || !canSubmit}
+            >
+              {create.isPending ? "创建中…" : isChat ? "开启对话" : "创建会话"}
+            </Button>
+          </div>
         </div>
-
-        <Link
-          href="/projects"
-          className="block text-right font-mono text-[10px] tracking-widest text-zinc-500 hover:underline"
-        >
-          管理项目 →
-        </Link>
       </form>
     </div>
   );
@@ -740,25 +766,25 @@ function TypeToggle({ active, onClick, code, label, hint }: TypeToggleProps) {
       aria-checked={active}
       onClick={onClick}
       className={
-        "flex flex-col gap-1 px-4 py-3 text-left transition-colors focus-visible:outline-none " +
+        "flex flex-col gap-1 rounded-md px-4 py-2.5 text-left transition-smooth focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring " +
         (active
-          ? "bg-zinc-900 text-zinc-50"
-          : "bg-white text-zinc-700 hover:bg-zinc-100")
+          ? "bg-background text-foreground shadow-sm"
+          : "bg-transparent text-muted-foreground hover:text-foreground")
       }
     >
       <span
         className={
-          "font-mono text-[10px] tracking-[0.32em] " +
-          (active ? "text-zinc-300" : "text-zinc-500")
+          "text-[10px] font-medium uppercase tracking-[0.18em] " +
+          (active ? "text-muted-foreground" : "text-muted-foreground/70")
         }
       >
         {code}
       </span>
-      <span className="font-serif text-base leading-none">{label}</span>
+      <span className="text-sm font-medium leading-none">{label}</span>
       <span
         className={
-          "font-mono text-[10px] tracking-wider " +
-          (active ? "text-zinc-400" : "text-zinc-500")
+          "text-[11px] " +
+          (active ? "text-muted-foreground" : "text-muted-foreground/70")
         }
       >
         {hint}

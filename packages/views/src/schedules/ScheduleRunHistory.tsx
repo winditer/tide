@@ -39,54 +39,68 @@ function calcDuration(started: string, finished: string | null): string {
 }
 
 interface ScheduleRunHistoryProps {
-  runs: ScheduleRun[];
+  runs: ScheduleRun[] | { items: ScheduleRun[] } | null | undefined;
 }
 
 export function ScheduleRunHistory({ runs }: ScheduleRunHistoryProps) {
-  if (runs.length === 0) {
+  // 后端可能返回数组或 { items: [...] } 包装体，这里统一做防护。
+  const safeRuns: ScheduleRun[] = Array.isArray(runs)
+    ? runs
+    : Array.isArray((runs as { items?: ScheduleRun[] } | null | undefined)?.items)
+      ? (runs as { items: ScheduleRun[] }).items
+      : [];
+
+  if (safeRuns.length === 0) {
     return (
-      <div className="py-8 text-center text-muted-foreground">
-        暂无执行记录
+      <div className="bg-card rounded-xl shadow-card overflow-hidden">
+        <div className="py-12 text-center text-sm text-muted-foreground">
+          暂无执行记录
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b text-left text-muted-foreground">
-            <th className="px-3 py-3 font-medium">状态</th>
-            <th className="px-3 py-3 font-medium">开始时间</th>
-            <th className="px-3 py-3 font-medium">结束时间</th>
-            <th className="px-3 py-3 font-medium">耗时</th>
-            <th className="px-3 py-3 font-medium">错误信息</th>
-          </tr>
-        </thead>
-        <tbody>
-          {runs.map((run) => (
-            <tr key={run.id} className="border-b">
-              <td className="px-3 py-3">
-                <Badge variant={STATUS_VARIANT[run.status] ?? "outline"}>
-                  {STATUS_LABEL[run.status] ?? run.status}
-                </Badge>
-              </td>
-              <td className="px-3 py-3 text-muted-foreground">
-                {formatTime(run.started_at)}
-              </td>
-              <td className="px-3 py-3 text-muted-foreground">
-                {formatTime(run.finished_at)}
-              </td>
-              <td className="px-3 py-3 font-mono text-xs">
-                {calcDuration(run.started_at, run.finished_at)}
-              </td>
-              <td className="max-w-[200px] truncate px-3 py-3 text-xs text-destructive">
-                {run.error || "—"}
-              </td>
+    <div className="bg-card rounded-xl shadow-card overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border/50 bg-muted/30 text-left text-xs uppercase tracking-wider text-muted-foreground">
+              <th className="px-4 py-3 font-medium">状态</th>
+              <th className="px-4 py-3 font-medium">开始时间</th>
+              <th className="px-4 py-3 font-medium">结束时间</th>
+              <th className="px-4 py-3 font-medium">耗时</th>
+              <th className="px-4 py-3 font-medium">错误信息</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody className="divide-y divide-border/50">
+            {safeRuns.map((run) => (
+              <tr
+                key={run.id}
+                className="hover:bg-muted/50 transition-smooth"
+              >
+                <td className="px-4 py-3">
+                  <Badge variant={STATUS_VARIANT[run.status] ?? "outline"}>
+                    {STATUS_LABEL[run.status] ?? run.status}
+                  </Badge>
+                </td>
+                <td className="px-4 py-3 text-muted-foreground">
+                  {formatTime(run.started_at)}
+                </td>
+                <td className="px-4 py-3 text-muted-foreground">
+                  {formatTime(run.finished_at)}
+                </td>
+                <td className="px-4 py-3 font-mono text-xs">
+                  {calcDuration(run.started_at, run.finished_at)}
+                </td>
+                <td className="max-w-[200px] truncate px-4 py-3 text-xs text-destructive">
+                  {run.error || "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

@@ -13,32 +13,27 @@ import { WorkflowRunView, WorkflowNodeRunList } from "@tide/views";
 
 const STATUS_TONE: Record<
   string,
-  { label: string; chip: string; glyph: string }
+  { label: string; dot: string }
 > = {
   pending: {
-    label: "PENDING",
-    chip: "bg-zinc-100 text-zinc-700 border-zinc-400",
-    glyph: "◇",
+    label: "等待",
+    dot: "bg-zinc-400",
   },
   running: {
-    label: "RUNNING",
-    chip: "bg-sky-100 text-sky-800 border-sky-500",
-    glyph: "▲",
+    label: "运行中",
+    dot: "bg-sky-500",
   },
   completed: {
-    label: "DONE",
-    chip: "bg-emerald-100 text-emerald-800 border-emerald-600",
-    glyph: "■",
+    label: "完成",
+    dot: "bg-emerald-600",
   },
   failed: {
-    label: "FAILED",
-    chip: "bg-rose-100 text-rose-800 border-rose-600",
-    glyph: "✕",
+    label: "失败",
+    dot: "bg-rose-600",
   },
   cancelled: {
-    label: "CANCELLED",
-    chip: "bg-zinc-100 text-zinc-700 border-zinc-400",
-    glyph: "□",
+    label: "已取消",
+    dot: "bg-zinc-500",
   },
 };
 
@@ -66,8 +61,8 @@ export default function WorkflowRunDetailPage() {
   if (isLoading || !runDetail || !workflow) {
     return (
       <div className="flex h-full items-center justify-center">
-        <div className="font-mono text-xs tracking-widest text-zinc-500">
-          ◐ LOADING RUN…
+        <div className="text-xs text-muted-foreground">
+          加载运行详情中…
         </div>
       </div>
     );
@@ -86,41 +81,39 @@ export default function WorkflowRunDetailPage() {
   return (
     <div className="flex h-[calc(100vh-7rem)] flex-col gap-4">
       {/* Header */}
-      <div className="flex items-center justify-between border-2 border-zinc-900 bg-white px-4 py-3 shadow-[5px_5px_0_0_rgba(24,24,27,0.92)]">
+      <div className="flex items-center justify-between bg-card rounded-xl shadow-card px-5 py-4">
         <div className="min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <button
               onClick={() => router.push("/workflows")}
-              className="font-mono text-[11px] tracking-widest text-zinc-500 hover:text-zinc-900"
+              className="hover:text-foreground transition-smooth"
             >
-              ◀ WORKFLOWS
+              工作流
             </button>
-            <span className="font-mono text-[11px] text-zinc-300">/</span>
+            <span>/</span>
             <button
               onClick={() => router.push(`/workflows/${id}`)}
-              className="font-mono text-[11px] tracking-widest text-zinc-500 hover:text-zinc-900"
+              className="hover:text-foreground transition-smooth"
             >
-              {workflow.name.toUpperCase()}
+              {workflow.name}
             </button>
-            <span className="font-mono text-[11px] text-zinc-300">/</span>
-            <span className="font-mono text-[11px] tracking-widest text-zinc-700">
-              RUN
+            <span>/</span>
+            <span className="text-foreground">
+              运行
             </span>
           </div>
-          <div className="mt-0.5 flex items-center gap-2">
-            <h1 className="truncate text-xl font-black tracking-tight text-zinc-900">
+          <div className="mt-1 flex items-center gap-2">
+            <h1 className="truncate text-xl font-semibold tracking-tight">
               Run {rid.slice(0, 12)}
             </h1>
-            <span
-              className={`inline-flex items-center gap-1.5 border px-2 py-[2px] font-mono text-[10px] tracking-[0.2em] ${tone.chip}`}
-            >
-              <span>{tone.glyph}</span>
-              <span>{tone.label}</span>
+            <span className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted px-2 py-0.5 text-[10px] font-medium">
+              <span className={`h-1.5 w-1.5 rounded-full ${tone.dot}`} />
+              {tone.label}
             </span>
           </div>
-          <div className="mt-1 flex items-center gap-3 font-mono text-[10px] text-zinc-600">
-            <span>▸ {formatTime(runDetail.started_at)}</span>
-            <span>◂ {formatTime(runDetail.finished_at)}</span>
+          <div className="mt-1 flex items-center gap-3 text-xs text-muted-foreground">
+            <span>开始 {formatTime(runDetail.started_at)}</span>
+            <span>结束 {formatTime(runDetail.finished_at)}</span>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -165,16 +158,16 @@ export default function WorkflowRunDetailPage() {
           />
 
           {/* Input context */}
-          <div className="mt-4 overflow-hidden border-2 border-zinc-900 bg-white shadow-[6px_6px_0_0_rgba(24,24,27,0.92)]">
-            <div className="border-b-2 border-zinc-900 bg-zinc-950 px-4 py-2.5 text-white">
+          <div className="mt-4 overflow-hidden bg-card rounded-xl shadow-card border border-border/50">
+            <div className="border-b border-border/50 px-4 py-3">
               <div className="flex items-center gap-2">
-                <span className="inline-block h-2 w-2 bg-violet-400" />
-                <span className="font-mono text-[11px] tracking-[0.3em]">
-                  ◴ INPUT CONTEXT
+                <span className="inline-block h-2 w-2 rounded-full bg-violet-500" />
+                <span className="text-xs font-medium text-foreground">
+                  输入上下文
                 </span>
               </div>
             </div>
-            <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words bg-zinc-950 p-3 font-mono text-[11px] leading-relaxed text-emerald-200">
+            <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words bg-zinc-950 p-3 font-mono text-[11px] leading-relaxed text-emerald-200 rounded-b-xl">
               {JSON.stringify(runDetail.input_context ?? {}, null, 2)}
             </pre>
           </div>

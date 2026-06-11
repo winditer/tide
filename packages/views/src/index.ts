@@ -10,6 +10,15 @@ export { AgentPanel } from "./dashboard/AgentPanel";
 export { QuickInput } from "./dashboard/QuickInput";
 export { FloatingChat } from "./dashboard/FloatingChat";
 export { ChatMessageList } from "./dashboard/ChatMessageList";
+export { QuickActions } from "./dashboard/QuickActions";
+export { ActiveProjects } from "./dashboard/ActiveProjects";
+export { ActivityTimeline } from "./dashboard/ActivityTimeline";
+export { TaskStatusChart } from "./dashboard/TaskStatusChart";
+export { UpcomingSchedules } from "./dashboard/UpcomingSchedules";
+export {
+  formatRelativeTime,
+  formatAbsoluteTime,
+} from "./dashboard/format-time";
 
 export { Sidebar } from "./layout/Sidebar";
 export { Header } from "./layout/Header";

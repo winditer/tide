@@ -19,7 +19,7 @@ export function KanbanBoard({ columns, onDragEnd }: KanbanBoardProps) {
 
   return (
     <DragDropContext onDragEnd={onDragEnd}>
-      <div className="flex gap-4 overflow-x-auto pb-4">
+      <div className="flex gap-5 overflow-x-auto pb-4">
         {safeColumns.map((column) => (
           <BoardColumn key={column.id} column={column} />
         ))}

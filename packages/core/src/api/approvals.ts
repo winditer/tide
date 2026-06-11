@@ -76,24 +76,34 @@ export function getApproval(id: string): Promise<Approval> {
 
 export function approveApproval(
   id: string,
-  operatorId?: string
+  operatorId?: string,
+  comment?: string
 ): Promise<ApprovalActionResponse> {
   const qs = operatorId
     ? `?operator_id=${encodeURIComponent(operatorId)}`
     : "";
+  const body: Record<string, string> = {};
+  if (operatorId) body.operator_id = operatorId;
+  if (comment !== undefined && comment !== null) body.comment = comment;
   return apiClient.post<ApprovalActionResponse>(
-    `/api/approvals/${id}/approve${qs}`
+    `/api/approvals/${id}/approve${qs}`,
+    Object.keys(body).length > 0 ? body : undefined
   );
 }
 
 export function rejectApproval(
   id: string,
-  operatorId?: string
+  operatorId?: string,
+  comment?: string
 ): Promise<ApprovalActionResponse> {
   const qs = operatorId
     ? `?operator_id=${encodeURIComponent(operatorId)}`
     : "";
+  const body: Record<string, string> = {};
+  if (operatorId) body.operator_id = operatorId;
+  if (comment !== undefined && comment !== null) body.comment = comment;
   return apiClient.post<ApprovalActionResponse>(
-    `/api/approvals/${id}/reject${qs}`
+    `/api/approvals/${id}/reject${qs}`,
+    Object.keys(body).length > 0 ? body : undefined
   );
 }

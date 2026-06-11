@@ -191,6 +191,10 @@ class TaskService:
         task_id = str(uuid.uuid4())
         now = self._now_iso()
 
+        # Fallback empty agent_id to default
+        if not agent_id:
+            agent_id = "codex"
+
         if agent_id not in AGENT_ADAPTERS:
             choices = ", ".join(sorted(AGENT_ADAPTERS))
             raise ValueError(f"Unsupported agent_id: {agent_id!r}. Available agents: {choices}")
