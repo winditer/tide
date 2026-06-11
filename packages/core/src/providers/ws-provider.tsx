@@ -12,6 +12,7 @@ import {
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { TaskEvent } from "../types/task";
+import { getAccessToken } from "../stores/auth-store";
 
 type WsStatus = "connecting" | "connected" | "disconnected";
 
@@ -33,7 +34,7 @@ export function useWs(): WsContextValue {
 
 export { WsContext };
 
-function getWsUrl(): string {
+function getWsBaseUrl(): string {
   if (process.env.NEXT_PUBLIC_WS_URL) {
     return process.env.NEXT_PUBLIC_WS_URL;
   }
@@ -42,6 +43,15 @@ function getWsUrl(): string {
   }
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${protocol}//${window.location.host}/ws`;
+}
+
+function getWsUrl(): string {
+  const base = getWsBaseUrl();
+  if (!base) return "";
+  const token = getAccessToken();
+  if (!token) return base;
+  const separator = base.includes("?") ? "&" : "?";
+  return `${base}${separator}token=${encodeURIComponent(token)}`;
 }
 
 const HEARTBEAT_INTERVAL = 30_000;

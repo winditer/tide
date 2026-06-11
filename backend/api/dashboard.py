@@ -6,9 +6,13 @@ from datetime import date
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import text
 
+from backend.core.dependencies import (
+    get_accessible_project_ids,
+    get_optional_user,
+)
 from backend.db.engine import async_session_factory
 from backend.services.session_discovery import discover_sessions
 
@@ -23,6 +27,15 @@ router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 def _encode_project_id(cwd: str) -> str:
     """与 backend/api/projects.py 保持一致的 base64 url-safe 编码。"""
     return base64.urlsafe_b64encode((cwd or "").encode()).decode().rstrip("=")
+
+
+def _decode_project_id(pid: str) -> Optional[str]:
+    """将 encode_project_id 反解为原始 cwd。失败返回 None。"""
+    try:
+        padded = pid + "=" * (-len(pid) % 4)
+        return base64.urlsafe_b64decode(padded.encode()).decode()
+    except Exception:
+        return None
 
 
 def _project_name_from_cwd(cwd: str) -> str:
@@ -52,8 +65,42 @@ def _load_registered_projects() -> dict[str, dict]:
     }
 
 
+def _build_cwd_filter(
+    accessible_pids: Optional[set[str]],
+    column: str = "cwd",
+    prefix: str = "acwd",
+) -> tuple[str, dict, Optional[set[str]]]:
+    """构造按 cwd 过滤的 SQL 片段。
+
+    返回 ``(sql_fragment, params, allowed_cwds)``：
+    - ``accessible_pids`` 为 ``None`` 时不限制（admin/匿名），返回空片段。
+    - ``accessible_pids`` 为空集合时返回 ``" AND 1=0"`` 永假条件。
+    - 否则返回 ``" AND <column> IN (...)"`` 片段及绑定参数。
+
+    ``allowed_cwds`` 提供给 Python 侧（如文件会话过滤）使用，
+    与 SQL 片段保持一致；为 ``None`` 表示不限制。
+    """
+    if accessible_pids is None:
+        return "", {}, None
+    if not accessible_pids:
+        return " AND 1=0", {}, set()
+    cwds: list[str] = []
+    for pid in accessible_pids:
+        cwd = _decode_project_id(pid)
+        if cwd:
+            cwds.append(cwd)
+    if not cwds:
+        return " AND 1=0", {}, set()
+    placeholders = ",".join(f":{prefix}{i}" for i in range(len(cwds)))
+    params = {f"{prefix}{i}": cwd for i, cwd in enumerate(cwds)}
+    return f" AND {column} IN ({placeholders})", params, set(cwds)
+
+
 @router.get("/stats")
-async def get_stats(workspace_id: str = "default"):
+async def get_stats(
+    workspace_id: str = "default",
+    current_user=Depends(get_optional_user),
+):
     """统计数据：运行中 / 排队中 / 待审批 / 今日完成。
 
     数据源说明：
@@ -63,25 +110,39 @@ async def get_stats(workspace_id: str = "default"):
       统计今日 ``last_active`` 的会话数（每完结一次对话即视为一次完成），
       并叠加 DB 中今日 ``completed_at`` 的任务数，避免双重数据源遗漏。
     """
+    accessible_pids = await get_accessible_project_ids(current_user)
+    cwd_clause, cwd_params, allowed_cwds = _build_cwd_filter(accessible_pids)
+
     async with async_session_factory() as session:
         r = await session.execute(
-            text("SELECT COUNT(*) FROM tasks WHERE workspace_id = :ws AND status = 'running'"),
-            {"ws": workspace_id},
+            text(
+                "SELECT COUNT(*) FROM tasks WHERE workspace_id = :ws"
+                f" AND status = 'running'{cwd_clause}"
+            ),
+            {"ws": workspace_id, **cwd_params},
         )
         running = r.scalar() or 0
 
         r = await session.execute(
-            text("SELECT COUNT(*) FROM tasks WHERE workspace_id = :ws AND status = 'queued'"),
-            {"ws": workspace_id},
+            text(
+                "SELECT COUNT(*) FROM tasks WHERE workspace_id = :ws"
+                f" AND status = 'queued'{cwd_clause}"
+            ),
+            {"ws": workspace_id, **cwd_params},
         )
         queued = r.scalar() or 0
 
         r = await session.execute(
             text(
-                "SELECT COUNT(*) FROM approvals WHERE workspace_id = :ws AND status = 'pending'"
-                " AND task_id IN (SELECT id FROM tasks WHERE status IN ('review', 'pending', 'running'))"
+                "SELECT COUNT(*) FROM approvals a"
+                " WHERE a.workspace_id = :ws AND a.status = 'pending'"
+                " AND a.task_id IN ("
+                "   SELECT id FROM tasks"
+                "   WHERE status IN ('review', 'pending', 'running')"
+                f"   {cwd_clause}"
+                " )"
             ),
-            {"ws": workspace_id},
+            {"ws": workspace_id, **cwd_params},
         )
         pending_approval = r.scalar() or 0
 
@@ -89,8 +150,9 @@ async def get_stats(workspace_id: str = "default"):
             text(
                 "SELECT COUNT(*) FROM tasks WHERE workspace_id = :ws"
                 " AND status = 'completed' AND DATE(completed_at) = DATE('now')"
+                f"{cwd_clause}"
             ),
-            {"ws": workspace_id},
+            {"ws": workspace_id, **cwd_params},
         )
         db_completed_today = r.scalar() or 0
 
@@ -98,9 +160,13 @@ async def get_stats(workspace_id: str = "default"):
     today_iso = date.today().isoformat()
     try:
         all_sessions = discover_sessions()
-        file_completed_today = sum(
-            1 for s in all_sessions if (s.get("last_active") or "").startswith(today_iso)
-        )
+        file_completed_today = 0
+        for s in all_sessions:
+            if not (s.get("last_active") or "").startswith(today_iso):
+                continue
+            if allowed_cwds is not None and (s.get("cwd") or "") not in allowed_cwds:
+                continue
+            file_completed_today += 1
     except Exception:
         file_completed_today = 0
 
@@ -116,23 +182,29 @@ async def get_stats(workspace_id: str = "default"):
 
 @router.get("/recent-tasks")
 async def get_recent_tasks(
-    workspace_id: str = "default", limit: int = Query(10, ge=1, le=50)
+    workspace_id: str = "default",
+    limit: int = Query(10, ge=1, le=50),
+    current_user=Depends(get_optional_user),
 ):
     """最近任务列表：合并 DB tasks 与本地 Agent 会话发现结果。
 
     DB tasks 仅记录 Web 工作台显式创建的任务；本地 Agent 会话（codex/claude/qoder）
-    通过 session_discovery 实时发现，对用户来说同样是"最近完成的任务"。
+    通过 session_discovery 实时发现，对用户来说同样是“最近完成的任务”。
     两者按时间倒序合并去重后返回前 ``limit`` 条。
     """
+    accessible_pids = await get_accessible_project_ids(current_user)
+    cwd_clause, cwd_params, allowed_cwds = _build_cwd_filter(accessible_pids)
+
     async with async_session_factory() as session:
         r = await session.execute(
             text(
                 "SELECT id, prompt, agent_id, model, status, created_at,"
                 " started_at, completed_at, duration_ms, session_id"
                 " FROM tasks WHERE workspace_id = :ws"
+                f"{cwd_clause}"
                 " ORDER BY created_at DESC LIMIT :limit"
             ),
-            {"ws": workspace_id, "limit": limit},
+            {"ws": workspace_id, "limit": limit, **cwd_params},
         )
         rows = r.fetchall()
 
@@ -162,7 +234,7 @@ async def get_recent_tasks(
             }
         )
 
-    # 合并文件会话：将本地 Agent 会话纳入"最近任务"列表
+    # 合并文件会话：将本地 Agent 会话纳入“最近任务”列表
     try:
         sessions = discover_sessions(limit=limit * 2)
     except Exception:
@@ -171,6 +243,8 @@ async def get_recent_tasks(
     for s in sessions:
         sid = s.get("session_id") or s.get("id") or ""
         if not sid or sid in seen_ids or sid in seen_session_ids:
+            continue
+        if allowed_cwds is not None and (s.get("cwd") or "") not in allowed_cwds:
             continue
         seen_ids.add(sid)
         tasks.append(
@@ -227,6 +301,7 @@ _TIMELINE_EVENT_TYPES: tuple[str, ...] = (
 async def get_active_projects(
     workspace_id: str = "default",
     limit: int = Query(5, ge=1, le=50),
+    current_user=Depends(get_optional_user),
 ):
     """最近活跃项目列表。
 
@@ -234,11 +309,14 @@ async def get_active_projects(
     详见 ``backend/api/projects.py``。这里按 ``cwd`` 聚合，输出与用户请求
     一致的字段集（id/name/description/task_count/last_active/running_count）。
     """
+    accessible_pids = await get_accessible_project_ids(current_user)
+    cwd_clause, cwd_params, _ = _build_cwd_filter(accessible_pids)
+
     try:
         async with async_session_factory() as session:
             r = await session.execute(
                 text(
-                    """
+                    f"""
                     SELECT cwd,
                            COUNT(*) AS task_count,
                            SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running,
@@ -246,12 +324,13 @@ async def get_active_projects(
                     FROM tasks
                     WHERE workspace_id = :ws
                       AND cwd IS NOT NULL AND cwd != ''
+                      {cwd_clause}
                     GROUP BY cwd
                     ORDER BY last_active DESC NULLS LAST
                     LIMIT :limit
                     """
                 ),
-                {"ws": workspace_id, "limit": limit},
+                {"ws": workspace_id, "limit": limit, **cwd_params},
             )
             rows = r.fetchall()
     except Exception as exc:  # 表不存在 / DB 未初始化 → 返回空列表
@@ -280,6 +359,7 @@ async def get_active_projects(
 async def get_activity_timeline(
     workspace_id: str = "default",
     limit: int = Query(15, ge=1, le=100),
+    current_user=Depends(get_optional_user),
 ):
     """最近系统活动事件时间线（按 task_events.created_at DESC）。
 
@@ -287,8 +367,13 @@ async def get_activity_timeline(
     的路径末段，与 ``backend/api/projects.py`` 的项目命名策略保持一致）。
     若 ``task_events`` 表不存在或查询异常，返回空列表而非报错。
     """
+    accessible_pids = await get_accessible_project_ids(current_user)
+    cwd_clause, cwd_params, _ = _build_cwd_filter(
+        accessible_pids, column="t.cwd"
+    )
+
     placeholders = ",".join(f":t{i}" for i in range(len(_TIMELINE_EVENT_TYPES)))
-    params: dict = {"ws": workspace_id, "limit": limit}
+    params: dict = {"ws": workspace_id, "limit": limit, **cwd_params}
     for i, et in enumerate(_TIMELINE_EVENT_TYPES):
         params[f"t{i}"] = et
 
@@ -306,6 +391,7 @@ async def get_activity_timeline(
                         e.event_type IN ({placeholders})
                         OR e.event_type LIKE 'status_changed:%'
                       )
+                      {cwd_clause}
                     ORDER BY e.created_at DESC
                     LIMIT :limit
                     """
@@ -348,7 +434,10 @@ async def get_activity_timeline(
 
 
 @router.get("/task-status-distribution")
-async def get_task_status_distribution(workspace_id: str = "default"):
+async def get_task_status_distribution(
+    workspace_id: str = "default",
+    current_user=Depends(get_optional_user),
+):
     """任务状态分布。
 
     默认返回完整状态集（queued/running/completed/failed/cancelled/review）以便
@@ -362,14 +451,17 @@ async def get_task_status_distribution(workspace_id: str = "default"):
         "cancelled": 0,
         "review": 0,
     }
+    accessible_pids = await get_accessible_project_ids(current_user)
+    cwd_clause, cwd_params, _ = _build_cwd_filter(accessible_pids)
+
     try:
         async with async_session_factory() as session:
             r = await session.execute(
                 text(
                     "SELECT status, COUNT(*) FROM tasks"
-                    " WHERE workspace_id = :ws GROUP BY status"
+                    f" WHERE workspace_id = :ws{cwd_clause} GROUP BY status"
                 ),
-                {"ws": workspace_id},
+                {"ws": workspace_id, **cwd_params},
             )
             rows = r.fetchall()
     except Exception as exc:
@@ -387,6 +479,7 @@ async def get_task_status_distribution(workspace_id: str = "default"):
 async def get_upcoming_schedules(
     workspace_id: str = "default",
     limit: int = Query(5, ge=1, le=50),
+    current_user=Depends(get_optional_user),
 ):
     """即将执行的定时调度。
 
@@ -394,13 +487,20 @@ async def get_upcoming_schedules(
     ``next_run_at`` 字段；如 scheduler 未启动或 job 已被移除则回退到
     DB 记录。返回按 ``next_run_at ASC`` 排序、空值后置。
     """
+    accessible_pids = await get_accessible_project_ids(current_user)
+    # schedules 的 cwd 存在 task_config (JSON) 中，无法在 SQL 直接过滤。
+    # 这里读出后在 Python 侧按 task_config.cwd 过滤，与
+    # backend/api/schedules.py::list_schedules 保持一致策略。
+    if accessible_pids is not None and not accessible_pids:
+        return []
+
     try:
         async with async_session_factory() as session:
             r = await session.execute(
                 text(
                     """
                     SELECT id, name, trigger_type, next_run_at, last_run_at,
-                           enabled, run_count
+                           enabled, run_count, task_config
                     FROM schedules
                     WHERE workspace_id = :ws AND enabled = 1
                     """
@@ -428,6 +528,21 @@ async def get_upcoming_schedules(
     items: list[dict] = []
     for row in rows:
         sid = row[0]
+        # 项目级权限过滤：解析 task_config.cwd 后比对 accessible_pids
+        if accessible_pids is not None:
+            raw_cfg = row[7]
+            cfg: dict = {}
+            if isinstance(raw_cfg, str) and raw_cfg:
+                try:
+                    cfg = json.loads(raw_cfg) or {}
+                except (TypeError, ValueError):
+                    cfg = {}
+            elif isinstance(raw_cfg, dict):
+                cfg = raw_cfg
+            cwd = cfg.get("cwd") if isinstance(cfg, dict) else ""
+            if not cwd or _encode_project_id(cwd) not in accessible_pids:
+                continue
+
         next_run_at = next_run_map.get(sid) or row[3]
         items.append(
             {

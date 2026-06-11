@@ -60,6 +60,12 @@ interface SidebarProps {
   onClose: () => void;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
+  /**
+   * Whether the user can access /settings (currently admin-only).
+   * When false the entry is hidden. Defaults to true to keep behaviour
+   * backward compatible for unauthenticated/local-only setups.
+   */
+  showSettings?: boolean;
 }
 
 function isActive(pathname: string, href: string) {
@@ -67,7 +73,7 @@ function isActive(pathname: string, href: string) {
   return pathname.startsWith(href);
 }
 
-export function Sidebar({ open, onClose, collapsed = false, onToggleCollapse }: SidebarProps) {
+export function Sidebar({ open, onClose, collapsed = false, onToggleCollapse, showSettings = true }: SidebarProps) {
   const pathname = usePathname();
 
   return (
@@ -174,24 +180,26 @@ export function Sidebar({ open, onClose, collapsed = false, onToggleCollapse }: 
 
         {/* Footer */}
         <div className="shrink-0 space-y-0.5 border-t border-white/10 p-3">
-          <Link
-            href="/settings"
-            title={collapsed ? "设置" : undefined}
-            className={cn(
-              "group relative flex items-center gap-3 rounded-md py-2 text-sm text-white/70 transition-smooth hover:bg-white/10 hover:text-white",
-              collapsed ? "px-3 lg:justify-center lg:px-0" : "px-3",
-              isActive(pathname, "/settings") && "bg-white/15 font-medium text-white"
-            )}
-          >
-            {isActive(pathname, "/settings") && (
-              <span
-                aria-hidden
-                className="absolute left-0 top-1/2 h-5 w-[2px] -translate-y-1/2 rounded-r-full bg-[hsl(238_76%_62%)]"
-              />
-            )}
-            <Settings className="h-4 w-4 shrink-0 text-white/60 group-hover:text-white" strokeWidth={2} />
-            <span className={cn(collapsed && "lg:hidden")}>设置</span>
-          </Link>
+          {showSettings && (
+            <Link
+              href="/settings"
+              title={collapsed ? "设置" : undefined}
+              className={cn(
+                "group relative flex items-center gap-3 rounded-md py-2 text-sm text-white/70 transition-smooth hover:bg-white/10 hover:text-white",
+                collapsed ? "px-3 lg:justify-center lg:px-0" : "px-3",
+                isActive(pathname, "/settings") && "bg-white/15 font-medium text-white"
+              )}
+            >
+              {isActive(pathname, "/settings") && (
+                <span
+                  aria-hidden
+                  className="absolute left-0 top-1/2 h-5 w-[2px] -translate-y-1/2 rounded-r-full bg-[hsl(238_76%_62%)]"
+                />
+              )}
+              <Settings className="h-4 w-4 shrink-0 text-white/60 group-hover:text-white" strokeWidth={2} />
+              <span className={cn(collapsed && "lg:hidden")}>设置</span>
+            </Link>
+          )}
         </div>
       </aside>
     </>

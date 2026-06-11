@@ -18,14 +18,16 @@ import binascii
 import json
 import os
 import threading
-from datetime import datetime
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import text
 
+from backend.core.dependencies import get_optional_user
 from backend.db.engine import async_session_factory
 from backend.models.schemas import ProjectSettingsResponse, ProjectSettingsUpdate
 from backend.services import project_discovery
@@ -38,6 +40,12 @@ from backend.services.session_discovery import (
 from backend.services.work_item_service import work_item_service
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
+
+
+def _ensure_not_viewer(current_user: Optional[dict]) -> None:
+    """写操作权限检查：viewer 角色禁止修改资源。"""
+    if current_user and current_user.get("role") == "viewer":
+        raise HTTPException(status_code=403, detail="Viewers cannot modify resources")
 
 
 # ---------- 已注册项目（用户主动新建/添加的目录） ----------
@@ -248,6 +256,7 @@ async def list_projects(
     show_archived: Optional[bool] = Query(
         None, description="是否包含已归档项目；缺省读取 TIDE_SHOW_ARCHIVED"
     ),
+    current_user=Depends(get_optional_user),
 ):
     """项目列表 — 文件发现 + DB 聚合 + 已注册项目合并。
 
@@ -285,11 +294,21 @@ async def list_projects(
     include_archived = resolve_show_archived(show_archived)
     archived_ids = set(archive_store.list_archived_projects())
 
+    # 项目级权限过滤：非 admin 用户只能看到其可访问的项目
+    accessible_pids: Optional[set[str]] = None
+    if current_user and current_user.get("role") != "admin":
+        from backend.services.auth_service import auth_service
+        accessible = await auth_service.get_user_accessible_projects(current_user["id"])
+        if "*" not in accessible:
+            accessible_pids = set(accessible)
+
     projects: list[dict] = []
     for cwd in cwds:
         pid = _encode_id(cwd)
         is_archived = pid in archived_ids
         if is_archived and not include_archived:
+            continue
+        if accessible_pids is not None and pid not in accessible_pids:
             continue
         projects.append(
             _project_payload(
@@ -307,8 +326,12 @@ async def list_projects(
 
 
 @router.post("")
-async def create_project(body: ProjectCreate):
+async def create_project(
+    body: ProjectCreate,
+    current_user=Depends(get_optional_user),
+):
     """注册项目（告诉系统关注某个目录，不会执行 git init）。"""
+    _ensure_not_viewer(current_user)
     raw_cwd = (body.cwd or "").strip()
     if not raw_cwd:
         raise HTTPException(status_code=400, detail="cwd is required")
@@ -340,6 +363,31 @@ async def create_project(body: ProjectCreate):
 
     project_discovery.clear_cache()
 
+    project_id = _encode_id(cwd)
+
+    # 创建者自动成为项目 admin，以便后续项目级权限过滤生效
+    if current_user:
+        member_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        async with async_session_factory() as session:
+            await session.execute(
+                text(
+                    """
+                    INSERT OR IGNORE INTO project_members
+                        (id, project_id, user_id, role, created_at)
+                    VALUES (:id, :project_id, :user_id, :role, :created_at)
+                    """
+                ),
+                {
+                    "id": member_id,
+                    "project_id": project_id,
+                    "user_id": current_user["id"],
+                    "role": "admin",
+                    "created_at": now,
+                },
+            )
+            await session.commit()
+
     discovered_list = project_discovery.discover_projects()
     discovered = next((p for p in discovered_list if p.get("cwd") == cwd), None)
     db_map = await _aggregate_db_stats("default")
@@ -348,7 +396,11 @@ async def create_project(body: ProjectCreate):
 
 
 @router.get("/{project_id}")
-async def get_project(project_id: str, workspace_id: str = "default"):
+async def get_project(
+    project_id: str,
+    workspace_id: str = "default",
+    current_user=Depends(get_optional_user),
+):
     """项目详情。"""
     cwd = _decode_id(project_id)
     discovered_list = project_discovery.discover_projects()
@@ -376,7 +428,11 @@ async def get_project(project_id: str, workspace_id: str = "default"):
 
 
 @router.get("/{project_id}/sessions")
-async def get_project_sessions(project_id: str, agent_id: Optional[str] = None):
+async def get_project_sessions(
+    project_id: str,
+    agent_id: Optional[str] = None,
+    current_user=Depends(get_optional_user),
+):
     """项目下的会话列表（按项目根/cwd 过滤文件扫描结果）。"""
     cwd = _decode_id(project_id)
     sessions = discover_sessions(project_cwd=cwd, agent_id=agent_id)
@@ -400,7 +456,11 @@ def _project_chats(cwd: str, agent_id: Optional[str] = None) -> list[dict]:
 
 
 @router.get("/{project_id}/chats")
-async def get_project_chats(project_id: str, agent_id: Optional[str] = None):
+async def get_project_chats(
+    project_id: str,
+    agent_id: Optional[str] = None,
+    current_user=Depends(get_optional_user),
+):
     """项目相关的普通对话（chats）— 不绑定项目但内容引用该项目的 chat。"""
     cwd = _decode_id(project_id)
     chats = _project_chats(cwd, agent_id=agent_id)
@@ -408,7 +468,11 @@ async def get_project_chats(project_id: str, agent_id: Optional[str] = None):
 
 
 @router.get("/{project_id}/tasks")
-async def get_project_tasks(project_id: str, workspace_id: str = "default"):
+async def get_project_tasks(
+    project_id: str,
+    workspace_id: str = "default",
+    current_user=Depends(get_optional_user),
+):
     """项目下的任务（DB tasks 表 + source=exec 的文件会话）。"""
     cwd = _decode_id(project_id)
 
@@ -465,8 +529,12 @@ async def get_project_tasks(project_id: str, workspace_id: str = "default"):
 
 
 @router.delete("/{project_id}")
-async def remove_project(project_id: str):
+async def remove_project(
+    project_id: str,
+    current_user=Depends(get_optional_user),
+):
     """从已注册列表中移除项目（不删除文件、不影响历史会话/任务）。"""
+    _ensure_not_viewer(current_user)
     cwd = _decode_id(project_id)
     with _REGISTRY_LOCK:
         items = _load_registry()
@@ -480,16 +548,24 @@ async def remove_project(project_id: str):
 
 
 @router.post("/{project_id}/archive")
-async def archive_project(project_id: str):
+async def archive_project(
+    project_id: str,
+    current_user=Depends(get_optional_user),
+):
     """归档项目（软操作，不删除任何文件/数据）。"""
+    _ensure_not_viewer(current_user)
     cwd = _decode_id(project_id)
     changed = archive_store.archive_project(project_id)
     return {"archived": True, "changed": changed, "id": project_id, "cwd": cwd}
 
 
 @router.post("/{project_id}/unarchive")
-async def unarchive_project(project_id: str):
+async def unarchive_project(
+    project_id: str,
+    current_user=Depends(get_optional_user),
+):
     """取消项目归档。"""
+    _ensure_not_viewer(current_user)
     cwd = _decode_id(project_id)
     changed = archive_store.unarchive_project(project_id)
     return {"archived": False, "changed": changed, "id": project_id, "cwd": cwd}
@@ -499,8 +575,13 @@ async def unarchive_project(project_id: str):
 
 
 @router.put("/{project_id}/workflow", response_model=ProjectSettingsResponse)
-async def set_project_workflow(project_id: str, body: ProjectSettingsUpdate):
+async def set_project_workflow(
+    project_id: str,
+    body: ProjectSettingsUpdate,
+    current_user=Depends(get_optional_user),
+):
     """绑定项目到工作流。"""
+    _ensure_not_viewer(current_user)
     if not body.workflow_id:
         raise HTTPException(status_code=400, detail="workflow_id is required")
     settings = await work_item_service.set_project_workflow(
@@ -512,7 +593,10 @@ async def set_project_workflow(project_id: str, body: ProjectSettingsUpdate):
 
 
 @router.get("/{project_id}/workflow", response_model=ProjectSettingsResponse)
-async def get_project_workflow(project_id: str):
+async def get_project_workflow(
+    project_id: str,
+    current_user=Depends(get_optional_user),
+):
     """获取项目的工作流绑定信息。"""
     settings = await work_item_service.get_project_settings(project_id)
     if not settings:
@@ -521,8 +605,12 @@ async def get_project_workflow(project_id: str):
 
 
 @router.delete("/{project_id}/workflow")
-async def remove_project_workflow(project_id: str):
+async def remove_project_workflow(
+    project_id: str,
+    current_user=Depends(get_optional_user),
+):
     """解绑项目工作流。"""
+    _ensure_not_viewer(current_user)
     removed = await work_item_service.remove_project_workflow(project_id)
     if not removed:
         raise HTTPException(status_code=404, detail="Project workflow not bound")

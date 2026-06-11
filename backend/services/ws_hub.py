@@ -10,18 +10,30 @@ class WSHub:
     def __init__(self):
         self._connections: Dict[str, Set[WebSocket]] = {}  # channel -> connections
         self._all_connections: Set[WebSocket] = set()
+        self._user_ids: Dict[WebSocket, str] = {}  # ws -> user_id
 
-    async def connect(self, ws: WebSocket, channels: list[str] = None):
+    async def connect(
+        self,
+        ws: WebSocket,
+        channels: list[str] = None,
+        user_id: str = "anonymous",
+    ):
         await ws.accept()
         self._all_connections.add(ws)
+        self._user_ids[ws] = user_id
         if channels:
             for ch in channels:
                 self._connections.setdefault(ch, set()).add(ws)
 
     def disconnect(self, ws: WebSocket):
         self._all_connections.discard(ws)
+        self._user_ids.pop(ws, None)
         for ch_set in self._connections.values():
             ch_set.discard(ws)
+
+    def get_user_id(self, ws: WebSocket) -> str:
+        """获取连接对应的 user_id（未认证连接返回 'anonymous'）。"""
+        return self._user_ids.get(ws, "anonymous")
 
     async def subscribe(self, ws: WebSocket, channels: list[str]):
         for ch in channels:

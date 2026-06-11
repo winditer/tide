@@ -6,9 +6,15 @@ Plan API 路由。
 
 from typing import Optional
 
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException
 from pydantic import BaseModel
 
+from backend.core.dependencies import (
+    check_cwd_write_permission,
+    encode_project_id,
+    get_accessible_project_ids,
+    get_optional_user,
+)
 from backend.models.schemas import (
     PlanCreate,
     PlanResponse,
@@ -21,13 +27,24 @@ from backend.services.plan_service import plan_service
 router = APIRouter(prefix="/api/plans", tags=["plans"])
 
 
+def _ensure_not_viewer(current_user: Optional[dict]) -> None:
+    """写操作权限检查：viewer 角色禁止修改资源。"""
+    if current_user and current_user.get("role") == "viewer":
+        raise HTTPException(status_code=403, detail="Viewers cannot modify resources")
+
+
 class CommitRequest(BaseModel):
     commit: bool = True
 
 
 @router.post("", response_model=PlanResponse)
-async def create_plan(body: PlanCreate):
+async def create_plan(
+    body: PlanCreate,
+    current_user=Depends(get_optional_user),
+):
     """创建 Plan"""
+    _ensure_not_viewer(current_user)
+    await check_cwd_write_permission(body.cwd, current_user)
     result = await plan_service.create_plan(
         workspace_id=body.workspace_id,
         definition_json=body.definition.model_dump(),
@@ -47,13 +64,15 @@ async def list_plans(
     session_id: Optional[str] = Query(None, description="按关联 session 筛选（通过 plan_tasks.tasks.session_id）"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    current_user=Depends(get_optional_user),
 ):
     """Plan 列表
 
     - `project`: 按 cwd 精确匹配（值通常来自 /api/projects 的 cwd 字段）
     - `session_id`: 按 plan 关联子任务的 session_id 筛选
     """
-    return await plan_service.list_plans(
+    accessible_pids = await get_accessible_project_ids(current_user)
+    items = await plan_service.list_plans(
         workspace_id=workspace_id,
         status=status,
         project=project,
@@ -61,10 +80,22 @@ async def list_plans(
         limit=limit,
         offset=offset,
     )
+    if accessible_pids is not None:
+        items = [
+            it for it in items
+            if encode_project_id(
+                (it.get("cwd") if isinstance(it, dict) else getattr(it, "cwd", ""))
+                or ""
+            ) in accessible_pids
+        ]
+    return items
 
 
 @router.get("/{plan_id}", response_model=PlanResponse)
-async def get_plan(plan_id: str):
+async def get_plan(
+    plan_id: str,
+    current_user=Depends(get_optional_user),
+):
     """Plan 详情"""
     result = await plan_service.get_plan(plan_id)
     if not result:
@@ -73,8 +104,15 @@ async def get_plan(plan_id: str):
 
 
 @router.post("/{plan_id}/stop", response_model=PlanResponse)
-async def stop_plan(plan_id: str):
+async def stop_plan(
+    plan_id: str,
+    current_user=Depends(get_optional_user),
+):
     """停止 Plan"""
+    _ensure_not_viewer(current_user)
+    plan = await plan_service.get_plan(plan_id)
+    if plan:
+        await check_cwd_write_permission(plan.get("cwd") if isinstance(plan, dict) else getattr(plan, "cwd", None), current_user)
     result = await plan_service.stop_plan(plan_id)
     if not result:
         raise HTTPException(status_code=404, detail="Plan not found")
@@ -82,7 +120,10 @@ async def stop_plan(plan_id: str):
 
 
 @router.get("/{plan_id}/tasks", response_model=list[PlanTaskResponse])
-async def get_plan_tasks(plan_id: str):
+async def get_plan_tasks(
+    plan_id: str,
+    current_user=Depends(get_optional_user),
+):
     """Plan 子任务列表"""
     plan = await plan_service.get_plan(plan_id)
     if not plan:
@@ -91,8 +132,16 @@ async def get_plan_tasks(plan_id: str):
 
 
 @router.post("/{plan_id}/tasks/{task_id}/retry")
-async def retry_plan_task(plan_id: str, task_id: str):
+async def retry_plan_task(
+    plan_id: str,
+    task_id: str,
+    current_user=Depends(get_optional_user),
+):
     """重试子任务"""
+    _ensure_not_viewer(current_user)
+    plan = await plan_service.get_plan(plan_id)
+    if plan:
+        await check_cwd_write_permission(plan.get("cwd") if isinstance(plan, dict) else getattr(plan, "cwd", None), current_user)
     result = await plan_service.retry_task(plan_id, task_id)
     if not result:
         raise HTTPException(status_code=404, detail="Plan or task not found")
@@ -100,8 +149,16 @@ async def retry_plan_task(plan_id: str, task_id: str):
 
 
 @router.post("/{plan_id}/tasks/{task_id}/approve")
-async def approve_plan_task(plan_id: str, task_id: str):
+async def approve_plan_task(
+    plan_id: str,
+    task_id: str,
+    current_user=Depends(get_optional_user),
+):
     """审批子任务：使用 approved 模式重启。"""
+    _ensure_not_viewer(current_user)
+    plan = await plan_service.get_plan(plan_id)
+    if plan:
+        await check_cwd_write_permission(plan.get("cwd") if isinstance(plan, dict) else getattr(plan, "cwd", None), current_user)
     ok = await plan_service.approve_task(plan_id, task_id)
     if not ok:
         raise HTTPException(
@@ -111,8 +168,17 @@ async def approve_plan_task(plan_id: str, task_id: str):
 
 
 @router.post("/{plan_id}/tasks/{task_id}/commit")
-async def commit_plan_task(plan_id: str, task_id: str, body: CommitRequest):
+async def commit_plan_task(
+    plan_id: str,
+    task_id: str,
+    body: CommitRequest,
+    current_user=Depends(get_optional_user),
+):
     """提交 / 跳过子任务的改动。"""
+    _ensure_not_viewer(current_user)
+    plan = await plan_service.get_plan(plan_id)
+    if plan:
+        await check_cwd_write_permission(plan.get("cwd") if isinstance(plan, dict) else getattr(plan, "cwd", None), current_user)
     result = await plan_service.commit_task(plan_id, task_id, body.commit)
     if not result.get("ok"):
         raise HTTPException(
@@ -122,8 +188,16 @@ async def commit_plan_task(plan_id: str, task_id: str, body: CommitRequest):
 
 
 @router.post("/{plan_id}/tasks/{task_id}/merge")
-async def merge_plan_task(plan_id: str, task_id: str):
+async def merge_plan_task(
+    plan_id: str,
+    task_id: str,
+    current_user=Depends(get_optional_user),
+):
     """cherry-pick 合并单个已提交的子任务。"""
+    _ensure_not_viewer(current_user)
+    plan = await plan_service.get_plan(plan_id)
+    if plan:
+        await check_cwd_write_permission(plan.get("cwd") if isinstance(plan, dict) else getattr(plan, "cwd", None), current_user)
     result = await plan_service.merge_task(plan_id, task_id)
     if not result.get("ok"):
         raise HTTPException(status_code=409, detail=result.get("message", "merge failed"))
@@ -131,16 +205,24 @@ async def merge_plan_task(plan_id: str, task_id: str):
 
 
 @router.post("/{plan_id}/merge-all")
-async def merge_all_plan_tasks(plan_id: str):
+async def merge_all_plan_tasks(
+    plan_id: str,
+    current_user=Depends(get_optional_user),
+):
     """按依赖顺序合并所有 committed 子任务。"""
+    _ensure_not_viewer(current_user)
     plan = await plan_service.get_plan(plan_id)
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
+    await check_cwd_write_permission(plan.get("cwd") if isinstance(plan, dict) else getattr(plan, "cwd", None), current_user)
     return await plan_service.merge_all(plan_id)
 
 
 @router.get("/{plan_id}/dag", response_model=PlanDAGResponse)
-async def get_plan_dag(plan_id: str):
+async def get_plan_dag(
+    plan_id: str,
+    current_user=Depends(get_optional_user),
+):
     """Plan DAG 结构（React Flow 格式）"""
     result = await plan_service.get_plan_dag(plan_id)
     if not result:
@@ -149,7 +231,10 @@ async def get_plan_dag(plan_id: str):
 
 
 @router.get("/{plan_id}/timeline", response_model=list[PlanTimelineItem])
-async def get_plan_timeline(plan_id: str):
+async def get_plan_timeline(
+    plan_id: str,
+    current_user=Depends(get_optional_user),
+):
     """Plan Gantt 时间线数据"""
     plan = await plan_service.get_plan(plan_id)
     if not plan:

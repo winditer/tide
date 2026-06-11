@@ -1,30 +1,77 @@
 "use client";
 
-import { use, useState } from "react";
+import { use, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Badge, Button, Select } from "@tide/ui";
 import {
+  Badge,
+  Button,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  Input,
+  Select,
+  toast,
+} from "@tide/ui";
+import {
+  useAdminUsers,
+  useAddProjectMember,
+  useAuth,
+  useBindProjectWorkflow,
+  useDeleteProject,
   useProject,
   useProjectChats,
+  useProjectMembers,
   useProjectSessions,
   useProjectTasks,
-  useDeleteProject,
-  useWorkflows,
   useProjectWorkflow,
-  useBindProjectWorkflow,
+  useRemoveProjectMember,
   useUnbindProjectWorkflow,
+  useUpdateProjectMember,
+  useWorkflows,
+  type ProjectMember,
   type ProjectSession,
   type ProjectTaskSummary,
 } from "@tide/core";
+import {
+  Search,
+  ShieldCheck,
+  Trash2,
+  UserPlus,
+} from "lucide-react";
 
-type TabKey = "conversations" | "tasks" | "settings";
+type TabKey = "conversations" | "tasks" | "members" | "settings";
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "conversations", label: "对话" },
   { key: "tasks", label: "任务" },
+  { key: "members", label: "成员" },
   { key: "settings", label: "设置" },
 ];
+
+const PROJECT_ROLE_OPTIONS = [
+  { value: "admin", label: "管理员 (admin)" },
+  { value: "member", label: "成员 (member)" },
+  { value: "viewer", label: "只读 (viewer)" },
+];
+
+const PROJECT_ROLE_LABEL: Record<string, string> = {
+  admin: "管理员",
+  member: "成员",
+  viewer: "只读",
+};
+
+function getApiErrorMessage(err: unknown): string {
+  const e = err as { body?: unknown; message?: string };
+  if (e?.body && typeof e.body === "object") {
+    const detail = (e.body as { detail?: unknown }).detail;
+    if (typeof detail === "string") return detail;
+  }
+  return e?.message ?? String(err);
+}
 
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   queued: "secondary",
@@ -203,6 +250,8 @@ export default function ProjectDetailPage({
           isError={tasksQuery.isError}
         />
       )}
+
+      {tab === "members" && <MembersPane projectId={project.id} />}
 
       {tab === "settings" && (
         <SettingsPane
@@ -601,5 +650,410 @@ function SettingsPane({
         </div>
       )}
     </section>
+  );
+}
+
+// ── Members Tab ───────────────────────────────────────────────────────────
+
+function MembersPane({ projectId }: { projectId: string }) {
+  const { user } = useAuth();
+  const isGlobalAdmin = user?.role === "admin";
+
+  const membersQuery = useProjectMembers(projectId);
+  const updateMutation = useUpdateProjectMember(projectId);
+  const removeMutation = useRemoveProjectMember(projectId);
+
+  const [addOpen, setAddOpen] = useState(false);
+
+  const members = membersQuery.data?.members ?? [];
+  const memberIds = useMemo(() => new Set(members.map((m) => m.id)), [members]);
+
+  // Determine if the current user can manage members.
+  const myProjectRole = useMemo(() => {
+    if (!user) return null;
+    return members.find((m) => m.id === user.id)?.project_role ?? null;
+  }, [members, user]);
+  const canManage = isGlobalAdmin || myProjectRole === "admin";
+
+  const handleRoleChange = async (member: ProjectMember, role: string) => {
+    if (role === member.project_role) return;
+    try {
+      await updateMutation.mutateAsync({
+        userId: member.id,
+        body: { role },
+      });
+      toast({
+        title: "已更新角色",
+        description: `${member.username} → ${PROJECT_ROLE_LABEL[role] ?? role}`,
+      });
+    } catch (err) {
+      toast({
+        title: "更新失败",
+        description: getApiErrorMessage(err),
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleRemove = async (member: ProjectMember) => {
+    if (!confirm(`将 ${member.username} 从该项目移除？`)) return;
+    try {
+      await removeMutation.mutateAsync(member.id);
+      toast({ title: "已移除成员", description: member.username });
+    } catch (err) {
+      toast({
+        title: "移除失败",
+        description: getApiErrorMessage(err),
+        variant: "destructive",
+      });
+    }
+  };
+
+  return (
+    <section className="space-y-4">
+      <div className="flex items-end justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">项目成员</h2>
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            管理可访问该项目的用户与各自的角色 · 共 {members.length} 人
+          </p>
+        </div>
+        {canManage && (
+          <Button onClick={() => setAddOpen(true)} className="gap-1.5">
+            <UserPlus className="h-4 w-4" /> 添加成员
+          </Button>
+        )}
+      </div>
+
+      {membersQuery.isLoading ? (
+        <div className="bg-card rounded-xl shadow-card py-12 text-center text-sm text-muted-foreground">
+          加载中…
+        </div>
+      ) : membersQuery.isError ? (
+        <div className="bg-card rounded-xl shadow-card py-12 text-center text-sm text-destructive">
+          加载失败：{getApiErrorMessage(membersQuery.error)}
+        </div>
+      ) : members.length === 0 ? (
+        <div className="bg-card rounded-xl shadow-card border border-border/50 py-16 text-center">
+          <ShieldCheck className="mx-auto h-8 w-8 text-muted-foreground/60" strokeWidth={1.5} />
+          <p className="mt-3 text-sm text-muted-foreground">
+            该项目暂无成员
+          </p>
+          {canManage && (
+            <Button
+              className="mt-5 gap-1.5"
+              onClick={() => setAddOpen(true)}
+            >
+              <UserPlus className="h-4 w-4" /> 添加第一位成员
+            </Button>
+          )}
+        </div>
+      ) : (
+        <div className="bg-card rounded-xl shadow-card overflow-hidden border border-border/50">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border/50 bg-muted/30 text-left text-xs uppercase tracking-wider text-muted-foreground">
+                <th className="px-4 py-3 font-medium">用户</th>
+                <th className="px-4 py-3 font-medium">邮箱</th>
+                <th className="px-4 py-3 font-medium">项目角色</th>
+                <th className="px-4 py-3 font-medium">加入时间</th>
+                <th className="px-4 py-3 font-medium text-right">操作</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/50">
+              {members.map((m) => {
+                const isSelf = user?.id === m.id;
+                return (
+                  <tr key={m.id} className="hover:bg-muted/40 transition-smooth">
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500/20 to-indigo-500/5 text-[11px] font-semibold uppercase text-indigo-500">
+                          {(m.username || "?").slice(0, 2)}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-medium">{m.username}</span>
+                            {isSelf && (
+                              <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+                                ME
+                              </span>
+                            )}
+                            {m.global_role === "admin" && (
+                              <span className="inline-flex items-center gap-0.5 rounded bg-indigo-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-indigo-500">
+                                <ShieldCheck className="h-2.5 w-2.5" /> Admin
+                              </span>
+                            )}
+                          </div>
+                          {m.display_name && (
+                            <div className="truncate text-xs text-muted-foreground">
+                              {m.display_name}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
+                      {m.email || "—"}
+                    </td>
+                    <td className="px-4 py-3">
+                      {canManage ? (
+                        <Select
+                          value={m.project_role}
+                          onChange={(e) => handleRoleChange(m, e.target.value)}
+                          options={PROJECT_ROLE_OPTIONS}
+                          disabled={updateMutation.isPending}
+                          className="h-8 w-36 rounded-md border-border/50 text-xs"
+                        />
+                      ) : (
+                        <Badge variant="secondary">
+                          {PROJECT_ROLE_LABEL[m.project_role] ?? m.project_role}
+                        </Badge>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
+                      {m.joined_at
+                        ? new Date(m.joined_at).toLocaleDateString("zh-CN")
+                        : "—"}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center justify-end gap-1">
+                        {canManage && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemove(m)}
+                            title="移除成员"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-smooth hover:bg-destructive/10 hover:text-destructive"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <AddMemberDialog
+        projectId={projectId}
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        excludeIds={memberIds}
+      />
+    </section>
+  );
+}
+
+function AddMemberDialog({
+  projectId,
+  open,
+  onClose,
+  excludeIds,
+}: {
+  projectId: string;
+  open: boolean;
+  onClose: () => void;
+  excludeIds: Set<string>;
+}) {
+  const [search, setSearch] = useState("");
+  const [debounced, setDebounced] = useState("");
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [role, setRole] = useState("member");
+  const [error, setError] = useState<string | null>(null);
+
+  const addMutation = useAddProjectMember(projectId);
+
+  // Debounced search
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(search.trim()), 250);
+    return () => clearTimeout(id);
+  }, [search]);
+
+  // Reset state on open
+  useEffect(() => {
+    if (open) {
+      setSearch("");
+      setDebounced("");
+      setSelectedUserId(null);
+      setRole("member");
+      setError(null);
+    }
+  }, [open]);
+
+  // Only admins can list /api/admin/users; for non-admins this query will 403,
+  // but project admins typically aren't given /admin/users access. We use the
+  // admin search for convenience when available.
+  const usersQuery = useAdminUsers({
+    q: debounced || undefined,
+    page: 1,
+    page_size: 20,
+  });
+
+  const candidates = useMemo(() => {
+    const list = usersQuery.data?.users ?? [];
+    return list.filter((u) => !excludeIds.has(u.id));
+  }, [usersQuery.data, excludeIds]);
+
+  const submit = async () => {
+    setError(null);
+    if (!selectedUserId) {
+      setError("请选择一名用户");
+      return;
+    }
+    try {
+      await addMutation.mutateAsync({ user_id: selectedUserId, role });
+      const picked = candidates.find((u) => u.id === selectedUserId);
+      toast({
+        title: "已添加成员",
+        description: picked?.username ?? selectedUserId,
+      });
+      onClose();
+    } catch (err) {
+      setError(getApiErrorMessage(err));
+    }
+  };
+
+  const adminApiBlocked = usersQuery.isError;
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="bg-background/95 backdrop-blur-xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <UserPlus className="h-4 w-4" /> 添加项目成员
+          </DialogTitle>
+          <DialogDescription>
+            选择一个已有用户加入到当前项目，并指定项目内的角色。
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium text-foreground">
+              搜索用户
+            </span>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="按用户名 / 邮箱 / 显示名称搜索…"
+                className="pl-9 rounded-lg border-border/50"
+              />
+            </div>
+          </label>
+
+          <div className="max-h-64 overflow-y-auto rounded-lg border border-border/50 bg-background/60">
+            {adminApiBlocked ? (
+              <div className="px-4 py-8 text-center text-xs text-muted-foreground">
+                无法列出全部用户（需要管理员权限）。
+                <br />
+                你仍可以输入用户 ID 手动添加。
+              </div>
+            ) : usersQuery.isLoading ? (
+              <div className="px-4 py-8 text-center text-xs text-muted-foreground">
+                加载中…
+              </div>
+            ) : candidates.length === 0 ? (
+              <div className="px-4 py-8 text-center text-xs text-muted-foreground">
+                {debounced ? "没有匹配的用户" : "暂无可添加的用户"}
+              </div>
+            ) : (
+              <ul className="divide-y divide-border/50">
+                {candidates.map((u) => {
+                  const active = selectedUserId === u.id;
+                  return (
+                    <li key={u.id}>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedUserId(u.id)}
+                        className={[
+                          "flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left transition-smooth",
+                          active
+                            ? "bg-indigo-500/10 text-foreground"
+                            : "hover:bg-muted/60",
+                        ].join(" ")}
+                      >
+                        <div className="flex min-w-0 items-center gap-2">
+                          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500/20 to-indigo-500/5 text-[11px] font-semibold uppercase text-indigo-500">
+                            {(u.username || "?").slice(0, 2)}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-medium">
+                              {u.username}
+                              {u.display_name && (
+                                <span className="ml-1.5 text-xs font-normal text-muted-foreground">
+                                  · {u.display_name}
+                                </span>
+                              )}
+                            </div>
+                            <div className="truncate font-mono text-[11px] text-muted-foreground">
+                              {u.email || "—"}
+                            </div>
+                          </div>
+                        </div>
+                        <Badge
+                          variant={u.role === "admin" ? "default" : "outline"}
+                          className="shrink-0"
+                        >
+                          {u.role}
+                        </Badge>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+
+          {adminApiBlocked && (
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-medium text-foreground">
+                用户 ID（手动）
+              </span>
+              <Input
+                value={selectedUserId ?? ""}
+                onChange={(e) => setSelectedUserId(e.target.value || null)}
+                placeholder="粘贴目标用户的 UUID"
+                className="rounded-lg border-border/50 font-mono text-xs"
+              />
+            </label>
+          )}
+
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium text-foreground">
+              项目角色
+            </span>
+            <Select
+              value={role}
+              onChange={(e) => setRole(e.target.value)}
+              options={PROJECT_ROLE_OPTIONS}
+              className="rounded-lg border-border/50"
+            />
+          </label>
+
+          {error && (
+            <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              {error}
+            </div>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            取消
+          </Button>
+          <Button
+            disabled={!selectedUserId || addMutation.isPending}
+            onClick={submit}
+          >
+            {addMutation.isPending ? "添加中…" : "添加成员"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

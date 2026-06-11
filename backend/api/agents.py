@@ -6,8 +6,9 @@ Agent 运行时状态 API。
 
 import shutil
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from backend.core.dependencies import get_optional_user
 from backend.runtime.adapters import AGENT_ADAPTERS
 from backend.runtime.task_runtime import TASKS
 
@@ -15,7 +16,7 @@ router = APIRouter(prefix="/api/agents", tags=["agents"])
 
 
 @router.get("")
-async def list_agents():
+async def list_agents(current_user=Depends(get_optional_user)):
     """返回可用 Agent 列表 + 运行时状态"""
     agents = []
     for agent_id, adapter in AGENT_ADAPTERS.items():

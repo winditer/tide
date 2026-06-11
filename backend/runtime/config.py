@@ -119,6 +119,17 @@ LARK_ADMIN_OPEN_IDS_VALUE = os.getenv("LARK_ADMIN_OPEN_IDS", "")
 LARK_REQUIRE_KNOWN_CHAT = os.getenv("LARK_REQUIRE_KNOWN_CHAT", "1") == "1"
 LARK_CARD_ENABLE_FORWARD = os.getenv("LARK_CARD_ENABLE_FORWARD", "0") == "1"
 LOG_MESSAGE_CONTENT = os.getenv("LOG_MESSAGE_CONTENT", "0") == "1"
+
+# 认证配置
+TIDE_JWT_SECRET = os.environ.get("TIDE_JWT_SECRET", "tide-dev-secret-change-in-production")
+TIDE_JWT_ALGORITHM = os.environ.get("TIDE_JWT_ALGORITHM", "HS256")
+TIDE_JWT_EXPIRE_MINUTES = int(os.environ.get("TIDE_JWT_EXPIRE_MINUTES", "15"))
+TIDE_REFRESH_TOKEN_EXPIRE_DAYS = int(os.environ.get("TIDE_REFRESH_TOKEN_EXPIRE_DAYS", "30"))
+TIDE_REQUIRE_AUTH = os.environ.get("TIDE_REQUIRE_AUTH", "0") == "1"
+TIDE_ADMIN_USERNAME = os.environ.get("TIDE_ADMIN_USERNAME", "admin")
+TIDE_ADMIN_PASSWORD = os.environ.get("TIDE_ADMIN_PASSWORD", "")
+LARK_APP_REDIRECT_URI = os.environ.get("LARK_APP_REDIRECT_URI", "")
+TIDE_PASSWORD_MIN_LENGTH = int(os.environ.get("TIDE_PASSWORD_MIN_LENGTH", "8"))
 # =================================================
 
 

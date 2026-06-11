@@ -11,10 +11,16 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
+from backend.core.dependencies import (
+    check_cwd_write_permission,
+    encode_project_id,
+    get_accessible_project_ids,
+    get_optional_user,
+)
 from backend.db.engine import async_session_factory
 from backend.services.archive_service import archive_store, resolve_show_archived
 from backend.services.session_discovery import (
@@ -26,6 +32,12 @@ from backend.services.session_discovery import (
 from backend.services.task_service import task_service
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
+
+
+def _ensure_not_viewer(current_user: Optional[dict]) -> None:
+    """写操作权限检查：viewer 角色禁止修改资源。"""
+    if current_user and current_user.get("role") == "viewer":
+        raise HTTPException(status_code=403, detail="Viewers cannot modify resources")
 
 
 def _sort_key(item: dict) -> str:
@@ -56,6 +68,7 @@ class SessionCreate(BaseModel):
 @router.get("/list-for-project")
 async def list_sessions_for_project(
     cwd: str = Query(..., description="项目工作目录"),
+    current_user=Depends(get_optional_user),
 ):
     """精简会话列表，供前端下拉框使用。
 
@@ -97,6 +110,7 @@ async def list_chats(
     show_archived: Optional[bool] = Query(
         None, description="是否包含已归档会话；缺省读取 TIDE_SHOW_ARCHIVED"
     ),
+    current_user=Depends(get_optional_user),
 ):
     """普通对话列表（不绑定项目），等价于 type=chat 的快捷入口。"""
     offset = (page - 1) * page_size
@@ -141,8 +155,10 @@ async def list_sessions(
     show_archived: Optional[bool] = Query(
         None, description="是否包含已归档会话；缺省读取 TIDE_SHOW_ARCHIVED"
     ),
+    current_user=Depends(get_optional_user),
 ):
     """会话列表：DB 优先（按 session_id 聚合），文件扫描补充。支持 type 过滤。"""
+    accessible_pids = await get_accessible_project_ids(current_user)
     db_sessions: list[dict] = []
     async with async_session_factory() as session:
         conditions = [
@@ -217,6 +233,13 @@ async def list_sessions(
     if agent_id:
         merged = [it for it in merged if it.get("agent_id") == agent_id]
 
+    # 项目级权限过滤：非 admin 用户只能看到可访问项目下的会话
+    if accessible_pids is not None:
+        merged = [
+            it for it in merged
+            if encode_project_id(it.get("cwd") or "") in accessible_pids
+        ]
+
     # type 过滤
     if type == "project":
         merged = [it for it in merged if it.get("project_root")]
@@ -281,6 +304,7 @@ async def _related_tasks(session_id: str, workspace_id: str = "default") -> list
 async def get_session(
     session_id: str,
     workspace_id: str = Query("default"),
+    current_user=Depends(get_optional_user),
 ):
     """会话详情：返回会话元信息、对话消息流、关联任务。"""
     info = find_session(session_id)
@@ -324,18 +348,23 @@ async def get_session(
 
 
 @router.post("")
-async def create_session(body: SessionCreate):
+async def create_session(
+    body: SessionCreate,
+    current_user=Depends(get_optional_user),
+):
     """新建会话。
 
     通过创建一个占位任务来表达"开启会话"，Agent 真正启动后会回写 ``session_id``
     并写入 ``~/.<agent>/...`` 目录的 JSONL 文件。
     返回 ``session_id``（与 task.id 同步，便于前端立即跳转）。
     """
+    _ensure_not_viewer(current_user)
     cwd = (body.project_cwd or "").strip()
     declared_type = (body.session_type or "").lower().strip()
     if declared_type == "chat":
         cwd = ""
     session_type = "convo" if cwd else "chat"
+    await check_cwd_write_permission(cwd or None, current_user)
 
     default_prompt = "新会话" if session_type == "convo" else "新对话"
     prompt = (body.title or default_prompt).strip() or default_prompt
@@ -371,14 +400,22 @@ async def create_session(body: SessionCreate):
 
 
 @router.post("/{session_id}/archive")
-async def archive_session(session_id: str):
+async def archive_session(
+    session_id: str,
+    current_user=Depends(get_optional_user),
+):
     """归档会话（软操作，不删除任何文件/数据）。"""
+    _ensure_not_viewer(current_user)
     changed = archive_store.archive_session(session_id)
     return {"archived": True, "changed": changed, "id": session_id}
 
 
 @router.post("/{session_id}/unarchive")
-async def unarchive_session(session_id: str):
+async def unarchive_session(
+    session_id: str,
+    current_user=Depends(get_optional_user),
+):
     """取消会话归档。"""
+    _ensure_not_viewer(current_user)
     changed = archive_store.unarchive_session(session_id)
     return {"archived": False, "changed": changed, "id": session_id}

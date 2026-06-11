@@ -249,3 +249,54 @@ INSERT OR IGNORE INTO actors (id, type, name, metadata) VALUES
 
 INSERT OR IGNORE INTO workspaces (id, name, slug) VALUES
     ('default', 'Default Workspace', 'default');
+
+-- =============================================
+-- 认证与权限
+-- =============================================
+
+-- 用户表
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    username TEXT UNIQUE NOT NULL,
+    email TEXT UNIQUE,
+    password_hash TEXT,            -- Lark 用户可为 NULL
+    display_name TEXT,
+    avatar_url TEXT,
+    role TEXT DEFAULT 'member',    -- admin | member | viewer
+    status TEXT DEFAULT 'active',  -- active | disabled
+    lark_open_id TEXT UNIQUE,
+    lark_union_id TEXT UNIQUE,
+    workspace_id TEXT DEFAULT 'default',
+    last_login_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 用户会话表（管理 refresh token）
+CREATE TABLE IF NOT EXISTS user_sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id),
+    refresh_token_hash TEXT NOT NULL,
+    ip_address TEXT,
+    user_agent TEXT,
+    is_active INTEGER DEFAULT 1,
+    expires_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_used_at TIMESTAMP
+);
+
+-- 项目成员表（项目级隔离）
+CREATE TABLE IF NOT EXISTS project_members (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(id),
+    role TEXT DEFAULT 'member',   -- owner | member | viewer
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(project_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_active ON user_sessions(is_active, expires_at);
+CREATE INDEX IF NOT EXISTS idx_project_members_user ON project_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_project_members_project ON project_members(project_id);
+CREATE INDEX IF NOT EXISTS idx_users_lark_open_id ON users(lark_open_id);

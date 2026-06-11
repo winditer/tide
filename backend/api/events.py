@@ -1,8 +1,9 @@
 """事件补偿 API — 重连后拉取缺失事件"""
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import text
 
+from backend.core.dependencies import get_optional_user
 from backend.db.engine import async_session_factory
 
 router = APIRouter(prefix="/api/events", tags=["events"])
@@ -13,6 +14,7 @@ async def get_events(
     workspace_id: str = Query("default"),
     after: str = Query(None, description="事件 ID，返回此 ID 之后的事件"),
     limit: int = Query(50, ge=1, le=200),
+    current_user=Depends(get_optional_user),
 ):
     """获取事件列表（用于重连后补偿）"""
     async with async_session_factory() as session:

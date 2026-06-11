@@ -17,7 +17,7 @@ export type {
   MoveCardInput,
 } from "./types/kanban";
 
-export { apiClient, ApiError } from "./api/client";
+export { apiClient, ApiError, installAuthBridge, API_BASE_URL } from "./api/client";
 export {
   createTask,
   listTasks,
@@ -356,3 +356,78 @@ export {
   useApproveApproval,
   useRejectApproval,
 } from "./hooks/use-approvals";
+
+// Auth
+export {
+  useAuthStore,
+  TIDE_AUTH_STORAGE_KEY,
+  getAccessToken,
+  getRefreshToken,
+  setAuthTokens,
+  clearAuthTokens,
+} from "./stores/auth-store";
+export type { AuthUser, AuthState } from "./stores/auth-store";
+export {
+  login,
+  logout,
+  refreshToken,
+  getMe,
+  getLarkAuthorizeUrl,
+  changePassword,
+} from "./api/auth";
+export type {
+  LoginResponse,
+  RefreshResponse,
+  ChangePasswordPayload,
+} from "./api/auth";
+export { useAuth, isAuthRequired } from "./hooks/useAuth";
+export type { UseAuthResult } from "./hooks/useAuth";
+
+// Admin (user management)
+export {
+  listUsers,
+  getAdminUser,
+  createAdminUser,
+  updateAdminUser,
+  deleteAdminUser,
+  resetUserPassword,
+  getUserProjects,
+} from "./api/admin";
+export type {
+  AdminUser,
+  ListUsersParams,
+  ListUsersResponse,
+  CreateUserInput,
+  UpdateUserInput,
+  UserProjectAssignment,
+  ListUserProjectsResponse,
+} from "./api/admin";
+export {
+  useAdminUsers,
+  useAdminUser,
+  useCreateAdminUser,
+  useUpdateAdminUser,
+  useDeleteAdminUser,
+  useResetUserPassword,
+  useUserProjects,
+} from "./hooks/use-admin-users";
+
+// Project members
+export {
+  listProjectMembers,
+  addProjectMember,
+  updateProjectMemberRole,
+  removeProjectMember,
+} from "./api/project-members";
+export type {
+  ProjectMember,
+  ListProjectMembersResponse,
+  AddMemberInput,
+  UpdateMemberInput,
+} from "./api/project-members";
+export {
+  useProjectMembers,
+  useAddProjectMember,
+  useUpdateProjectMember,
+  useRemoveProjectMember,
+} from "./hooks/use-project-members";

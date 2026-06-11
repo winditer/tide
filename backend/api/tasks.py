@@ -11,14 +11,26 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Query, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, Query, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 
+from backend.core.dependencies import (
+    check_cwd_write_permission,
+    encode_project_id,
+    get_accessible_project_ids,
+    get_optional_user,
+)
 from backend.db.engine import async_session_factory
 from backend.models.schemas import TaskCreate, TaskResponse, TaskListResponse, ApprovalAction
 from backend.services.session_discovery import discover_sessions, find_session
 from backend.services.task_service import task_service
+
+
+def _ensure_not_viewer(current_user: Optional[dict]) -> None:
+    """写操作权限检查：viewer 角色禁止修改资源。"""
+    if current_user and current_user.get("role") == "viewer":
+        raise HTTPException(status_code=403, detail="Viewers cannot modify resources")
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -31,8 +43,13 @@ def _safe_upload_name(filename: str) -> str:
 
 
 @router.post("", response_model=TaskResponse)
-async def create_task(body: TaskCreate):
+async def create_task(
+    body: TaskCreate,
+    current_user=Depends(get_optional_user),
+):
     """创建任务"""
+    _ensure_not_viewer(current_user)
+    await check_cwd_write_permission(body.cwd, current_user)
     try:
         result = await task_service.create_task(
             workspace_id=body.workspace_id,
@@ -51,8 +68,12 @@ async def create_task(body: TaskCreate):
 
 
 @router.post("/attachments")
-async def upload_task_attachments(files: list[UploadFile] = File(...)):
+async def upload_task_attachments(
+    files: list[UploadFile] = File(...),
+    current_user=Depends(get_optional_user),
+):
     """上传任务附件，返回可写入 TaskCreate.attachments 的本地路径列表。"""
+    _ensure_not_viewer(current_user)
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
 
@@ -183,8 +204,10 @@ async def list_tasks(
     created_before: Optional[str] = Query(None, description="创建时间上界 (ISO datetime)"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    current_user=Depends(get_optional_user),
 ):
     """任务列表：合并 DB 任务 + 本地 Agent 会话文件扫描结果。"""
+    accessible_pids = await get_accessible_project_ids(current_user)
     # 1) DB 任务（全量，后面再分页）
     db_items = await _fetch_db_tasks(
         workspace_id,
@@ -195,6 +218,11 @@ async def list_tasks(
         created_after=created_after,
         created_before=created_before,
     )
+    if accessible_pids is not None:
+        db_items = [
+            it for it in db_items
+            if encode_project_id(it.get("cwd") or "") in accessible_pids
+        ]
 
     # 2) 文件扫描会话
     merged: list[dict] = list(db_items)
@@ -221,6 +249,11 @@ async def list_tasks(
             if created_after and (not created_at or str(created_at) < created_after):
                 continue
             if created_before and (not created_at or str(created_at) > created_before):
+                continue
+            if (
+                accessible_pids is not None
+                and encode_project_id(s.get("cwd") or "") not in accessible_pids
+            ):
                 continue
             merged.append(_file_session_to_task(s, workspace_id))
 
@@ -250,7 +283,11 @@ def _strip_source_prefix(task_id: str) -> tuple[str, str]:
 
 
 @router.get("/{task_id}", response_model=TaskResponse)
-async def get_task(task_id: str, workspace_id: str = Query("default")):
+async def get_task(
+    task_id: str,
+    workspace_id: str = Query("default"),
+    current_user=Depends(get_optional_user),
+):
     """任务详情。
 
     优先查 DB；DB 未命中时回退到文件扫描（session_discovery）
@@ -276,9 +313,16 @@ async def get_task(task_id: str, workspace_id: str = Query("default")):
 
 
 @router.post("/{task_id}/stop")
-async def stop_task(task_id: str):
+async def stop_task(
+    task_id: str,
+    current_user=Depends(get_optional_user),
+):
     """停止任务"""
+    _ensure_not_viewer(current_user)
     raw_id, _ = _strip_source_prefix(task_id)
+    existing = await task_service.get_task(raw_id)
+    if existing:
+        await check_cwd_write_permission(existing.get("cwd"), current_user)
     result = await task_service.stop_task(raw_id)
     if not result:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -286,9 +330,16 @@ async def stop_task(task_id: str):
 
 
 @router.post("/{task_id}/approve")
-async def approve_task(task_id: str):
+async def approve_task(
+    task_id: str,
+    current_user=Depends(get_optional_user),
+):
     """批准审批"""
+    _ensure_not_viewer(current_user)
     raw_id, _ = _strip_source_prefix(task_id)
+    existing = await task_service.get_task(raw_id)
+    if existing:
+        await check_cwd_write_permission(existing.get("cwd"), current_user)
     result = await task_service.approve_task(raw_id)
     if not result:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -296,9 +347,17 @@ async def approve_task(task_id: str):
 
 
 @router.post("/{task_id}/reject")
-async def reject_task(task_id: str, body: Optional[ApprovalAction] = None):
+async def reject_task(
+    task_id: str,
+    body: Optional[ApprovalAction] = None,
+    current_user=Depends(get_optional_user),
+):
     """拒绝审批"""
+    _ensure_not_viewer(current_user)
     raw_id, _ = _strip_source_prefix(task_id)
+    existing = await task_service.get_task(raw_id)
+    if existing:
+        await check_cwd_write_permission(existing.get("cwd"), current_user)
     reason = body.reason if body else ""
     result = await task_service.reject_task(raw_id, reason=reason)
     if not result:
@@ -307,9 +366,16 @@ async def reject_task(task_id: str, body: Optional[ApprovalAction] = None):
 
 
 @router.post("/{task_id}/retry")
-async def retry_task(task_id: str):
+async def retry_task(
+    task_id: str,
+    current_user=Depends(get_optional_user),
+):
     """重试失败任务"""
+    _ensure_not_viewer(current_user)
     raw_id, _ = _strip_source_prefix(task_id)
+    existing = await task_service.get_task(raw_id)
+    if existing:
+        await check_cwd_write_permission(existing.get("cwd"), current_user)
     result = await task_service.retry_task(raw_id)
     if not result:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -317,7 +383,10 @@ async def retry_task(task_id: str):
 
 
 @router.get("/{task_id}/output")
-async def stream_task_output(task_id: str):
+async def stream_task_output(
+    task_id: str,
+    current_user=Depends(get_optional_user),
+):
     """SSE 流式输出任务结果"""
     raw_id, _ = _strip_source_prefix(task_id)
     task = await task_service.get_task(raw_id)

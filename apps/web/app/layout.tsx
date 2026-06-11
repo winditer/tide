@@ -6,7 +6,7 @@ import { AppShell } from "./app-shell";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Tide Web 工作台",
+  title: "Tide",
   description: "Tide 任务管理与智能体编排工作台",
 };
 

@@ -32,6 +32,10 @@ from backend.api.lark_bridge import router as lark_bridge_router
 from backend.api.lark_callback import router as lark_callback_router
 from backend.api.conversations import router as conversations_router
 from backend.api.approvals import router as approvals_router
+from backend.api.auth import router as auth_router
+from backend.api.admin import router as admin_router
+from backend.api.project_members import router as project_members_router
+from backend.services.auth_service import auth_service
 
 logger = logging.getLogger("tide.main")
 
@@ -39,6 +43,13 @@ logger = logging.getLogger("tide.main")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+
+    # 启动时确保管理员账号存在（基于 TIDE_ADMIN_USERNAME / TIDE_ADMIN_PASSWORD）
+    try:
+        await auth_service.ensure_admin_exists()
+    except Exception:  # noqa: BLE001
+        logger.exception("ensure_admin_exists failed")
+
     await schedule_service.start()
 
     # 恢复后端重启前处于 active/running 状态的 Plan
@@ -98,6 +109,9 @@ app.include_router(lark_bridge_router)
 app.include_router(lark_callback_router)
 app.include_router(conversations_router)
 app.include_router(approvals_router)
+app.include_router(auth_router)
+app.include_router(admin_router)
+app.include_router(project_members_router)
 
 
 @app.get("/health")
