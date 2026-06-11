@@ -34,7 +34,10 @@ async def get_stats(workspace_id: str = "default"):
         queued = r.scalar() or 0
 
         r = await session.execute(
-            text("SELECT COUNT(*) FROM approvals WHERE workspace_id = :ws AND status = 'pending'"),
+            text(
+                "SELECT COUNT(*) FROM approvals WHERE workspace_id = :ws AND status = 'pending'"
+                " AND task_id IN (SELECT id FROM tasks WHERE status IN ('review', 'pending', 'running'))"
+            ),
             {"ws": workspace_id},
         )
         pending_approval = r.scalar() or 0
@@ -136,9 +139,11 @@ async def get_recent_tasks(
             }
         )
 
-    # 按 completed_at / created_at 降序排列，取 top limit
+    # 按 created_at 降序排列（最新创建的在最前），取 top limit
+    # 使用 created_at 作为主键以保证“最近任务”严格按创建时间倒序，
+    # 避免文件会话 last_active(=completed_at) 抢占新建任务位置。
     def _sort_key(t: dict) -> str:
-        return t.get("completed_at") or t.get("created_at") or ""
+        return t.get("created_at") or t.get("completed_at") or ""
 
     tasks.sort(key=_sort_key, reverse=True)
     return {"tasks": tasks[:limit]}

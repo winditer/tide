@@ -3,11 +3,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createTask } from "../api/tasks";
 import { getTask } from "../api/tasks";
+import { fetchApprovals, approveApproval, rejectApproval } from "../api/approvals";
 import { useWs } from "../providers/ws-provider";
 import type { TaskEvent } from "../types/task";
 
 export type ChatMessageStatus = "pending" | "running" | "completed" | "failed";
 export type ChatMessageRole = "user" | "assistant";
+
+export type ChatInteractiveType = "approval" | "info" | "action";
+export type ChatInteractiveStatus = "pending" | "approved" | "rejected";
+
+export interface ChatInteractive {
+  type: ChatInteractiveType;
+  approvalId?: string;
+  taskId?: string;
+  status?: ChatInteractiveStatus;
+}
 
 export interface ChatMessage {
   id: string;
@@ -17,6 +28,7 @@ export interface ChatMessage {
   timestamp: string;
   taskId?: string;
   status?: ChatMessageStatus;
+  interactive?: ChatInteractive;
 }
 
 export interface UseChatOptions {
@@ -26,12 +38,39 @@ export interface UseChatOptions {
 }
 
 const STORAGE_PREFIX = "tide.chat.history.";
+const SESSION_STORAGE_PREFIX = "tide.chat.session.";
 const HISTORY_LIMIT = 200;
 const CONTEXT_WINDOW = 10;
 const CONTEXT_PER_MESSAGE_CHARS = 200;
 
 function storageKey(projectId?: string): string {
   return `${STORAGE_PREFIX}${projectId || "_global_"}`;
+}
+
+function sessionStorageKey(projectId?: string): string {
+  return `${SESSION_STORAGE_PREFIX}${projectId || "_global_"}`;
+}
+
+function loadSessionFromStorage(projectId?: string): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return window.localStorage.getItem(sessionStorageKey(projectId)) || "";
+  } catch {
+    return "";
+  }
+}
+
+function saveSessionToStorage(projectId: string | undefined, sid: string) {
+  if (typeof window === "undefined") return;
+  try {
+    if (sid) {
+      window.localStorage.setItem(sessionStorageKey(projectId), sid);
+    } else {
+      window.localStorage.removeItem(sessionStorageKey(projectId));
+    }
+  } catch {
+    // ignore
+  }
 }
 
 function loadFromStorage(projectId?: string): ChatMessage[] {
@@ -108,6 +147,8 @@ export interface UseChatResult {
     overrides?: SendMessageOverrides
   ) => Promise<void>;
   clearHistory: () => void;
+  approveTask: (approvalId: string) => Promise<void>;
+  rejectTask: (approvalId: string) => Promise<void>;
 }
 
 export function useChat(options: UseChatOptions = {}): UseChatResult {
@@ -115,9 +156,14 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isSending, setIsSending] = useState(false);
   const [hasUnread, setHasUnread] = useState(false);
+  const [chatSessionId, setChatSessionId] = useState<string>("");
   const messagesRef = useRef<ChatMessage[]>([]);
   messagesRef.current = messages;
   const hydratedKeyRef = useRef<string | null>(null);
+  const chatSessionIdRef = useRef<string>("");
+  chatSessionIdRef.current = chatSessionId;
+  // Tasks for which we've already attempted to capture session_id
+  const sessionFetchedRef = useRef<Set<string>>(new Set());
 
   const { subscribe } = useWs();
 
@@ -128,6 +174,9 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
     hydratedKeyRef.current = key;
     const stored = loadFromStorage(projectId);
     setMessages(stored);
+    // Hydrate per-project session id alongside history
+    setChatSessionId(loadSessionFromStorage(projectId));
+    sessionFetchedRef.current = new Set();
   }, [projectId]);
 
   // Persist on every change
@@ -135,6 +184,31 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
     if (hydratedKeyRef.current !== storageKey(projectId)) return;
     saveToStorage(projectId, messages);
   }, [messages, projectId]);
+
+  // Persist session id
+  useEffect(() => {
+    if (hydratedKeyRef.current !== storageKey(projectId)) return;
+    saveSessionToStorage(projectId, chatSessionId);
+  }, [chatSessionId, projectId]);
+
+  // Lazily capture session_id from a task once available (after agent stream starts)
+  const captureSessionFromTask = useCallback(async (taskId: string) => {
+    if (chatSessionIdRef.current) return;
+    if (sessionFetchedRef.current.has(taskId)) return;
+    sessionFetchedRef.current.add(taskId);
+    try {
+      const task = await getTask(taskId);
+      const sid = (task && task.session_id) || "";
+      if (sid && !chatSessionIdRef.current) {
+        setChatSessionId(sid);
+      } else if (!sid) {
+        // Session not ready yet — allow a future retry
+        sessionFetchedRef.current.delete(taskId);
+      }
+    } catch {
+      sessionFetchedRef.current.delete(taskId);
+    }
+  }, []);
 
   const updateAssistantFromTask = useCallback(async (taskId: string) => {
     try {
@@ -151,6 +225,11 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
               ? "running"
               : undefined;
       const result = (task.result || "").toString();
+      // Capture session_id once available so subsequent messages reuse the session
+      const taskSid = (task.session_id || "").toString();
+      if (taskSid && !chatSessionIdRef.current) {
+        setChatSessionId(taskSid);
+      }
       setMessages((prev) =>
         prev.map((m) => {
           if (m.taskId !== taskId || m.role !== "assistant") return m;
@@ -174,6 +253,47 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
     }
   }, []);
 
+  // Fetch pending approval for a task and attach to the message
+  const attachApprovalToTask = useCallback(async (taskId: string) => {
+    try {
+      const resp = await fetchApprovals({ status: "pending" });
+      const match = resp.items.find((a) => a.task_id === taskId);
+      if (!match) return;
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.taskId !== taskId || m.role !== "assistant") return m;
+          return {
+            ...m,
+            interactive: {
+              type: "approval" as const,
+              approvalId: match.id,
+              taskId,
+              status: "pending" as const,
+            },
+          };
+        })
+      );
+      // Also inject a system-style assistant message to notify the user
+      const notifyMsg: ChatMessage = {
+        id: genId(),
+        role: "assistant",
+        content: "\u26A0\uFE0F 任务需要审批，请在下方操作",
+        timestamp: new Date().toISOString(),
+        status: "completed",
+        interactive: {
+          type: "approval",
+          approvalId: match.id,
+          taskId,
+          status: "pending",
+        },
+      };
+      setMessages((prev) => [...prev, notifyMsg]);
+      setHasUnread(true);
+    } catch {
+      // ignore fetch failure
+    }
+  }, []);
+
   // Subscribe to WS events to update messages
   useEffect(() => {
     const handler = (event: TaskEvent) => {
@@ -186,6 +306,41 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
       if (!trackedTaskIds.has(event.task_id)) return;
 
       const type = event.type;
+
+      // Streamed agent output — append chunks to the assistant message in real-time.
+      // Backend emits `task.output` with top-level `chunk` & `output_type` fields
+      // (see backend/services/event_emitter.py::emit_task_output).
+      if (type === "task.output") {
+        const raw = event as TaskEvent & {
+          chunk?: string;
+          output_type?: string;
+          payload?: Record<string, unknown>;
+        };
+        const chunk =
+          (typeof raw.chunk === "string" ? raw.chunk : "") ||
+          (typeof raw.payload?.chunk === "string"
+            ? (raw.payload!.chunk as string)
+            : "") ||
+          "";
+        if (chunk) {
+          setMessages((prev) =>
+            prev.map((m) => {
+              if (m.taskId !== event.task_id || m.role !== "assistant") return m;
+              const prevContent = m.content || "";
+              const needsNewline =
+                prevContent.length > 0 && !prevContent.endsWith("\n");
+              return {
+                ...m,
+                content: prevContent + (needsNewline ? "\n" : "") + chunk,
+                status: "running" as ChatMessageStatus,
+              };
+            })
+          );
+        }
+        // Capture session_id lazily on the first output event
+        void captureSessionFromTask(event.task_id);
+        return;
+      }
       // Backend emits "task.status_changed" with new_status; some flows may emit
       // shorthand "task.completed" / "task.failed". Handle both.
       if (
@@ -208,7 +363,18 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
         )
           .toString()
           .toLowerCase();
-        if (
+
+        // When task enters review state, fetch and attach approval info
+        if (ns === "review") {
+          // Update message status to show review state
+          setMessages((prev) =>
+            prev.map((m) => {
+              if (m.taskId !== event.task_id || m.role !== "assistant") return m;
+              return { ...m, content: m.content || "任务执行中，等待审批...", status: "running" };
+            })
+          );
+          void attachApprovalToTask(event.task_id);
+        } else if (
           ns === "completed" ||
           ns === "failed" ||
           ns === "stopped" ||
@@ -216,6 +382,41 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
           ns === "rejected"
         ) {
           void updateAssistantFromTask(event.task_id);
+          // Also update any interactive messages related to this task
+          const resolvedStatus = (ns === "approved" ? "approved" : ns === "rejected" ? "rejected" : undefined) as
+            | "approved"
+            | "rejected"
+            | undefined;
+          if (resolvedStatus) {
+            setMessages((prev) =>
+              prev.map((m) => {
+                if (!m.interactive || m.interactive.taskId !== event.task_id) return m;
+                return {
+                  ...m,
+                  interactive: { ...m.interactive, status: resolvedStatus },
+                };
+              })
+            );
+          }
+        }
+      }
+
+      // Handle approval-specific events
+      if (type === "approval.resolved") {
+        const payload = event.payload || {};
+        const approvalId = payload.approval_id as string | undefined;
+        const resolution = (payload.resolution as string || "").toLowerCase();
+        const resolvedStatus = resolution === "approved" ? "approved" : resolution === "rejected" ? "rejected" : undefined;
+        if (approvalId && resolvedStatus) {
+          setMessages((prev) =>
+            prev.map((m) => {
+              if (!m.interactive || m.interactive.approvalId !== approvalId) return m;
+              return {
+                ...m,
+                interactive: { ...m.interactive, status: resolvedStatus as ChatInteractiveStatus },
+              };
+            })
+          );
         }
       }
     };
@@ -223,7 +424,7 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
     return () => {
       unsubscribe();
     };
-  }, [subscribe, updateAssistantFromTask]);
+  }, [subscribe, updateAssistantFromTask, attachApprovalToTask, captureSessionFromTask]);
 
   const sendMessage = useCallback(
     async (content: string, overrides?: SendMessageOverrides) => {
@@ -240,7 +441,11 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
       // Snapshot history BEFORE adding user message for context build
       const historyForPrompt = messagesRef.current;
       const finalCwd = overrides?.projectCwd ?? projectId ?? undefined;
-      const finalSessionId = overrides?.sessionId ?? sessionId ?? undefined;
+      const finalSessionId =
+        overrides?.sessionId ??
+        sessionId ??
+        chatSessionIdRef.current ??
+        undefined;
       const finalAgentId = overrides?.agentId ?? agentId ?? undefined;
 
       const assistantMsg: ChatMessage = {
@@ -292,9 +497,12 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
 
   const clearHistory = useCallback(() => {
     setMessages([]);
+    setChatSessionId("");
+    sessionFetchedRef.current = new Set();
     if (typeof window !== "undefined") {
       try {
         window.localStorage.removeItem(storageKey(projectId));
+        window.localStorage.removeItem(sessionStorageKey(projectId));
       } catch {
         // ignore
       }
@@ -305,6 +513,78 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
     setHasUnread(false);
   }, []);
 
+  const approveTask = useCallback(async (approvalId: string) => {
+    try {
+      await approveApproval(approvalId);
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (!m.interactive || m.interactive.approvalId !== approvalId) return m;
+          return {
+            ...m,
+            interactive: { ...m.interactive, status: "approved" as const },
+          };
+        })
+      );
+      // Append confirmation message
+      const confirmMsg: ChatMessage = {
+        id: genId(),
+        role: "assistant",
+        content: "\u2705 审批已通过",
+        timestamp: new Date().toISOString(),
+        status: "completed",
+        interactive: { type: "info", status: "approved" },
+      };
+      setMessages((prev) => [...prev, confirmMsg]);
+      setHasUnread(true);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : "操作失败";
+      const failMsg: ChatMessage = {
+        id: genId(),
+        role: "assistant",
+        content: `\u274C 审批操作失败：${errMsg}`,
+        timestamp: new Date().toISOString(),
+        status: "failed",
+      };
+      setMessages((prev) => [...prev, failMsg]);
+    }
+  }, []);
+
+  const rejectTask = useCallback(async (approvalId: string) => {
+    try {
+      await rejectApproval(approvalId);
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (!m.interactive || m.interactive.approvalId !== approvalId) return m;
+          return {
+            ...m,
+            interactive: { ...m.interactive, status: "rejected" as const },
+          };
+        })
+      );
+      // Append confirmation message
+      const confirmMsg: ChatMessage = {
+        id: genId(),
+        role: "assistant",
+        content: "\u274C 审批已拒绝",
+        timestamp: new Date().toISOString(),
+        status: "completed",
+        interactive: { type: "info", status: "rejected" },
+      };
+      setMessages((prev) => [...prev, confirmMsg]);
+      setHasUnread(true);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : "操作失败";
+      const failMsg: ChatMessage = {
+        id: genId(),
+        role: "assistant",
+        content: `\u274C 拒绝操作失败：${errMsg}`,
+        timestamp: new Date().toISOString(),
+        status: "failed",
+      };
+      setMessages((prev) => [...prev, failMsg]);
+    }
+  }, []);
+
   return useMemo(
     () => ({
       messages,
@@ -313,7 +593,9 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
       markRead,
       sendMessage,
       clearHistory,
+      approveTask,
+      rejectTask,
     }),
-    [messages, isSending, hasUnread, markRead, sendMessage, clearHistory]
+    [messages, isSending, hasUnread, markRead, sendMessage, clearHistory, approveTask, rejectTask]
   );
 }

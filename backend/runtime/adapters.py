@@ -493,6 +493,9 @@ def parse_codex_json_event(line: str) -> tuple[str, str]:
     return "skip", ""
 
 
+# ── Codex CLI 有效模型 key（抽象 tier 名而非原始模型名） ──
+CODEX_VALID_MODEL_KEYS = {"auto", "ultimate", "performance", "efficient", "lite"}
+
 # ── Adapter 注册表（延迟填充，在类定义之后） ──
 _ADAPTER_REGISTRY: dict[str, "AgentAdapter"] = {}
 
@@ -506,6 +509,27 @@ class AgentAdapter:
     default_model = ""
     timeout_seconds = CODEX_TIMEOUT_SECONDS
     supports_resume = True
+    valid_model_keys: set[str] = set()  # 空集表示接受任意模型名
+
+    def normalize_model(self, model: str) -> str:
+        """校验并规范化模型名。
+
+        如果 valid_model_keys 非空且 model 不在其中，回退到 'auto'（或空串使用默认值）。
+        子类可覆盖以实现 adapter 特定的校验逻辑。
+        """
+        if not model:
+            return ""
+        if not self.valid_model_keys:
+            # 无限制列表，直接透传（Claude/Qoder 接受任意模型名）
+            return model
+        if model.lower() in self.valid_model_keys:
+            return model.lower()
+        # 无效 model key —— 回退
+        logger.warning(
+            "[%s] Invalid model %r, falling back to 'auto'. Valid keys: %s",
+            self.id, model, ", ".join(sorted(self.valid_model_keys)),
+        )
+        return "auto"
 
     def build_command(self, task: CodexTaskRuntime, last_message_file: Optional[Path] = None) -> list[str]:
         raise NotImplementedError
@@ -527,6 +551,7 @@ class CodexAdapter(AgentAdapter):
     bin_name = CODEX_BIN
     default_model = CODEX_MODEL
     timeout_seconds = CODEX_TIMEOUT_SECONDS
+    valid_model_keys = CODEX_VALID_MODEL_KEYS
 
     def build_command(self, task: CodexTaskRuntime, last_message_file: Optional[Path] = None) -> list[str]:
         common = [CODEX_BIN]

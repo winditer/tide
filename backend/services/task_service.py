@@ -95,6 +95,14 @@ class TaskService:
             task_id, workspace_id, old_status, new_status,
         )
 
+        # 任务进入终态时清理残留的 pending 审批记录
+        if new_status in ("completed", "failed", "stopped", "rejected"):
+            try:
+                from backend.services.approval_service import approval_service
+                await approval_service.cleanup_task_approvals(task_id)
+            except Exception as e:
+                logger.debug("cleanup_task_approvals failed: %s", e)
+
         # 事件驱动通知 work_item_service（幂等，调用会自动跳过未关联的任务）。
         if new_status in ("completed", "failed", "stopped", "rejected"):
             try:
@@ -186,6 +194,10 @@ class TaskService:
         if agent_id not in AGENT_ADAPTERS:
             choices = ", ".join(sorted(AGENT_ADAPTERS))
             raise ValueError(f"Unsupported agent_id: {agent_id!r}. Available agents: {choices}")
+
+        # 校验并规范化 model：无效 key 回退到 'auto' 而非让 CLI 报错
+        adapter = AGENT_ADAPTERS[agent_id]
+        model = adapter.normalize_model(model)
 
         # fallback cwd
         if not cwd:
@@ -571,6 +583,11 @@ class TaskService:
         model = task.get("model") or ""
         prompt = task["prompt"]
 
+        # 重新校验 model（DB 中可能残留无效值）
+        adapter = AGENT_ADAPTERS.get(agent_id)
+        if adapter:
+            model = adapter.normalize_model(model)
+
         runtime = CodexTaskRuntime(
             task_id=task_id,
             chat_id=task.get("chat_id") or "",
@@ -650,6 +667,11 @@ class TaskService:
         cwd = task.get("cwd") or str(Path.cwd())
         model = task.get("model") or ""
         prompt = task["prompt"]
+
+        # 重新校验 model（DB 中可能残留无效值）
+        adapter = AGENT_ADAPTERS.get(agent_id)
+        if adapter:
+            model = adapter.normalize_model(model)
 
         # re-register in memory
         runtime = CodexTaskRuntime(

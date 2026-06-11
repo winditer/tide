@@ -26,6 +26,10 @@ const BUTTON_SIZE = 56;
 const DRAG_THRESHOLD = 4;
 const WINDOW_W = 380;
 const WINDOW_H = 520;
+const MIN_W = 320;
+const MIN_H = 400;
+const MAX_W_VW = 0.9;
+const MAX_H_VH = 0.85;
 
 function loadPosition(): ButtonPosition {
   if (typeof window === "undefined") return DEFAULT_POSITION;
@@ -80,6 +84,8 @@ export function FloatingChat() {
   const [agentId, setAgentId] = useState<string>("");
   const [draftInput, setDraftInput] = useState("");
   const [isDragging, setIsDragging] = useState(false);
+  const [isMaximized, setIsMaximized] = useState(false);
+  const [windowSize, setWindowSize] = useState({ width: WINDOW_W, height: WINDOW_H });
 
   // hydrate
   useEffect(() => {
@@ -112,15 +118,34 @@ export function FloatingChat() {
     agentId: agentId || undefined,
   });
 
+  // Keep a stable ref to chat to avoid stale closures & dependency instability
+  const chatRef = useRef(chat);
+  chatRef.current = chat;
+
+  const sendingRef = useRef(false);
+
   const handleSend = useCallback(async () => {
     const trimmed = draftInput.trim();
-    if (!trimmed || chat.isSending) return;
+    if (!trimmed) return;
+    if (chatRef.current.isSending) {
+      console.warn("[FloatingChat] Blocked: chat.isSending");
+      return;
+    }
+    if (sendingRef.current) {
+      console.warn("[FloatingChat] Blocked: sendingRef active");
+      return;
+    }
+    sendingRef.current = true;
     setDraftInput("");
-    await chat.sendMessage(trimmed, {
-      projectCwd: projectCwd || undefined,
-      agentId: agentId || undefined,
-    });
-  }, [draftInput, chat, projectCwd, agentId]);
+    try {
+      await chatRef.current.sendMessage(trimmed, {
+        projectCwd: projectCwd || undefined,
+        agentId: agentId || undefined,
+      });
+    } finally {
+      sendingRef.current = false;
+    }
+  }, [draftInput, projectCwd, agentId]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -209,26 +234,83 @@ export function FloatingChat() {
     if (isDragging) return;
     const next = !open;
     setOpen(next);
-    if (next) chat.markRead();
-  }, [open, chat, isDragging]);
+    if (next) chatRef.current.markRead();
+  }, [open, isDragging]);
+
+  // --- Resize drag logic ---
+  const resizeRef = useRef<{
+    startX: number;
+    startY: number;
+    startW: number;
+    startH: number;
+  } | null>(null);
+
+  useEffect(() => {
+    function onResizeMove(e: MouseEvent) {
+      const s = resizeRef.current;
+      if (!s) return;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const maxW = vw * MAX_W_VW;
+      const maxH = vh * MAX_H_VH;
+      // dragging from left-top: moving left increases width, moving up increases height
+      const newW = Math.min(Math.max(s.startW - (e.clientX - s.startX), MIN_W), maxW);
+      const newH = Math.min(Math.max(s.startH - (e.clientY - s.startY), MIN_H), maxH);
+      setWindowSize({ width: newW, height: newH });
+    }
+    function onResizeUp() {
+      resizeRef.current = null;
+    }
+    window.addEventListener("mousemove", onResizeMove);
+    window.addEventListener("mouseup", onResizeUp);
+    return () => {
+      window.removeEventListener("mousemove", onResizeMove);
+      window.removeEventListener("mouseup", onResizeUp);
+    };
+  }, []);
+
+  const handleResizeMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      resizeRef.current = {
+        startX: e.clientX,
+        startY: e.clientY,
+        startW: windowSize.width,
+        startH: windowSize.height,
+      };
+    },
+    [windowSize]
+  );
 
   // Compute window position so it stays anchored above the button and on screen
   const windowStyle = useMemo<CSSProperties>(() => {
+    if (isMaximized) {
+      return {
+        inset: 16,
+        bottom: 16,
+        right: 16,
+        width: "calc(100vw - 32px)",
+        height: "calc(100vh - 32px)",
+      };
+    }
     if (typeof window === "undefined") {
       return { bottom: position.bottom + BUTTON_SIZE + 14, right: position.right };
     }
     const vw = window.innerWidth;
     const vh = window.innerHeight;
+    const curW = windowSize.width;
+    const curH = windowSize.height;
     let bottom = position.bottom + BUTTON_SIZE + 14;
-    if (bottom + WINDOW_H > vh - 8) {
-      bottom = Math.max(vh - WINDOW_H - 8, 8);
+    if (bottom + curH > vh - 8) {
+      bottom = Math.max(vh - curH - 8, 8);
     }
     let right = position.right;
-    if (right + WINDOW_W > vw - 8) {
-      right = Math.max(vw - WINDOW_W - 8, 8);
+    if (right + curW > vw - 8) {
+      right = Math.max(vw - curW - 8, 8);
     }
     return { bottom, right };
-  }, [position]);
+  }, [position, isMaximized, windowSize]);
 
   if (!mounted) return null;
 
@@ -273,8 +355,26 @@ export function FloatingChat() {
           style={windowStyle}
           className="fixed z-50 flex flex-col rounded-xl border-2 border-zinc-900 bg-white shadow-[6px_6px_0_0_rgba(0,0,0,1)]"
         >
+          {/* Resize handle – top-left corner */}
+          {!isMaximized && (
+            <div
+              onMouseDown={handleResizeMouseDown}
+              className="absolute -left-0.5 -top-0.5 z-10 flex h-5 w-5 cursor-nw-resize items-end justify-end"
+              title="拖动调整大小"
+            >
+              <svg width="10" height="10" viewBox="0 0 10 10" className="text-zinc-400">
+                <path d="M0 10 L10 0" stroke="currentColor" strokeWidth="1.5" />
+                <path d="M0 6 L6 0" stroke="currentColor" strokeWidth="1.5" />
+              </svg>
+            </div>
+          )}
           <div
-            className="flex h-[520px] w-[380px] flex-col overflow-hidden rounded-[10px]"
+            style={
+              isMaximized
+                ? { width: "100%", height: "100%" }
+                : { width: windowSize.width, height: windowSize.height }
+            }
+            className="flex flex-col overflow-hidden rounded-[10px]"
           >
             {/* Header */}
             <div className="flex h-12 shrink-0 items-center gap-2 border-b-2 border-zinc-900 bg-yellow-300 px-3">
@@ -307,6 +407,48 @@ export function FloatingChat() {
                     <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
                     <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
                   </svg>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsMaximized((v) => !v)}
+                  title={isMaximized ? "还原" : "最大化"}
+                  className="flex h-7 w-7 items-center justify-center rounded border-2 border-zinc-900 bg-white text-zinc-900 transition-colors hover:bg-zinc-900 hover:text-white"
+                >
+                  {isMaximized ? (
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="13"
+                      height="13"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
+                    >
+                      <rect x="5" y="5" width="14" height="14" rx="1" />
+                      <path d="M9 3v2" />
+                      <path d="M15 3v2" />
+                      <path d="M9 19v2" />
+                      <path d="M15 19v2" />
+                    </svg>
+                  ) : (
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="13"
+                      height="13"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
+                    >
+                      <rect x="3" y="3" width="18" height="18" rx="2" />
+                    </svg>
+                  )}
                 </button>
                 <button
                   type="button"
@@ -370,11 +512,19 @@ export function FloatingChat() {
                     ? `在「${selectedProject.name}」中执行任务`
                     : "纯对话模式 · 不绑定项目"
                 }
+                onApprove={(approvalId) => void chat.approveTask(approvalId)}
+                onReject={(approvalId) => void chat.rejectTask(approvalId)}
               />
             </div>
 
             {/* Input */}
             <div className="shrink-0 border-t-2 border-zinc-900 bg-white p-2">
+              <div className="mb-1 flex items-center justify-center" aria-hidden="true">
+                <span
+                  title="拖动输入框右下角可调整高度"
+                  className="inline-flex h-1 w-8 rounded-full bg-zinc-300"
+                />
+              </div>
               <div className="flex items-end gap-2">
                 <textarea
                   rows={2}
@@ -386,7 +536,7 @@ export function FloatingChat() {
                       ? `在「${selectedProject.name}」中执行... (⌘+Enter)`
                       : "输入消息开始对话... (⌘+Enter)"
                   }
-                  className="min-h-[44px] max-h-[120px] flex-1 resize-none rounded border-2 border-zinc-900 bg-white px-2 py-1.5 text-sm leading-snug text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-yellow-300"
+                  className="min-h-[60px] max-h-[200px] flex-1 resize-y rounded border-2 border-zinc-900 bg-white px-2 py-1.5 text-sm leading-snug text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-yellow-300"
                 />
                 <button
                   type="button"

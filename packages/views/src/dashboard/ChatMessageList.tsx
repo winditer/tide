@@ -2,10 +2,13 @@
 
 import { useEffect, useRef } from "react";
 import type { ChatMessage } from "@tide/core";
+import { SimpleMarkdown } from "../shared/SimpleMarkdown";
 
 interface ChatMessageListProps {
   messages: ChatMessage[];
   emptyHint?: string;
+  onApprove?: (approvalId: string) => void;
+  onReject?: (approvalId: string) => void;
 }
 
 function formatTime(iso: string): string {
@@ -18,7 +21,7 @@ function formatTime(iso: string): string {
   return `${hh}:${mm}:${ss}`;
 }
 
-export function ChatMessageList({ messages, emptyHint }: ChatMessageListProps) {
+export function ChatMessageList({ messages, emptyHint, onApprove, onReject }: ChatMessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -67,7 +70,7 @@ export function ChatMessageList({ messages, emptyHint }: ChatMessageListProps) {
       className="flex h-full flex-col gap-3 overflow-y-auto px-3 py-3"
     >
       {messages.map((msg) => (
-        <MessageBubble key={msg.id} message={msg} />
+        <MessageBubble key={msg.id} message={msg} onApprove={onApprove} onReject={onReject} />
       ))}
     </div>
   );
@@ -75,13 +78,22 @@ export function ChatMessageList({ messages, emptyHint }: ChatMessageListProps) {
 
 interface MessageBubbleProps {
   message: ChatMessage;
+  onApprove?: (approvalId: string) => void;
+  onReject?: (approvalId: string) => void;
 }
 
-function MessageBubble({ message }: MessageBubbleProps) {
+function MessageBubble({ message, onApprove, onReject }: MessageBubbleProps) {
   const isUser = message.role === "user";
   const isPendingOrRunning =
     message.status === "pending" || message.status === "running";
   const isFailed = message.status === "failed";
+  const hasApprovalPending =
+    message.interactive?.type === "approval" &&
+    message.interactive.status === "pending";
+  const isApprovalResolved =
+    message.interactive?.type === "approval" &&
+    (message.interactive.status === "approved" ||
+      message.interactive.status === "rejected");
 
   if (isUser) {
     return (
@@ -105,22 +117,64 @@ function MessageBubble({ message }: MessageBubbleProps) {
           "max-w-[80%] rounded-xl border-2 px-3 py-2 text-sm leading-relaxed text-zinc-900 shadow-[3px_3px_0_0_rgba(0,0,0,1)] " +
           (isFailed
             ? "border-red-500 bg-red-50"
-            : isPendingOrRunning
-              ? "border-zinc-900 bg-yellow-50"
-              : "border-zinc-900 bg-zinc-100")
+            : hasApprovalPending
+              ? "border-amber-500 bg-amber-50"
+              : isPendingOrRunning
+                ? "border-zinc-900 bg-yellow-50"
+                : "border-zinc-900 bg-zinc-100")
         }
       >
         {isPendingOrRunning && !message.content ? (
           <div className="flex items-center gap-2">
             <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-zinc-900" />
             <span className="font-mono text-[11px] tracking-widest text-zinc-700">
-              EXECUTING…
+              EXECUTING\u2026
             </span>
           </div>
         ) : (
-          <pre className="whitespace-pre-wrap break-words font-sans">
-            {renderContent(message.content)}
-          </pre>
+          <SimpleMarkdown
+            source={message.content || ""}
+            variant="compact"
+            className="break-words text-sm leading-6"
+          />
+        )}
+
+        {/* Interactive approval buttons */}
+        {hasApprovalPending && message.interactive?.approvalId && (
+          <div className="mt-2 flex gap-2 border-t border-amber-200 pt-2">
+            <button
+              type="button"
+              onClick={() => onApprove?.(message.interactive!.approvalId!)}
+              className="px-3 py-1 bg-emerald-500 text-white text-xs font-mono font-bold border-2 border-zinc-900 rounded shadow-[2px_2px_0_0_rgba(0,0,0,1)] hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-[1px_1px_0_0_rgba(0,0,0,1)] transition-all active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
+            >
+              APPROVE
+            </button>
+            <button
+              type="button"
+              onClick={() => onReject?.(message.interactive!.approvalId!)}
+              className="px-3 py-1 bg-red-500 text-white text-xs font-mono font-bold border-2 border-zinc-900 rounded shadow-[2px_2px_0_0_rgba(0,0,0,1)] hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-[1px_1px_0_0_rgba(0,0,0,1)] transition-all active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
+            >
+              REJECT
+            </button>
+          </div>
+        )}
+
+        {/* Resolved approval status badge */}
+        {isApprovalResolved && (
+          <div className="mt-2 border-t border-zinc-200 pt-2">
+            <span
+              className={
+                "inline-block px-2 py-0.5 text-[10px] font-mono font-bold border-2 rounded " +
+                (message.interactive!.status === "approved"
+                  ? "border-emerald-600 bg-emerald-100 text-emerald-700"
+                  : "border-red-600 bg-red-100 text-red-700")
+              }
+            >
+              {message.interactive!.status === "approved"
+                ? "\u2705 APPROVED"
+                : "\u274C REJECTED"}
+            </span>
+          </div>
         )}
       </div>
       <div className="mt-1 flex items-center gap-2 font-mono text-[10px] tracking-widest text-zinc-400">
@@ -144,33 +198,4 @@ function MessageBubble({ message }: MessageBubbleProps) {
   );
 }
 
-/**
- * Lightweight content renderer:
- * - Splits on triple-backtick fenced code blocks and renders them as <code> blocks
- * - Outside of code blocks, renders raw text (whitespace preserved by parent <pre>)
- */
-function renderContent(content: string): React.ReactNode {
-  if (!content) return null;
-  const parts: React.ReactNode[] = [];
-  const fenceRe = /```([\w-]*)\n?([\s\S]*?)```/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  let key = 0;
-  while ((match = fenceRe.exec(content)) !== null) {
-    const before = content.slice(lastIndex, match.index);
-    if (before) parts.push(<span key={`t-${key++}`}>{before}</span>);
-    const code = match[2] || "";
-    parts.push(
-      <code
-        key={`c-${key++}`}
-        className="my-1 block whitespace-pre-wrap break-words rounded border-2 border-zinc-900 bg-white px-2 py-1.5 font-mono text-[12px] text-zinc-900"
-      >
-        {code}
-      </code>
-    );
-    lastIndex = match.index + match[0].length;
-  }
-  const tail = content.slice(lastIndex);
-  if (tail) parts.push(<span key={`t-${key++}`}>{tail}</span>);
-  return parts.length > 0 ? parts : content;
-}
+

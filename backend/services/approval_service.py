@@ -379,6 +379,22 @@ class ApprovalService:
             )
             return [dict(row._mapping) for row in result.fetchall()]
 
+    # ── 清理方法 ───────────────────────────────────────────
+
+    async def cleanup_task_approvals(self, task_id: str) -> int:
+        """清理任务的所有 pending 审批记录（任务完成/失败/停止时调用）"""
+        async with async_session_factory() as session:
+            result = await session.execute(
+                text("""
+                UPDATE approvals
+                SET status = 'cancelled', resolved_at = :resolved_at
+                WHERE task_id = :task_id AND status = 'pending'
+                """),
+                {"task_id": task_id, "resolved_at": _now_iso()},
+            )
+            await session.commit()
+            return result.rowcount
+
     # ── 辅助方法 ───────────────────────────────────────────
 
     async def _update_lark_card(self, task_id: str) -> None:

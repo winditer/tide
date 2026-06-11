@@ -4,6 +4,14 @@
 **本文档引用的文件**
 - [tide_ws.py](file://tide_ws.py)
 - [README.md](file://README.md)
+- [backend/api/work_items.py](file://backend/api/work_items.py)
+- [backend/api/kanban.py](file://backend/api/kanban.py)
+- [backend/api/projects.py](file://backend/api/projects.py)
+- [backend/services/work_item_service.py](file://backend/services/work_item_service.py)
+- [backend/services/message_handler.py](file://backend/services/message_handler.py)
+- [backend/services/plan_executor.py](file://backend/services/plan_executor.py)
+- [backend/models/schemas.py](file://backend/models/schemas.py)
+- [backend/db/init.sql](file://backend/db/init.sql)
 </cite>
 
 ## 目录
@@ -12,11 +20,12 @@
 3. [核心组件](#核心组件)
 4. [架构总览](#架构总览)
 5. [详细组件分析](#详细组件分析)
-6. [依赖分析](#依赖分析)
-7. [性能考虑](#性能考虑)
-8. [故障排查指南](#故障排查指南)
-9. [结论](#结论)
-10. [附录](#附录)
+6. [工作项系统 API](#工作项系统-api)
+7. [依赖分析](#依赖分析)
+8. [性能考虑](#性能考虑)
+9. [故障排查指南](#故障排查指南)
+10. [结论](#结论)
+11. [附录](#附录)
 
 ## 简介
 本文件面向 Tide 的核心 API，聚焦三大领域：
@@ -208,6 +217,31 @@ Task->>Card : "结束文本(task_end_text)"
   - plan_task_dependencies_satisfied()/plan_status_label()/plan_summary(): 依赖满足性判断、状态标签与统计
   - plan_task_successful()/plan_task_terminal(): 结果判定与终止条件
 
+#### Plan REST 端点（backend/api/plans.py）
+
+以 `backend/api/plans.py` 中 `APIRouter(prefix="/api/plans")` 实际路由为准，端点清单如下：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/plans` | 创建 Plan，请求体为 `PlanCreate`（`workspace_id`、`definition`、`cwd`、`model`）；创建后自动开始执行，无需独立的 run 接口 |
+| GET | `/api/plans` | Plan 列表，支持 `workspace_id`、`status`、`project`（按 cwd 精确匹配）、`session_id`（按子任务关联会话筛选）、`limit`（1–200，默认 50）、`offset` 查询参数 |
+| GET | `/api/plans/{plan_id}` | Plan 详情，返回 `PlanResponse` |
+| POST | `/api/plans/{plan_id}/stop` | 停止 Plan（取代旧 `cancel`，停止流程内置清理逻辑） |
+| GET | `/api/plans/{plan_id}/dag` | 获取 DAG 结构（React Flow 格式 `PlanDAGResponse`），用于前端 DAG 可视化 |
+| GET | `/api/plans/{plan_id}/timeline` | 获取 Gantt 时间线数据，返回 `list[PlanTimelineItem]` |
+| GET | `/api/plans/{plan_id}/tasks` | 获取子任务列表，返回 `list[PlanTaskResponse]` |
+| POST | `/api/plans/{plan_id}/tasks/{task_id}/retry` | 重试子任务 |
+| POST | `/api/plans/{plan_id}/tasks/{task_id}/approve` | 审批子任务，以 approved 模式重启；非待审批状态返回 400 |
+| POST | `/api/plans/{plan_id}/tasks/{task_id}/commit` | 提交或跳过子任务改动，请求体 `{ "commit": bool }`，默认 `true` |
+| POST | `/api/plans/{plan_id}/tasks/{task_id}/merge` | cherry-pick 合并单个已提交子任务，冲突或失败返回 409 |
+| POST | `/api/plans/{plan_id}/merge-all` | 按依赖顺序合并所有 committed 子任务（取代旧 `merge`，合并流程内置清理逻辑） |
+
+说明：
+- 旧版 `POST /api/plans/{id}/run` 已移除，Plan 在创建时自动进入执行流程。
+- 旧版 `POST /api/plans/{id}/cancel` 已重命名为 `POST /api/plans/{id}/stop`。
+- 旧版 `POST /api/plans/{id}/merge` 已重命名为 `POST /api/plans/{id}/merge-all`；同时新增针对单个子任务的 `POST /api/plans/{plan_id}/tasks/{task_id}/merge`。
+- 旧版 `POST /api/plans/{id}/cleanup` 已移除，相应清理动作内置于 `stop` 与 `merge-all` 流程中。
+
 ```mermaid
 flowchart TD
 Start(["开始 run_plan_task"]) --> Prepare["准备工作树<br/>prepare_plan_worktree()"]
@@ -291,6 +325,276 @@ AgentAdapter <|-- QoderAdapter
 - [tide_ws.py:557-568](file://tide_ws.py#L557-L568)
 - [tide_ws.py:162-164](file://tide_ws.py#L162-L164)
 - [tide_ws.py:869-1173](file://tide_ws.py#L869-L1173)
+
+## 工作项系统 API
+
+工作项（Work Item）是 Tide 项目侧的执行载体：每个工作项绑定到一个项目，由项目所绑定的工作流（Workflow Definition，含 `nodes` / `edges`）驱动状态流转。本节覆盖 [work_items.py](file://backend/api/work_items.py)、[kanban.py](file://backend/api/kanban.py) 中工作项相关路由、[projects.py](file://backend/api/projects.py) 中的项目-工作流绑定路由，以及背后的 [work_item_service.py](file://backend/services/work_item_service.py) 流转引擎。
+
+### 端点总览
+
+| 方法 | 路径 | 入参 | 响应 | 功能 |
+| --- | --- | --- | --- | --- |
+| `POST` | `/api/work-items` | `WorkItemCreate` | `WorkItemResponse` | 创建工作项；自动定位首个可见节点作为初始 `current_node_id`，若初始节点为 `agent` 则异步派发 task |
+| `GET` | `/api/work-items` | query: `project_id?`, `status?` (`active`/`completed`) | `WorkItemResponse[]` | 列出工作项，按 `created_at DESC` 返回 |
+| `GET` | `/api/work-items/{item_id}` | path: `item_id` | `WorkItemResponse` | 获取工作项详情，404 表示不存在 |
+| `PATCH` | `/api/work-items/{item_id}` | `WorkItemUpdate` | `WorkItemResponse` | 仅更新 `title` / `description` / `priority` / `assignee` / `tags` / `metadata`，不触发流转 |
+| `DELETE` | `/api/work-items/{item_id}` | path: `item_id` | `{ ok: true }` | 同时删除关联的 `work_item_transitions` 记录 |
+| `POST` | `/api/work-items/{item_id}/transition` | `WorkItemTransitionRequest` | `WorkItemTransitionResponse` | 手动流转到任意 `target_node_id`（自由拖拽语义），并按节点类型触发后续动作 |
+| `GET` | `/api/work-items/{item_id}/transitions` | path: `item_id` | `WorkItemTransitionResponse[]` | 获取该工作项的全部流转历史，按 `created_at ASC` |
+| `GET` | `/api/kanban/work-items` | query: `project_id` (必填) | `WorkItemKanbanResponse` | 工作项看板：以 workflow 可见节点（含 `end`）作为列，按 `current_node_id` 分组 |
+| `POST` | `/api/kanban/work-items/{item_id}/move` | `WorkItemTransitionRequest` | `WorkItemTransitionResponse` | 看板拖拽流转入口（与 `/transition` 等价，trigger_type=`manual`） |
+| `PUT` | `/api/projects/{project_id}/workflow` | `ProjectSettingsUpdate` (`workflow_id` 必填) | `ProjectSettingsResponse` | 绑定项目到工作流（UPSERT `project_settings`） |
+| `GET` | `/api/projects/{project_id}/workflow` | path: `project_id` | `ProjectSettingsResponse` | 查询项目的工作流绑定信息，404 表示未绑定 |
+| `DELETE` | `/api/projects/{project_id}/workflow` | path: `project_id` | `{ ok: true, project_id }` | 解绑项目工作流 |
+
+**章节来源**
+- [backend/api/work_items.py:19-96](file://backend/api/work_items.py#L19-L96)
+- [backend/api/kanban.py:51-74](file://backend/api/kanban.py#L51-L74)
+- [backend/api/projects.py:498-529](file://backend/api/projects.py#L498-L529)
+
+### 请求 / 响应模型
+
+以下模型定义于 [backend/models/schemas.py](file://backend/models/schemas.py#L296-L378)，与 SQLite 表结构一一对应。
+
+#### WorkItemCreate（请求体）
+```json
+{
+  "project_id": "<string, 必填>",
+  "title": "<string, 必填>",
+  "description": "<string?>",
+  "priority": 0,
+  "assignee": "<string?>",
+  "tags": ["<string>"],
+  "source_type": "manual",
+  "source_id": "<string?>",
+  "metadata": { }
+}
+```
+- `source_type` 取值：`manual`（默认，前端 UI / 直接 API 创建）、`lark`（Lark `/wi` 命令）、`plan`（Plan 子任务派生）；`source_id` 用于回链来源（chat_id、plan_task_id 等）。
+- 若项目未通过 `/api/projects/{project_id}/workflow` 绑定工作流，创建会以 HTTP 400 报错：`Project {project_id} has no workflow bound. Use set_project_workflow first.`。
+
+#### WorkItemUpdate（请求体）
+```json
+{
+  "title": "<string?>",
+  "description": "<string?>",
+  "priority": 0,
+  "assignee": "<string?>",
+  "tags": ["<string>"],
+  "metadata": { }
+}
+```
+仅传入需要修改的字段；`current_node_id` / `workflow_id` / `project_id` 不可通过此接口修改。
+
+#### WorkItemResponse（响应体）
+```json
+{
+  "id": "<uuid>",
+  "project_id": "<string>",
+  "workflow_id": "<uuid>",
+  "current_node_id": "<node_id>",
+  "title": "<string>",
+  "description": "<string?>",
+  "priority": 0,
+  "assignee": "<string?>",
+  "tags": ["<string>"],
+  "source_type": "manual|lark|plan",
+  "source_id": "<string?>",
+  "metadata": { },
+  "started_at": "<ISO8601>",
+  "completed_at": "<ISO8601?>",
+  "created_at": "<ISO8601>",
+  "updated_at": "<ISO8601>"
+}
+```
+`completed_at` 仅在工作项流转到 `end` 节点时由后端写入。
+
+#### WorkItemTransitionRequest / Response
+```json
+// Request
+{
+  "target_node_id": "<node_id, 必填>",
+  "operator": "<string?>"  // 缺省记为 "system"
+}
+
+// Response
+{
+  "id": "<uuid>",
+  "work_item_id": "<uuid>",
+  "from_node_id": "<node_id?>",  // 首次创建时为 null
+  "to_node_id": "<node_id>",
+  "trigger_type": "create|manual|condition|delay|agent_completed|approval_approved",
+  "task_id": "<uuid?>",          // agent 节点关联的 task
+  "operator": "<string?>",
+  "output": "<string?>",          // agent 节点完成后写回的结果
+  "created_at": "<ISO8601>"
+}
+```
+
+#### WorkItemKanbanResponse（看板响应）
+```json
+{
+  "columns": [
+    {
+      "id": "<node_id>",
+      "label": "<string>",
+      "category": "stage|agent|approval|delay|end",
+      "items": [WorkItemResponse]
+    }
+  ],
+  "workflow": { "id": "<uuid>", "name": "<string>" }
+}
+```
+看板列由 workflow definition 中的可见节点（`stage` / `agent` / `approval` / `delay` / `end`）按拓扑序生成；未绑定工作流时返回 `{ "columns": [], "workflow": null }`。
+
+#### ProjectSettingsUpdate / Response
+```json
+// Update（PUT body）
+{ "workflow_id": "<uuid?>", "default_assignee": "<string?>", "metadata": { } }
+
+// Response
+{
+  "project_id": "<string>",
+  "workflow_id": "<uuid?>",
+  "default_assignee": "<string?>",
+  "metadata": { },
+  "updated_at": "<ISO8601>"
+}
+```
+
+**章节来源**
+- [backend/models/schemas.py:296-378](file://backend/models/schemas.py#L296-L378)
+- [backend/db/init.sql:202-242](file://backend/db/init.sql#L202-L242)
+
+### 数据表结构
+
+```sql
+-- work_items：工作项主表
+CREATE TABLE work_items (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    workflow_id TEXT NOT NULL,
+    current_node_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    priority INTEGER DEFAULT 0,
+    assignee TEXT,
+    tags TEXT,                 -- JSON list
+    source_type TEXT DEFAULT 'manual',
+    source_id TEXT,
+    metadata TEXT,             -- JSON object
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,    -- 仅在到达 end 节点时写入
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- work_item_transitions：流转流水（每次推进一条）
+CREATE TABLE work_item_transitions (
+    id TEXT PRIMARY KEY,
+    work_item_id TEXT NOT NULL REFERENCES work_items(id),
+    from_node_id TEXT,          -- 首次创建为 NULL
+    to_node_id TEXT NOT NULL,
+    trigger_type TEXT DEFAULT 'manual',
+    task_id TEXT,               -- agent 节点关联的 task
+    operator TEXT,
+    output TEXT,                -- task 完成后回填
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- project_settings：项目-工作流绑定
+CREATE TABLE project_settings (
+    project_id TEXT PRIMARY KEY,
+    workflow_id TEXT,
+    default_assignee TEXT,
+    metadata TEXT,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+**章节来源**
+- [backend/db/init.sql:202-242](file://backend/db/init.sql#L202-L242)
+
+### 工作项状态流转规则
+
+工作项不存在传统的 `pending/running/done` 字段，而是以 `current_node_id` 指向工作流中的某个节点；节点类型决定到达后的行为：
+
+| 节点类型 | 是否可见列 | 到达节点时的动作 | trigger_type 写入 |
+| --- | --- | --- | --- |
+| `start` | 否 | 仅作为入口，BFS 跳过；创建工作项时自动落到下游第一个可见节点 | `create`（首次记录） |
+| `stage` | 是 | 纯停留，等待外部手动推进 | 调用方传入（默认 `manual`） |
+| `agent` | 是 | 自动调用 `task_service.create_task` 创建 task；task 完成后通过 `on_work_item_task_completed` 回写 `transition.output` 并自动推进到下一节点 | `agent_completed` |
+| `approval` | 是 | 调用 `approval_service.create_approval`，等待审批回调 `on_work_item_approval_resolved`；通过则推进，拒绝则停留 | `approval_approved` |
+| `condition` | 否 | 评估 `data.conditions`（`eq` / `neq` / `contains` / `gt` / `lt`）选定下游边，递归调用 `transition_work_item` | `condition` |
+| `delay` | 是 | `asyncio.sleep(seconds)` 后自动推进到第一个下游节点 | `delay` |
+| `end` | 是（看板列） | 写入 `work_items.completed_at`，工作项进入完成态 | 调用方传入 |
+
+关键约束：
+- **自由拖拽**：`POST /transition` 不强制 `target_node_id` 必须是 `from_node_id` 的直接下游，只校验该节点存在于 workflow definition 中（`Node {node_id} not found in workflow.` → HTTP 400）。
+- **幂等性**：agent 节点完成回调同时由事件驱动 + 后台轮询兜底（`_wait_and_record_output`，最长 ~2 小时），`on_work_item_task_completed` 通过比对 `current_node_id` 防止重复推进。
+- **可见节点**：仅 `stage / agent / approval / delay` 计入 `VISIBLE_NODE_TYPES`；看板列额外纳入 `end`（`BOARD_COLUMN_NODE_TYPES`），让已完成工作项也能在最后一列展示。
+- **WebSocket 广播**：`create` / `update` / `delete` / `transition` 均通过 `ws_hub.broadcast("work_items", ...)` 推送 `work_item.created` / `work_item.updated` / `work_item.deleted` / `work_item.transitioned` 事件。
+
+```mermaid
+flowchart LR
+    Start([start]) --> Stage1[stage]
+    Stage1 --> Agent1[agent]
+    Agent1 --> Approval1[approval]
+    Approval1 --> Cond{condition}
+    Cond -->|分支A| Delay1[delay]
+    Cond -->|默认| End([end])
+    Delay1 --> End
+```
+
+**章节来源**
+- [backend/services/work_item_service.py:50-103](file://backend/services/work_item_service.py#L50-L103)
+- [backend/services/work_item_service.py:476-569](file://backend/services/work_item_service.py#L476-L569)
+- [backend/services/work_item_service.py:589-820](file://backend/services/work_item_service.py#L589-L820)
+- [backend/services/work_item_service.py:823-1002](file://backend/services/work_item_service.py#L823-L1002)
+
+### 三大创建入口
+
+所有入口最终都汇聚到 `work_item_service.create_work_item()`，差异仅在 `source_type` / `source_id` 与触发上下文：
+
+#### 1. Lark 命令 `/wi create`
+聊天侧通过 `MessageHandler._cmd_work_item` 处理 `/wi create <标题>`：先用当前会话的 `active_project_key` 解析 `project_id`（base64 路径编码），再调用 `create_work_item`，写入 `source_type="lark"`、`source_id=chat_id`，结果以纯文本形式回复用户。
+- 用法：`/wi create <标题>` / `/wi list` / `/wi move <item_id> <stage_label>`
+- 失败时返回 `❌ 请先使用 /cd 切换到项目目录` 或具体异常文本。
+
+#### 2. 手动 API / UI 创建（`source_type="manual"`）
+前端工作项页面与外部脚本通过 `POST /api/work-items` 直接创建，body 即 `WorkItemCreate`。这是默认 `source_type`，对应纯人工录入或第三方系统集成。
+
+#### 3. Plan 子任务派生（`source_type="plan"`）
+Plan 执行器在为子任务派发 agent 任务的同时，调用 `PlanExecutor._create_plan_work_item`：
+- 通过 Plan 的 `workflow_id` 反查 `project_settings` 找到绑定项目；
+- 以 task 的 `prompt` 首行作为 `title`（截断 120 字符），`description` 为完整 prompt；
+- `source_type="plan"`、`source_id=plan_task_id`，并在 `metadata` 写入 `plan_id` / `plan_task_id` / `workflow_id`，便于反向追踪；
+- 异常被吞下，不影响 Plan 主流程。
+
+> 说明：定时调度（Schedule）侧的 `task_type="workflow"` 通过 [WorkflowEngine.start_run](file://backend/services/workflow_engine.py) 触发 DAG 执行（`trigger_type="schedule"`），属于另一条 workflow run 路径，并不直接产生 `work_items` 记录；如需让 Schedule 派生工作项，应改用 `task_type="agent"` 或在工作流节点内显式调用 `create_work_item`。
+
+```mermaid
+flowchart TB
+    Lark["Lark 命令<br/>/wi create"] -->|source_type=lark| API
+    UI["前端 UI / 外部脚本"] -->|source_type=manual| API
+    Plan["Plan 子任务<br/>plan_executor._create_plan_work_item"] -->|source_type=plan| Service
+    API["POST /api/work-items"] --> Service["work_item_service.create_work_item()"]
+    Service --> DB[(work_items + work_item_transitions)]
+    Service --> WS["ws_hub.broadcast('work_items', work_item.created)"]
+```
+
+**章节来源**
+- [backend/services/message_handler.py:711-760](file://backend/services/message_handler.py#L711-L760)
+- [backend/services/plan_executor.py:878-944](file://backend/services/plan_executor.py#L878-L944)
+- [backend/services/work_item_service.py:226-327](file://backend/services/work_item_service.py#L226-L327)
+
+### 错误码与异常
+
+| HTTP | 触发条件 |
+| --- | --- |
+| 400 | `target_node_id` 缺失；项目未绑定工作流；`Node {id} not found in workflow.`；`Workflow {id} has no visible nodes.` |
+| 404 | `Work item not found`；`Workflow {id} not found.`；`Project workflow not bound`（GET 项目工作流） |
+| 500 | `Failed to create work item`（service 返回 None）；`Failed to bind workflow` |
 
 ## 依赖分析
 - 组件耦合
