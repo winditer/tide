@@ -9,6 +9,7 @@ import {
   createWorkflow,
   updateWorkflow,
   deleteWorkflow,
+  toggleWorkflow,
   runWorkflow,
   fetchWorkflowRuns,
   fetchWorkflowRun,
@@ -20,14 +21,27 @@ import type {
   CreateWorkflowInput,
   UpdateWorkflowInput,
   RunWorkflowInput,
+  Workflow,
   WorkflowRun,
 } from "../types/workflow";
-import type { ListWorkflowRunsResponse } from "../api/workflows";
+import type {
+  ListWorkflowRunsResponse,
+  ListWorkflowsResponse,
+} from "../api/workflows";
+
+function normaliseWorkflows(
+  data: ListWorkflowsResponse | Workflow[] | undefined
+): Workflow[] {
+  if (!data) return [];
+  if (Array.isArray(data)) return data;
+  return data.items ?? [];
+}
 
 export function useWorkflows() {
   return useQuery({
     queryKey: ["workflows"],
     queryFn: () => fetchWorkflows(),
+    select: normaliseWorkflows,
   });
 }
 
@@ -67,6 +81,17 @@ export function useDeleteWorkflow() {
     mutationFn: (id: string) => deleteWorkflow(id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["workflows"] });
+    },
+  });
+}
+
+export function useToggleWorkflow() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => toggleWorkflow(id),
+    onSuccess: (_data, id) => {
+      qc.invalidateQueries({ queryKey: ["workflows"] });
+      qc.invalidateQueries({ queryKey: ["workflow", id] });
     },
   });
 }

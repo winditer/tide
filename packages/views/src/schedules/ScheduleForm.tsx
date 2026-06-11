@@ -6,12 +6,27 @@ import {
   useCreateScheduleMutation,
   useUpdateScheduleMutation,
 } from "@tide/core";
-import type { Schedule, CreateScheduleInput } from "@tide/core";
+import type {
+  Schedule,
+  CreateScheduleInput,
+  TriggerType,
+  ScheduleTaskType,
+} from "@tide/core";
 
 const TASK_TYPE_OPTIONS = [
-  { label: "任务 (Task)", value: "task" },
-  { label: "计划 (Plan)", value: "plan" },
+  { label: "Agent 任务", value: "agent" },
+  { label: "Plan 计划", value: "plan" },
+  { label: "状态查询", value: "status" },
+  { label: "自定义", value: "custom" },
 ];
+
+const TRIGGER_TYPE_OPTIONS = [
+  { label: "Cron 表达式", value: "cron" },
+  { label: "固定间隔", value: "interval" },
+  { label: "指定时间", value: "date" },
+];
+
+const DEFAULT_TIMEZONE = "Asia/Shanghai";
 
 /** Simple cron expression to human-readable description (Chinese) */
 function cronToHuman(expr: string): string {
@@ -44,8 +59,21 @@ interface ScheduleFormProps {
 
 export function ScheduleForm({ schedule, onSuccess, onCancel }: ScheduleFormProps) {
   const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [triggerType, setTriggerType] = useState<TriggerType>("cron");
+
+  // cron-specific state
   const [cronExpr, setCronExpr] = useState("");
-  const [taskType, setTaskType] = useState("task");
+  const [timezone, setTimezone] = useState(DEFAULT_TIMEZONE);
+
+  // interval-specific state
+  const [intervalHours, setIntervalHours] = useState("0");
+  const [intervalMinutes, setIntervalMinutes] = useState("0");
+
+  // date-specific state
+  const [runAt, setRunAt] = useState("");
+
+  const [taskType, setTaskType] = useState<ScheduleTaskType>("agent");
   const [taskConfig, setTaskConfig] = useState("{}");
 
   const createMutation = useCreateScheduleMutation();
@@ -56,15 +84,62 @@ export function ScheduleForm({ schedule, onSuccess, onCancel }: ScheduleFormProp
   useEffect(() => {
     if (schedule) {
       setName(schedule.name);
-      setCronExpr(schedule.cron_expr);
-      setTaskType(schedule.task_type);
-      setTaskConfig(JSON.stringify(schedule.task_config, null, 2));
+      setDescription(schedule.description ?? "");
+      const tt = (schedule.trigger_type ?? "cron") as TriggerType;
+      setTriggerType(tt);
+      const tc = schedule.trigger_config ?? {};
+      if (tt === "cron") {
+        setCronExpr(typeof tc.cron === "string" ? tc.cron : "");
+        setTimezone(typeof tc.timezone === "string" ? tc.timezone : DEFAULT_TIMEZONE);
+      } else if (tt === "interval") {
+        setIntervalHours(String(tc.hours ?? 0));
+        setIntervalMinutes(String(tc.minutes ?? 0));
+      } else if (tt === "date") {
+        setRunAt(typeof tc.run_at === "string" ? tc.run_at : "");
+      }
+      setTaskType((schedule.task_type as ScheduleTaskType) ?? "agent");
+      setTaskConfig(JSON.stringify(schedule.task_config ?? {}, null, 2));
     }
   }, [schedule]);
 
+  const buildTriggerConfig = (): { ok: boolean; config?: Record<string, any>; error?: string } => {
+    if (triggerType === "cron") {
+      if (!cronExpr.trim()) return { ok: false, error: "请输入 cron 表达式" };
+      return {
+        ok: true,
+        config: {
+          cron: cronExpr.trim(),
+          timezone: timezone.trim() || DEFAULT_TIMEZONE,
+        },
+      };
+    }
+    if (triggerType === "interval") {
+      const h = Number(intervalHours);
+      const m = Number(intervalMinutes);
+      if (!Number.isFinite(h) || !Number.isFinite(m) || (h <= 0 && m <= 0)) {
+        return { ok: false, error: "间隔的小时与分钟至少有一项大于 0" };
+      }
+      const cfg: Record<string, any> = {};
+      if (h > 0) cfg.hours = h;
+      if (m > 0) cfg.minutes = m;
+      return { ok: true, config: cfg };
+    }
+    if (triggerType === "date") {
+      if (!runAt.trim()) return { ok: false, error: "请选择执行时间" };
+      return { ok: true, config: { run_at: runAt.trim() } };
+    }
+    return { ok: false, error: "未知的触发类型" };
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || !cronExpr.trim()) return;
+    if (!name.trim()) return;
+
+    const triggerResult = buildTriggerConfig();
+    if (!triggerResult.ok) {
+      alert(triggerResult.error);
+      return;
+    }
 
     let config: Record<string, any>;
     try {
@@ -76,10 +151,14 @@ export function ScheduleForm({ schedule, onSuccess, onCancel }: ScheduleFormProp
 
     const params: CreateScheduleInput = {
       name: name.trim(),
-      cron_expr: cronExpr.trim(),
+      trigger_type: triggerType,
+      trigger_config: triggerResult.config!,
       task_type: taskType,
       task_config: config,
     };
+    if (description.trim()) {
+      params.description = description.trim();
+    }
 
     try {
       if (isEditMode && schedule) {
@@ -97,6 +176,12 @@ export function ScheduleForm({ schedule, onSuccess, onCancel }: ScheduleFormProp
   const isError = createMutation.isError || updateMutation.isError;
   const error = createMutation.error || updateMutation.error;
 
+  const submitDisabled =
+    isPending ||
+    !name.trim() ||
+    (triggerType === "cron" && !cronExpr.trim()) ||
+    (triggerType === "date" && !runAt.trim());
+
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
@@ -110,29 +195,100 @@ export function ScheduleForm({ schedule, onSuccess, onCancel }: ScheduleFormProp
       </div>
 
       <div>
-        <label className="mb-1.5 block text-sm font-medium">
-          Cron 表达式 *
-        </label>
+        <label className="mb-1.5 block text-sm font-medium">描述</label>
         <Input
-          placeholder="如: 0 9 * * * (每天9点)"
-          value={cronExpr}
-          onChange={(e) => setCronExpr(e.target.value)}
-          className="font-mono"
-          required
+          placeholder="可选描述"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
         />
-        {cronExpr && (
-          <p className="mt-1 text-xs text-muted-foreground">
-            {cronToHuman(cronExpr)}
-          </p>
-        )}
       </div>
+
+      <div>
+        <label className="mb-1.5 block text-sm font-medium">触发类型</label>
+        <Select
+          options={TRIGGER_TYPE_OPTIONS}
+          value={triggerType}
+          onChange={(e) => setTriggerType(e.target.value as TriggerType)}
+        />
+      </div>
+
+      {triggerType === "cron" && (
+        <>
+          <div>
+            <label className="mb-1.5 block text-sm font-medium">
+              Cron 表达式 *
+            </label>
+            <Input
+              placeholder="如: 0 9 * * * (每天9点)"
+              value={cronExpr}
+              onChange={(e) => setCronExpr(e.target.value)}
+              className="font-mono"
+              required
+            />
+            {cronExpr && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                {cronToHuman(cronExpr)}
+              </p>
+            )}
+          </div>
+          <div>
+            <label className="mb-1.5 block text-sm font-medium">时区</label>
+            <Input
+              placeholder="Asia/Shanghai"
+              value={timezone}
+              onChange={(e) => setTimezone(e.target.value)}
+            />
+          </div>
+        </>
+      )}
+
+      {triggerType === "interval" && (
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="mb-1.5 block text-sm font-medium">小时</label>
+            <Input
+              type="number"
+              min="0"
+              placeholder="0"
+              value={intervalHours}
+              onChange={(e) => setIntervalHours(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-sm font-medium">分钟</label>
+            <Input
+              type="number"
+              min="0"
+              placeholder="0"
+              value={intervalMinutes}
+              onChange={(e) => setIntervalMinutes(e.target.value)}
+            />
+          </div>
+        </div>
+      )}
+
+      {triggerType === "date" && (
+        <div>
+          <label className="mb-1.5 block text-sm font-medium">执行时间 *</label>
+          <Input
+            placeholder="2026-06-10T15:00:00+08:00"
+            value={runAt}
+            onChange={(e) => setRunAt(e.target.value)}
+            className="font-mono"
+            required
+          />
+          <p className="mt-1 text-xs text-muted-foreground">
+            ISO 8601 格式，建议带时区偏移
+          </p>
+        </div>
+      )}
 
       <div>
         <label className="mb-1.5 block text-sm font-medium">任务类型</label>
         <Select
           options={TASK_TYPE_OPTIONS}
           value={taskType}
-          onChange={(e) => setTaskType(e.target.value)}
+          onChange={(e) => setTaskType(e.target.value as ScheduleTaskType)}
         />
       </div>
 
@@ -152,10 +308,7 @@ export function ScheduleForm({ schedule, onSuccess, onCancel }: ScheduleFormProp
             取消
           </Button>
         )}
-        <Button
-          type="submit"
-          disabled={isPending || !name.trim() || !cronExpr.trim()}
-        >
+        <Button type="submit" disabled={submitDisabled}>
           {isPending
             ? isEditMode
               ? "保存中..."

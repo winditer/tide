@@ -9,7 +9,7 @@ import {
   CardTitle,
 } from "@tide/ui";
 import { useSchedulesQuery } from "@tide/core";
-import { ScheduleList, ScheduleForm } from "@tide/views";
+import { ScheduleList, ScheduleForm, ScheduleGuide } from "@tide/views";
 import type { Schedule } from "@tide/core";
 
 export default function SchedulesPage() {
@@ -43,7 +43,10 @@ export default function SchedulesPage() {
             创建和管理定时调度任务
           </p>
         </div>
-        <Button onClick={openCreate}>+ 创建调度</Button>
+        <div className="flex items-center gap-2">
+          <ScheduleGuide />
+          <Button onClick={openCreate}>+ 创建调度</Button>
+        </div>
       </div>
 
       {/* Schedule List */}

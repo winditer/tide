@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS schedules (
     description TEXT,
     trigger_type TEXT NOT NULL CHECK(trigger_type IN ('cron', 'interval', 'date')),
     trigger_config TEXT NOT NULL,
-    task_type TEXT NOT NULL CHECK(task_type IN ('agent', 'plan', 'status', 'custom')),
+    task_type TEXT NOT NULL CHECK(task_type IN ('agent', 'plan', 'workflow', 'status', 'custom')),
     task_config TEXT NOT NULL,
     enabled INTEGER DEFAULT 1,
     last_run_at TIMESTAMP,
@@ -150,6 +150,7 @@ CREATE TABLE IF NOT EXISTS workflows (
     description TEXT,
     definition TEXT NOT NULL,
     version INTEGER DEFAULT 1,
+    enabled INTEGER DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -197,6 +198,48 @@ CREATE TABLE IF NOT EXISTS conversations (
 CREATE INDEX IF NOT EXISTS idx_conversations_workspace ON conversations(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_chat ON conversations(chat_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_status ON conversations(workspace_id, status);
+
+-- project_settings 项目设置（存储项目绑定的工作流等配置）
+CREATE TABLE IF NOT EXISTS project_settings (
+    project_id TEXT PRIMARY KEY,
+    workflow_id TEXT,
+    default_assignee TEXT,
+    metadata TEXT,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- work_items 工作项
+CREATE TABLE IF NOT EXISTS work_items (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    workflow_id TEXT NOT NULL,
+    current_node_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    priority INTEGER DEFAULT 0,
+    assignee TEXT,
+    tags TEXT,
+    source_type TEXT DEFAULT 'manual',
+    source_id TEXT,
+    metadata TEXT,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- work_item_transitions 工作项流转记录
+CREATE TABLE IF NOT EXISTS work_item_transitions (
+    id TEXT PRIMARY KEY,
+    work_item_id TEXT NOT NULL REFERENCES work_items(id),
+    from_node_id TEXT,
+    to_node_id TEXT NOT NULL,
+    trigger_type TEXT DEFAULT 'manual',
+    task_id TEXT,
+    operator TEXT,
+    output TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
 -- 默认工作空间和 Agent actors（初始数据）
 INSERT OR IGNORE INTO actors (id, type, name, metadata) VALUES

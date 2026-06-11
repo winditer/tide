@@ -101,3 +101,66 @@ export const STATUS_LABEL: Record<string, string> = {
   skipped: "已跳过",
   cancelled: "已取消",
 };
+
+// ---------- Stage 节点：按 category 区分视觉 ----------
+
+export interface StageCategoryTone {
+  /** 顶部条带 / 箭头连接器底色 */
+  accent: string;
+  /** 节点正文表面色 */
+  surface: string;
+  /** 图标方块 / 装饰柱填充 */
+  swatch: string;
+  /** 中文展示名 */
+  label: string;
+}
+
+const STAGE_CATEGORY_TONES: Record<string, StageCategoryTone> = {
+  todo: {
+    accent: "bg-zinc-700",
+    surface: "bg-zinc-50",
+    swatch: "bg-zinc-700",
+    label: "待办",
+  },
+  in_progress: {
+    accent: "bg-sky-600",
+    surface: "bg-sky-50",
+    swatch: "bg-sky-600",
+    label: "进行中",
+  },
+  review: {
+    accent: "bg-amber-500",
+    surface: "bg-amber-50",
+    swatch: "bg-amber-500",
+    label: "评审",
+  },
+  done: {
+    accent: "bg-emerald-600",
+    surface: "bg-emerald-50",
+    swatch: "bg-emerald-600",
+    label: "已完成",
+  },
+  custom: {
+    accent: "bg-violet-600",
+    surface: "bg-violet-50",
+    swatch: "bg-violet-600",
+    label: "自定义",
+  },
+};
+
+/** 根据 stage 节点 category 返回视觉色调；未知 category 回退为 custom。 */
+export function stageCategoryTone(category?: string | null): StageCategoryTone {
+  if (!category) return STAGE_CATEGORY_TONES.custom;
+  return STAGE_CATEGORY_TONES[category] ?? STAGE_CATEGORY_TONES.custom;
+}
+
+export const STAGE_CATEGORY_OPTIONS: Array<{
+  label: string;
+  value: string;
+}> = [
+  { label: "待办 (TODO)", value: "todo" },
+  { label: "进行中 (IN PROGRESS)", value: "in_progress" },
+  { label: "评审 (REVIEW)", value: "review" },
+  { label: "已完成 (DONE)", value: "done" },
+  { label: "自定义 (CUSTOM)", value: "custom" },
+];

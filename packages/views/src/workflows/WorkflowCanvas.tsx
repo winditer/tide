@@ -50,6 +50,7 @@ const DEFAULT_LABELS: Record<WorkflowNodeType, string> = {
   parallel: "Fork",
   parallel_join: "Join",
   delay: "Delay",
+  stage: "Stage",
 };
 
 function defaultDataFor(type: WorkflowNodeType): Record<string, any> {
@@ -66,6 +67,8 @@ function defaultDataFor(type: WorkflowNodeType): Record<string, any> {
       return { label: "Fork" };
     case "parallel_join":
       return { label: "Join" };
+    case "stage":
+      return { label: "Stage", category: "custom" };
     default:
       return { label: DEFAULT_LABELS[type] };
   }
@@ -210,44 +213,60 @@ function CanvasInner({
   const [edges, setEdges] = useState<Edge[]>(initial.edges);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
+  // Refs to always hold the latest nodes/edges (updated inside state updaters)
+  const nodesRef = useRef<Node[]>(nodes);
+  const edgesRef = useRef<Edge[]>(edges);
+
+  // Track the last definition we emitted to avoid sync-echo overwrites
+  const lastEmittedRef = useRef<WorkflowDefinition | null>(null);
+
   // Sync when external definition or runs change (e.g. polling).
+  // Skip when the change was triggered by our own emitChange.
   useEffect(() => {
+    if (lastEmittedRef.current && lastEmittedRef.current === definition) {
+      lastEmittedRef.current = null;
+      return;
+    }
+    lastEmittedRef.current = null;
     setNodes(initial.nodes);
     setEdges(initial.edges);
-  }, [initial]);
+    nodesRef.current = initial.nodes;
+    edgesRef.current = initial.edges;
+  }, [initial, definition]);
 
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
 
-  const emitChange = useCallback(
-    (nextNodes: Node[], nextEdges: Edge[]) => {
-      queueMicrotask(() => {
-        onChangeRef.current?.(flowToDef(nextNodes, nextEdges));
-      });
-    },
-    []
-  );
+  const emitChange = useCallback(() => {
+    queueMicrotask(() => {
+      const def = flowToDef(nodesRef.current, edgesRef.current);
+      lastEmittedRef.current = def;
+      onChangeRef.current?.(def);
+    });
+  }, []);
 
   const onNodesChange = useCallback(
     (changes: NodeChange[]) => {
       setNodes((nds) => {
         const next = applyNodeChanges(changes, nds);
-        if (!readOnly) emitChange(next, edges);
+        nodesRef.current = next;
+        if (!readOnly) emitChange();
         return next;
       });
     },
-    [edges, emitChange, readOnly]
+    [emitChange, readOnly]
   );
 
   const onEdgesChange = useCallback(
     (changes: EdgeChange[]) => {
       setEdges((eds) => {
         const next = applyEdgeChanges(changes, eds);
-        if (!readOnly) emitChange(nodes, next);
+        edgesRef.current = next;
+        if (!readOnly) emitChange();
         return next;
       });
     },
-    [nodes, emitChange, readOnly]
+    [emitChange, readOnly]
   );
 
   const onConnect = useCallback(
@@ -283,28 +302,32 @@ function CanvasInner({
           },
           eds
         );
-        emitChange(nodes, next);
+        edgesRef.current = next;
+        emitChange();
         return next;
       });
     },
-    [nodes, emitChange]
+    [emitChange]
   );
 
   const handleAddNode = useCallback(
     (type: WorkflowNodeType, position?: { x: number; y: number }) => {
-      const id = makeNodeId(type, nodes);
+      const id = makeNodeId(type, nodesRef.current);
       const newNode: Node = {
         id,
         type,
-        position: position ?? { x: 240, y: 80 + nodes.length * 40 },
+        position: position ?? { x: 240, y: 80 + nodesRef.current.length * 40 },
         data: defaultDataFor(type),
+        draggable: !readOnly,
+        selectable: true,
       };
-      const next = nodes.concat(newNode);
+      const next = nodesRef.current.concat(newNode);
       setNodes(next);
+      nodesRef.current = next;
       setSelectedId(id);
-      emitChange(next, edges);
+      emitChange();
     },
-    [nodes, edges, emitChange]
+    [emitChange, readOnly]
   );
 
   const onDragOver = useCallback((event: DragEvent) => {
@@ -339,23 +362,28 @@ function CanvasInner({
         const next = nds.map((n) =>
           n.id === id ? { ...n, data: { ...data } } : n
         );
-        emitChange(next, edges);
+        nodesRef.current = next;
+        emitChange();
         return next;
       });
     },
-    [edges, emitChange]
+    [emitChange]
   );
 
   const handleDeleteNode = useCallback(
     (id: string) => {
-      const nextNodes = nodes.filter((n) => n.id !== id);
-      const nextEdges = edges.filter((e) => e.source !== id && e.target !== id);
+      const nextNodes = nodesRef.current.filter((n) => n.id !== id);
+      const nextEdges = edgesRef.current.filter(
+        (e) => e.source !== id && e.target !== id
+      );
       setNodes(nextNodes);
       setEdges(nextEdges);
+      nodesRef.current = nextNodes;
+      edgesRef.current = nextEdges;
       setSelectedId(null);
-      emitChange(nextNodes, nextEdges);
+      emitChange();
     },
-    [nodes, edges, emitChange]
+    [emitChange]
   );
 
   const selectedNode: WorkflowNode | null = useMemo(() => {
@@ -371,6 +399,10 @@ function CanvasInner({
       data: rest,
     };
   }, [nodes, selectedId]);
+
+  const handleSaveClick = useCallback(() => {
+    onSave?.(flowToDef(nodesRef.current, edgesRef.current));
+  }, [onSave]);
 
   return (
     <div className="flex h-full w-full overflow-hidden border-2 border-zinc-900 bg-white">
@@ -395,7 +427,7 @@ function CanvasInner({
                 size="sm"
                 variant="outline"
                 disabled={isSaving}
-                onClick={() => onSave(flowToDef(nodes, edges))}
+                onClick={handleSaveClick}
                 className="!border-white !bg-transparent !text-white hover:!bg-white hover:!text-zinc-900"
               >
                 {isSaving ? "保存中…" : "💾 保存"}

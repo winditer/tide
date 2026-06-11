@@ -437,6 +437,28 @@ class ScheduleService:
                     (task_id or "")[:8],
                     len(definition.get("tasks", [])),
                 )
+            elif schedule["task_type"] == "workflow":
+                # 一次性自动化工作流：通过 WorkflowEngine.start_run 触发 DAG 执行
+                workflow_id = task_config.get("workflow_id")
+                if not workflow_id:
+                    raise ValueError("workflow task_config must include workflow_id")
+                input_context = task_config.get("input_context", {}) or {}
+
+                from backend.services.workflow_engine import workflow_engine
+
+                run_id = await workflow_engine.start_run(
+                    workflow_id=workflow_id,
+                    input_context=input_context,
+                    trigger_type="schedule",
+                )
+                # 以 run_id 作为 task_id 记录，保留与其他 task_type 一致的追踪语义
+                task_id = run_id
+                logger.info(
+                    "Schedule %s started workflow run=%s (workflow=%s)",
+                    schedule_id[:8],
+                    (run_id or "")[:8],
+                    (workflow_id or "")[:8],
+                )
             elif schedule["task_type"] in ("status", "custom"):
                 # For status/custom: create a basic agent task with prompt
                 task = await task_service.create_task(

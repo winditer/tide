@@ -6,7 +6,8 @@ export type WorkflowNodeType =
   | "condition"
   | "parallel"
   | "parallel_join"
-  | "delay";
+  | "delay"
+  | "stage";
 
 export interface WorkflowNodeData {
   label: string;

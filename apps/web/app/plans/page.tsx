@@ -94,7 +94,7 @@ export default function PlansPage() {
               options={projectOptions}
               value={project}
               onChange={(e) => setProject(e.target.value)}
-              className="rounded-none border-zinc-900 font-mono text-[11px]"
+              className="h-[30px] rounded-none border-zinc-900 px-2 py-0 font-mono text-[11px]"
             />
           </div>
 

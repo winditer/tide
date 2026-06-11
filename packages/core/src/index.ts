@@ -6,6 +6,8 @@ export type {
   ScheduleRun,
   CreateScheduleInput,
   UpdateScheduleInput,
+  TriggerType,
+  ScheduleTaskType,
 } from "./types/schedule";
 export type {
   KanbanColumn,
@@ -43,6 +45,16 @@ export {
   useRejectTaskMutation,
   useRetryTaskMutation,
 } from "./hooks/use-tasks";
+
+export { useChat, buildContextPrompt } from "./hooks/use-chat";
+export type {
+  ChatMessage,
+  ChatMessageRole,
+  ChatMessageStatus,
+  UseChatOptions,
+  UseChatResult,
+  SendMessageOverrides,
+} from "./hooks/use-chat";
 
 export {
   useDashboardStats,
@@ -172,6 +184,7 @@ export {
   createWorkflow,
   updateWorkflow,
   deleteWorkflow,
+  toggleWorkflow,
   runWorkflow,
   fetchWorkflowRuns,
   fetchWorkflowRun,
@@ -190,6 +203,7 @@ export {
   useCreateWorkflow,
   useUpdateWorkflow,
   useDeleteWorkflow,
+  useToggleWorkflow,
   useRunWorkflow,
   useWorkflowRuns,
   useWorkflowRun,
@@ -265,3 +279,65 @@ export {
   useArchiveProject,
   useUnarchiveProject,
 } from "./hooks/use-projects";
+
+// Work items
+export type {
+  WorkItem,
+  WorkItemCreate,
+  WorkItemUpdate,
+  WorkItemTransition,
+  WorkItemTriggerType,
+  WorkItemSourceType,
+  WorkItemPriority,
+  ProjectSettings,
+  WorkItemBoardColumn,
+  WorkItemBoard,
+} from "./types/work-item";
+export {
+  getWorkItems,
+  getWorkItem,
+  createWorkItem,
+  updateWorkItem,
+  deleteWorkItem,
+  transitionWorkItem,
+  getWorkItemTransitions,
+  getWorkItemBoard,
+  moveWorkItem,
+  getProjectWorkflow,
+  bindProjectWorkflow,
+  unbindProjectWorkflow,
+} from "./api/work-items";
+export {
+  useWorkItemBoard,
+  useWorkItems,
+  useWorkItem,
+  useWorkItemTransitions,
+  useCreateWorkItem,
+  useUpdateWorkItem,
+  useDeleteWorkItem,
+  useMoveWorkItem,
+  useProjectWorkflow,
+  useBindProjectWorkflow,
+  useUnbindProjectWorkflow,
+} from "./hooks/use-work-items";
+
+// Approvals
+export {
+  fetchApprovals,
+  getApproval,
+  approveApproval,
+  rejectApproval,
+  parseApprovalDetail,
+} from "./api/approvals";
+export type {
+  Approval,
+  ListApprovalsParams,
+  ListApprovalsResponse,
+  ApprovalActionResponse,
+} from "./api/approvals";
+export {
+  useApprovals,
+  useApproval,
+  useApproveApproval,
+  useRejectApproval,
+} from "./hooks/use-approvals";

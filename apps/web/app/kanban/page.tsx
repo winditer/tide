@@ -2,20 +2,14 @@
 
 import { useState } from "react";
 import { Button } from "@tide/ui";
-import {
-  ProjectBoard,
-  SessionBoard,
-  AgentBoard,
-  WorkflowBoard,
-} from "@tide/views";
+import { ProjectBoard, SessionBoard, AgentBoard } from "@tide/views";
 
-type TabKey = "projects" | "sessions" | "agents" | "workflows";
+type TabKey = "projects" | "sessions" | "agents";
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "projects", label: "项目" },
   { key: "sessions", label: "会话" },
   { key: "agents", label: "Agent" },
-  { key: "workflows", label: "工作流" },
 ];
 
 export default function KanbanPage() {
@@ -47,7 +41,6 @@ export default function KanbanPage() {
         {activeTab === "projects" && <ProjectBoard />}
         {activeTab === "sessions" && <SessionBoard />}
         {activeTab === "agents" && <AgentBoard />}
-        {activeTab === "workflows" && <WorkflowBoard />}
       </div>
     </div>
   );

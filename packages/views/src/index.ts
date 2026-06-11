@@ -8,6 +8,8 @@ export { StatCards } from "./dashboard/StatCards";
 export { RecentTasks } from "./dashboard/RecentTasks";
 export { AgentPanel } from "./dashboard/AgentPanel";
 export { QuickInput } from "./dashboard/QuickInput";
+export { FloatingChat } from "./dashboard/FloatingChat";
+export { ChatMessageList } from "./dashboard/ChatMessageList";
 
 export { Sidebar } from "./layout/Sidebar";
 export { Header } from "./layout/Header";
@@ -34,6 +36,14 @@ export { WorkflowBoard } from "./kanban/WorkflowBoard";
 export { ScheduleList } from "./schedules/ScheduleList";
 export { ScheduleForm } from "./schedules/ScheduleForm";
 export { ScheduleRunHistory } from "./schedules/ScheduleRunHistory";
+export { ScheduleGuide } from "./schedules/ScheduleGuide";
+export { SCHEDULES_GUIDE } from "./schedules/schedules-guide";
+
+// Work items
+export { WorkItemBoard } from "./work-items/WorkItemBoard";
+export { WorkItemCard } from "./work-items/WorkItemCard";
+export { WorkItemCreateDialog } from "./work-items/WorkItemCreateDialog";
+export { WorkItemDetailPanel } from "./work-items/WorkItemDetailPanel";
 
 // Workflow views
 export { WorkflowCanvas } from "./workflows/WorkflowCanvas";

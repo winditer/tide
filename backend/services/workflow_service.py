@@ -42,6 +42,7 @@ class WorkflowService:
         name: str,
         description: Optional[str],
         definition_json: dict,
+        enabled: int = 1,
     ) -> dict:
         """创建工作流定义。definition_json = React Flow 的 {nodes, edges} JSON。"""
         wf_id = str(uuid.uuid4())
@@ -51,8 +52,8 @@ class WorkflowService:
                 text(
                     """
                     INSERT INTO workflows
-                        (id, workspace_id, name, description, definition, version, created_at, updated_at)
-                    VALUES (:id, :workspace_id, :name, :description, :definition, 1, :created_at, :updated_at)
+                        (id, workspace_id, name, description, definition, version, enabled, created_at, updated_at)
+                    VALUES (:id, :workspace_id, :name, :description, :definition, 1, :enabled, :created_at, :updated_at)
                     """
                 ),
                 {
@@ -61,6 +62,7 @@ class WorkflowService:
                     "name": name,
                     "description": description,
                     "definition": json.dumps(definition_json or {"nodes": [], "edges": []}),
+                    "enabled": int(enabled if enabled is not None else 1),
                     "created_at": now,
                     "updated_at": now,
                 },
@@ -74,20 +76,27 @@ class WorkflowService:
         workspace_id: str = "default",
         limit: int = 50,
         offset: int = 0,
+        enabled: Optional[int] = None,
     ) -> list:
+        conditions = ["workspace_id = :workspace_id"]
+        params: dict = {"workspace_id": workspace_id, "limit": limit, "offset": offset}
+        if enabled is not None:
+            conditions.append("enabled = :enabled")
+            params["enabled"] = int(enabled)
+        where = " AND ".join(conditions)
         async with async_session_factory() as session:
             result = await session.execute(
                 text(
-                    """
-                    SELECT id, workspace_id, name, description, definition, version,
+                    f"""
+                    SELECT id, workspace_id, name, description, definition, version, enabled,
                            created_at, updated_at
                     FROM workflows
-                    WHERE workspace_id = :workspace_id
+                    WHERE {where}
                     ORDER BY updated_at DESC
                     LIMIT :limit OFFSET :offset
                     """
                 ),
-                {"workspace_id": workspace_id, "limit": limit, "offset": offset},
+                params,
             )
             rows = result.fetchall()
         items = []
@@ -102,7 +111,7 @@ class WorkflowService:
             result = await session.execute(
                 text(
                     """
-                    SELECT id, workspace_id, name, description, definition, version,
+                    SELECT id, workspace_id, name, description, definition, version, enabled,
                            created_at, updated_at
                     FROM workflows WHERE id = :id
                     """
@@ -122,6 +131,7 @@ class WorkflowService:
         name: Optional[str] = None,
         description: Optional[str] = None,
         definition_json: Optional[dict] = None,
+        enabled: Optional[int] = None,
     ) -> Optional[dict]:
         existing = await self.get_workflow(workflow_id)
         if not existing:
@@ -140,6 +150,9 @@ class WorkflowService:
             sets.append("definition = :definition")
             sets.append("version = version + 1")
             params["definition"] = json.dumps(definition_json)
+        if enabled is not None:
+            sets.append("enabled = :enabled")
+            params["enabled"] = int(enabled)
 
         if not sets:
             return existing
@@ -151,6 +164,27 @@ class WorkflowService:
             await session.execute(
                 text(f"UPDATE workflows SET {', '.join(sets)} WHERE id = :id"),
                 params,
+            )
+            await session.commit()
+        return await self.get_workflow(workflow_id)
+
+    async def toggle_workflow(self, workflow_id: str) -> Optional[dict]:
+        """切换工作流的 enabled 状态。"""
+        existing = await self.get_workflow(workflow_id)
+        if not existing:
+            return None
+        current = int(existing.get("enabled") or 0)
+        new_val = 0 if current else 1
+        async with async_session_factory() as session:
+            await session.execute(
+                text(
+                    "UPDATE workflows SET enabled = :enabled, updated_at = :updated_at WHERE id = :id"
+                ),
+                {
+                    "id": workflow_id,
+                    "enabled": new_val,
+                    "updated_at": self._now_iso(),
+                },
             )
             await session.commit()
         return await self.get_workflow(workflow_id)

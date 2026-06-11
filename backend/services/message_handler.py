@@ -225,6 +225,16 @@ class MessageHandler:
             await self._cmd_set_model(chat_id, model_match.group(1).strip())
             return
 
+        # /workflow run <id> | /workflow list — 工作流触发
+        if content.lower().startswith("/workflow"):
+            await self._cmd_workflow(chat_id, content)
+            return
+
+        # /wi create|list|move — 工作项管理
+        if content.lower().startswith("/wi ") or content.lower() == "/wi":
+            await self._cmd_work_item(chat_id, content)
+            return
+
         # /daily — 每日进度报告
         if content.lower().startswith("/daily"):
             await self._cmd_daily(chat_id, content)
@@ -346,6 +356,13 @@ class MessageHandler:
             "• /reject <id> — 拒绝权限请求\n"
             "• /cancel <id> — 取消任务\n"
             "• /stop — 停止当前任务\n"
+            "\n"
+            "🔀 工作流 / 工作项\n"
+            "• /workflow list — 列出工作流\n"
+            "• /workflow run <id> — 触发工作流执行\n"
+            "• /wi create <标题> — 创建工作项\n"
+            "• /wi list — 列出当前项目工作项\n"
+            "• /wi move <item_id> <stage> — 推进阶段\n"
             "\n"
             "📝 Plan 类\n"
             "• /plan — 进入计划输入模式\n"
@@ -586,6 +603,255 @@ class MessageHandler:
         except Exception:
             logger.exception("Failed to create plan")
             await lark_bridge.send_text(chat_id, "❌ 创建 Plan 失败")
+
+    # ── Workflow / WorkItem 指令 ─────────────────────────
+
+    async def _cmd_workflow(self, chat_id: str, content: str):
+        """/workflow run <id> | /workflow list — 工作流触发入口。"""
+        body = content[len("/workflow"):].strip()
+        parts = body.split(None, 2) if body else []
+        sub = (parts[0].lower() if parts else "")
+
+        if sub == "list" or not sub:
+            try:
+                from backend.services.workflow_service import workflow_service
+
+                workflows = await workflow_service.list_workflows(
+                    workspace_id="default", limit=20
+                )
+                if not workflows:
+                    await lark_bridge.send_text(chat_id, "📝 当前没有可用的工作流")
+                    return
+                lines = [f"📝 工作流列表（共 {len(workflows)} 个）\n"]
+                for w in workflows[:20]:
+                    wid = (w.get("id") or "")[:8]
+                    name = w.get("name") or "未命名工作流"
+                    desc = (w.get("description") or "").strip()
+                    suffix = f" — {desc[:40]}" if desc else ""
+                    lines.append(f"  • `{wid}...`  {name}{suffix}")
+                lines.append("\n使用 `/workflow run <id>` 触发执行")
+                await lark_bridge.send_text(chat_id, "\n".join(lines))
+            except Exception:
+                logger.exception("Failed to list workflows from Lark")
+                await lark_bridge.send_text(chat_id, "❌ 查询工作流列表失败")
+            return
+
+        if sub == "run":
+            workflow_id = (parts[1] if len(parts) > 1 else "").strip()
+            if not workflow_id:
+                await lark_bridge.send_text(
+                    chat_id, "用法：/workflow run <workflow_id>"
+                )
+                return
+            try:
+                from backend.services.workflow_service import workflow_service
+                from backend.services.workflow_engine import workflow_engine
+
+                # 支持前缀短 ID：列表中查找匹配项
+                resolved_id = workflow_id
+                if len(workflow_id) < 32:
+                    workflows = await workflow_service.list_workflows(
+                        workspace_id="default", limit=200
+                    )
+                    matched = next(
+                        (w for w in workflows if (w.get("id") or "").startswith(workflow_id)),
+                        None,
+                    )
+                    if not matched:
+                        await lark_bridge.send_text(
+                            chat_id, f"❌ 找不到工作流：`{workflow_id}`"
+                        )
+                        return
+                    resolved_id = matched["id"]
+
+                run_id = await workflow_engine.start_run(
+                    workflow_id=resolved_id,
+                    input_context={"chat_id": chat_id},
+                    trigger_type="lark_message",
+                )
+                logger.info(
+                    "Workflow triggered via Lark: workflow=%s run=%s chat=%s",
+                    resolved_id[:8], run_id[:8],
+                    chat_id[:8] if chat_id else "-",
+                )
+                await lark_bridge.send_text(
+                    chat_id,
+                    f"✅ 已启动工作流 `{resolved_id[:8]}`\nrun_id：`{run_id[:8]}...`",
+                )
+            except ValueError as exc:
+                await lark_bridge.send_text(chat_id, f"❌ {exc}")
+            except Exception:
+                logger.exception("Failed to start workflow run from Lark")
+                await lark_bridge.send_text(chat_id, "❌ 启动工作流失败")
+            return
+
+        await lark_bridge.send_text(
+            chat_id,
+            "用法：\n• /workflow list\n• /workflow run <workflow_id>",
+        )
+
+    async def _resolve_active_project_id(self, chat_id: str) -> Optional[str]:
+        """从 chat_state 推导当前项目的 project_id（base64(cwd)）。"""
+        import base64
+        from pathlib import Path
+        from backend.services.chat_state import get_chat_state
+        from backend.services.project_discovery import find_project_root
+
+        state = await get_chat_state(chat_id)
+        cwd = (state.active_project_key or state.cwd or "").strip()
+        if not cwd:
+            return None
+        try:
+            root = find_project_root(Path(cwd))
+            cwd = str(root) if root else cwd
+        except Exception:
+            pass
+        return base64.urlsafe_b64encode(cwd.encode()).decode().rstrip("=")
+
+    async def _cmd_work_item(self, chat_id: str, content: str):
+        """/wi create|list|move — 工作项管理入口。"""
+        body = content[len("/wi"):].strip()
+        parts = body.split(None, 2) if body else []
+        sub = (parts[0].lower() if parts else "")
+
+        if not sub:
+            await lark_bridge.send_text(
+                chat_id,
+                "用法：\n"
+                "• /wi create <标题>\n"
+                "• /wi list\n"
+                "• /wi move <item_id> <stage_label>",
+            )
+            return
+
+        if sub == "create":
+            title = (parts[1] + (" " + parts[2] if len(parts) > 2 else "")) if len(parts) > 1 else ""
+            title = title.strip()
+            if not title:
+                await lark_bridge.send_text(chat_id, "用法：/wi create <标题>")
+                return
+            project_id = await self._resolve_active_project_id(chat_id)
+            if not project_id:
+                await lark_bridge.send_text(
+                    chat_id, "❌ 请先使用 /cd 切换到项目目录"
+                )
+                return
+            try:
+                from backend.services.work_item_service import work_item_service
+                from backend.models.schemas import WorkItemCreate
+
+                item = await work_item_service.create_work_item(
+                    WorkItemCreate(
+                        project_id=project_id,
+                        title=title,
+                        source_type="lark",
+                        source_id=chat_id,
+                    )
+                )
+                item_id = (item.get("id") or "")[:8]
+                node_id = (item.get("current_node_id") or "")[:8]
+                await lark_bridge.send_text(
+                    chat_id,
+                    f"✅ 已创建工作项 `{item_id}...`\n标题：{title}\n当前节点：`{node_id}`",
+                )
+            except ValueError as exc:
+                await lark_bridge.send_text(chat_id, f"❌ {exc}")
+            except Exception:
+                logger.exception("Failed to create work item from Lark")
+                await lark_bridge.send_text(chat_id, "❌ 创建工作项失败")
+            return
+
+        if sub == "list":
+            project_id = await self._resolve_active_project_id(chat_id)
+            if not project_id:
+                await lark_bridge.send_text(
+                    chat_id, "❌ 请先使用 /cd 切换到项目目录"
+                )
+                return
+            try:
+                from backend.services.work_item_service import work_item_service
+
+                items = await work_item_service.list_work_items(
+                    project_id=project_id, status="active"
+                )
+                if not items:
+                    await lark_bridge.send_text(chat_id, "📋 当前项目没有进行中的工作项")
+                    return
+                lines = [f"📋 当前项目工作项（共 {len(items)} 个）\n"]
+                for it in items[:20]:
+                    iid = (it.get("id") or "")[:8]
+                    title = (it.get("title") or "无标题")[:40]
+                    node = (it.get("current_node_id") or "-")[:12]
+                    lines.append(f"  • `{iid}...` [{node}] {title}")
+                await lark_bridge.send_text(chat_id, "\n".join(lines))
+            except Exception:
+                logger.exception("Failed to list work items from Lark")
+                await lark_bridge.send_text(chat_id, "❌ 查询工作项失败")
+            return
+
+        if sub == "move":
+            if len(parts) < 3:
+                await lark_bridge.send_text(
+                    chat_id, "用法：/wi move <item_id> <stage_label>"
+                )
+                return
+            item_arg = parts[1].strip()
+            stage_label = parts[2].strip()
+            try:
+                from backend.services.work_item_service import work_item_service
+
+                # 支持短 ID：在全列表中匹配前缀
+                items = await work_item_service.list_work_items()
+                target_item = next(
+                    (it for it in items if (it.get("id") or "").startswith(item_arg)),
+                    None,
+                )
+                if not target_item:
+                    await lark_bridge.send_text(
+                        chat_id, f"❌ 找不到工作项：`{item_arg}`"
+                    )
+                    return
+
+                # 通过 stage_label 查找目标节点（支持 node_id 或可见节点的 label）
+                workflow_id = target_item.get("workflow_id")
+                definition = await work_item_service._load_workflow_definition(workflow_id) if workflow_id else None
+                target_node_id = stage_label
+                if definition:
+                    nodes = definition.get("nodes", [])
+                    matched = None
+                    for n in nodes:
+                        if n.get("id") == stage_label:
+                            matched = n
+                            break
+                        label = (n.get("data", {}) or {}).get("label") or \
+                                (n.get("data", {}) or {}).get("name") or ""
+                        if label == stage_label:
+                            matched = n
+                            break
+                    if matched:
+                        target_node_id = matched["id"]
+
+                await work_item_service.transition_work_item(
+                    item_id=target_item["id"],
+                    target_node_id=target_node_id,
+                    operator=f"lark:{chat_id[:8]}" if chat_id else "lark",
+                    trigger_type="manual",
+                )
+                await lark_bridge.send_text(
+                    chat_id,
+                    f"✅ 已推进工作项 `{target_item['id'][:8]}` → `{target_node_id[:12]}`",
+                )
+            except ValueError as exc:
+                await lark_bridge.send_text(chat_id, f"❌ {exc}")
+            except Exception:
+                logger.exception("Failed to transition work item from Lark")
+                await lark_bridge.send_text(chat_id, "❌ 推进工作项失败")
+            return
+
+        await lark_bridge.send_text(
+            chat_id,
+            f"❓ 未知子命令：/wi {sub}\n可用：create / list / move",
+        )
 
     async def _cmd_set_agent(self, chat_id: str, agent_id: str):
         """切换 Agent"""

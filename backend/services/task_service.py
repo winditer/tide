@@ -95,6 +95,31 @@ class TaskService:
             task_id, workspace_id, old_status, new_status,
         )
 
+        # 事件驱动通知 work_item_service（幂等，调用会自动跳过未关联的任务）。
+        if new_status in ("completed", "failed", "stopped", "rejected"):
+            try:
+                from backend.services.work_item_service import work_item_service
+                logger.info(
+                    "Notifying work_item_service: task=%s status=%s",
+                    self._short_id(task_id), new_status,
+                )
+                # 使用最新 result（可能是传入参数或 DB 中之前的追加输出）
+                final_result = result
+                if final_result is None:
+                    refreshed = await self.get_task(task_id)
+                    final_result = str((refreshed or {}).get("result") or "")
+                asyncio.create_task(
+                    work_item_service.on_work_item_task_completed(
+                        task_id, final_result or "",
+                    )
+                )
+            except Exception:
+                logger.debug(
+                    "work_item_service.on_work_item_task_completed dispatch failed for task=%s",
+                    self._short_id(task_id),
+                    exc_info=True,
+                )
+
     async def _append_result_chunk(
         self,
         task_id: str,
@@ -152,6 +177,7 @@ class TaskService:
         chat_id: Optional[str] = None,
         conversation_id: Optional[str] = None,
         session_id: str = "",
+        full_auto: bool = False,
     ) -> dict:
         """创建任务：写 DB + 启动真实 Agent CLI。"""
         task_id = str(uuid.uuid4())
@@ -209,7 +235,8 @@ class TaskService:
         await event_emitter.emit_task_created(task_id, workspace_id)
 
         self._schedule_agent_start(task_id, workspace_id, agent_id, prompt, cwd, model,
-                                    conversation_id=conversation_id or "")
+                                    conversation_id=conversation_id or "",
+                                    full_auto=full_auto)
 
         # 查询并返回
         return await self.get_task(task_id)
@@ -226,6 +253,7 @@ class TaskService:
         model: str,
         approved_retry: bool = False,
         conversation_id: str = "",
+        full_auto: bool = False,
     ) -> None:
         """启动 Agent；缺少 CLI 时显式失败，不伪造成功结果。"""
         adapter = AGENT_ADAPTERS.get(agent_id)
@@ -250,6 +278,7 @@ class TaskService:
                 model,
                 approved_retry=approved_retry,
                 conversation_id=conversation_id,
+                full_auto=full_auto,
             )
         )
 
@@ -279,6 +308,7 @@ class TaskService:
         model: str,
         approved_retry: bool = False,
         conversation_id: str = "",
+        full_auto: bool = False,
     ):
         """使用 AgentExecutor 执行真实 Agent CLI"""
         try:
@@ -290,6 +320,7 @@ class TaskService:
                 model=model,
                 approved_retry=approved_retry,
                 conversation_id=conversation_id,
+                full_auto=full_auto,
             ):
                 if event.type == "started":
                     await self._update_status(task_id, workspace_id, "running")

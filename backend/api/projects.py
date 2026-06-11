@@ -27,6 +27,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from backend.db.engine import async_session_factory
+from backend.models.schemas import ProjectSettingsResponse, ProjectSettingsUpdate
 from backend.services import project_discovery
 from backend.services.archive_service import archive_store, resolve_show_archived
 from backend.services.session_discovery import (
@@ -34,6 +35,7 @@ from backend.services.session_discovery import (
     discover_chats,
     discover_sessions,
 )
+from backend.services.work_item_service import work_item_service
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -491,3 +493,37 @@ async def unarchive_project(project_id: str):
     cwd = _decode_id(project_id)
     changed = archive_store.unarchive_project(project_id)
     return {"archived": False, "changed": changed, "id": project_id, "cwd": cwd}
+
+
+# ---------- 项目-工作流绑定 ----------
+
+
+@router.put("/{project_id}/workflow", response_model=ProjectSettingsResponse)
+async def set_project_workflow(project_id: str, body: ProjectSettingsUpdate):
+    """绑定项目到工作流。"""
+    if not body.workflow_id:
+        raise HTTPException(status_code=400, detail="workflow_id is required")
+    settings = await work_item_service.set_project_workflow(
+        project_id=project_id, workflow_id=body.workflow_id
+    )
+    if not settings:
+        raise HTTPException(status_code=500, detail="Failed to bind workflow")
+    return settings
+
+
+@router.get("/{project_id}/workflow", response_model=ProjectSettingsResponse)
+async def get_project_workflow(project_id: str):
+    """获取项目的工作流绑定信息。"""
+    settings = await work_item_service.get_project_settings(project_id)
+    if not settings:
+        raise HTTPException(status_code=404, detail="Project workflow not bound")
+    return settings
+
+
+@router.delete("/{project_id}/workflow")
+async def remove_project_workflow(project_id: str):
+    """解绑项目工作流。"""
+    removed = await work_item_service.remove_project_workflow(project_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Project workflow not bound")
+    return {"ok": True, "project_id": project_id}

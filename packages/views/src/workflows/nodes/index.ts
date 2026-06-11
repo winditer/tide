@@ -6,6 +6,7 @@ export { ConditionNode } from "./ConditionNode";
 export { ParallelNode } from "./ParallelNode";
 export { ParallelJoinNode } from "./ParallelJoinNode";
 export { DelayNode } from "./DelayNode";
+export { StageNode } from "./StageNode";
 
 import { StartNode } from "./StartNode";
 import { EndNode } from "./EndNode";
@@ -15,6 +16,7 @@ import { ConditionNode } from "./ConditionNode";
 import { ParallelNode } from "./ParallelNode";
 import { ParallelJoinNode } from "./ParallelJoinNode";
 import { DelayNode } from "./DelayNode";
+import { StageNode } from "./StageNode";
 
 export const workflowNodeTypes = {
   start: StartNode,
@@ -25,4 +27,5 @@ export const workflowNodeTypes = {
   parallel: ParallelNode,
   parallel_join: ParallelJoinNode,
   delay: DelayNode,
+  stage: StageNode,
 } as const;

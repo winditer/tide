@@ -38,7 +38,7 @@ export default function WorkflowsPage() {
           ✕ 加载失败 — {String(error)}
         </div>
       ) : (
-        <WorkflowList items={data?.items ?? []} />
+        <WorkflowList items={data ?? []} />
       )}
 
       {showCreate && (

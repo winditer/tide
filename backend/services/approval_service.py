@@ -70,6 +70,14 @@ class ApprovalService:
                     "created_at": _now_iso(),
                 },
             )
+            # 同步 tasks.status='review' 以保证 dashboard / 任务列表筛选一致
+            # 注意：work_item 审批复用 task_id 字段存 work_item_id，此 UPDATE 不会命中
+            # tasks 表中的真实 task，故无副作用。
+            if task_id:
+                await session.execute(
+                    text("UPDATE tasks SET status = 'review' WHERE id = :task_id"),
+                    {"task_id": task_id},
+                )
             await session.commit()
 
         # emit WebSocket 事件
@@ -136,6 +144,10 @@ class ApprovalService:
         task_id = approval["task_id"]
         workspace_id = approval["workspace_id"]
         plan_id = approval.get("plan_id")
+        approval_type = approval.get("type") or ""
+        detail = json.loads(approval.get("detail") or "{}") if isinstance(
+            approval.get("detail"), str
+        ) else (approval.get("detail") or {})
 
         # emit 事件
         await event_emitter.emit_approval_resolved(
@@ -143,7 +155,24 @@ class ApprovalService:
         )
 
         # 恢复执行
-        if plan_id:
+        if approval_type == "work_item_transition" or detail.get("work_item_id"):
+            # 工作项审批节点：推进到下一节点
+            try:
+                from backend.services.work_item_service import work_item_service
+                logger.info(
+                    "[approval_service] dispatching work item advance: approval=%s work_item=%s",
+                    approval_id[:8],
+                    str(detail.get("work_item_id") or task_id)[:8],
+                )
+                await work_item_service.on_work_item_approval_resolved(
+                    approval_id, True
+                )
+            except Exception:
+                logger.exception(
+                    "[approval_service] work_item_service approve dispatch failed approval=%s",
+                    approval_id[:8],
+                )
+        elif plan_id:
             # Plan 子任务：通过 plan_executor 恢复
             try:
                 from backend.services.plan_executor import plan_executor
@@ -213,6 +242,10 @@ class ApprovalService:
         task_id = approval["task_id"]
         workspace_id = approval["workspace_id"]
         plan_id = approval.get("plan_id")
+        approval_type = approval.get("type") or ""
+        detail = json.loads(approval.get("detail") or "{}") if isinstance(
+            approval.get("detail"), str
+        ) else (approval.get("detail") or {})
 
         # emit 事件
         await event_emitter.emit_approval_resolved(
@@ -220,7 +253,23 @@ class ApprovalService:
         )
 
         # 终止任务
-        if plan_id:
+        if approval_type == "work_item_transition" or detail.get("work_item_id"):
+            # 工作项审批被拒：保持在当前节点（work_item_service 处理日志）
+            try:
+                from backend.services.work_item_service import work_item_service
+                logger.info(
+                    "[approval_service] dispatching work item rejection: approval=%s",
+                    approval_id[:8],
+                )
+                await work_item_service.on_work_item_approval_resolved(
+                    approval_id, False
+                )
+            except Exception:
+                logger.exception(
+                    "[approval_service] work_item_service reject dispatch failed approval=%s",
+                    approval_id[:8],
+                )
+        elif plan_id:
             try:
                 from backend.services.plan_executor import plan_executor
                 # 直接更新任务状态为 rejected

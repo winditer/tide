@@ -2,13 +2,17 @@
 
 import { use, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Badge, Button, Card, CardContent } from "@tide/ui";
+import { Badge, Button, Card, CardContent, Select } from "@tide/ui";
 import {
   useProject,
   useProjectChats,
   useProjectSessions,
   useProjectTasks,
   useDeleteProject,
+  useWorkflows,
+  useProjectWorkflow,
+  useBindProjectWorkflow,
+  useUnbindProjectWorkflow,
   type ProjectSession,
   type ProjectTaskSummary,
 } from "@tide/core";
@@ -486,6 +490,34 @@ function SettingsPane({
   isRemoving: boolean;
   onRemove: () => void;
 }) {
+  const [selectedWfId, setSelectedWfId] = useState("");
+  const workflowsQuery = useWorkflows();
+  const projectWfQuery = useProjectWorkflow(projectId);
+  const bindMutation = useBindProjectWorkflow();
+  const unbindMutation = useUnbindProjectWorkflow();
+
+  const workflows = workflowsQuery.data ?? [];
+  const enabledWorkflows = workflows.filter((w) => w.enabled);
+  const currentWorkflow = projectWfQuery.data;
+  const currentWorkflowName =
+    currentWorkflow?.workflow_id
+      ? workflows.find((w) => w.id === currentWorkflow.workflow_id)?.name ?? currentWorkflow.workflow_id
+      : undefined;
+
+  const workflowOptions = [
+    { value: "", label: "-- 选择工作流 --" },
+    ...enabledWorkflows.map((wf) => ({ value: wf.id, label: wf.name })),
+  ];
+
+  const handleBind = () => {
+    if (!selectedWfId) return;
+    bindMutation.mutate({ projectId, workflowId: selectedWfId });
+  };
+
+  const handleUnbind = () => {
+    unbindMutation.mutate(projectId);
+  };
+
   return (
     <section className="space-y-6">
       <Card className="border-2 border-zinc-900 shadow-[6px_6px_0_0_rgba(24,24,27,0.92)]">
@@ -537,6 +569,56 @@ function SettingsPane({
                 <span className="text-zinc-500">仅由文件扫描发现，未注册</span>
               )}
             </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Workflow Binding */}
+      <Card className="border-2 border-zinc-900 shadow-[6px_6px_0_0_rgba(24,24,27,0.92)]">
+        <CardContent className="space-y-4 p-6">
+          <div className="font-mono text-[10px] tracking-widest text-zinc-500">
+            WORKFLOW · BINDING
+          </div>
+          {currentWorkflow?.workflow_id ? (
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="font-serif text-base text-zinc-900">
+                  当前绑定：{currentWorkflowName}
+                </div>
+                <a
+                  href={`/workflows/${currentWorkflow.workflow_id}`}
+                  className="font-mono text-xs text-emerald-600 hover:underline"
+                >
+                  查看工作流 →
+                </a>
+              </div>
+              <Button
+                onClick={handleUnbind}
+                disabled={unbindMutation.isPending}
+                className="border-2 border-zinc-900 bg-rose-100 text-rose-700 shadow-[3px_3px_0_0_rgba(24,24,27,1)] hover:bg-rose-200"
+              >
+                {unbindMutation.isPending ? "解绑中…" : "解绑"}
+              </Button>
+            </div>
+          ) : (
+            <p className="font-serif text-sm text-zinc-600">
+              未绑定工作流，绑定后可在工作项看板中使用。
+            </p>
+          )}
+          <div className="flex items-center gap-3">
+            <Select
+              value={selectedWfId}
+              onChange={(e) => setSelectedWfId(e.target.value)}
+              options={workflowOptions}
+              className="flex-1 border-2 border-zinc-900 shadow-[3px_3px_0_0_rgba(24,24,27,1)]"
+            />
+            <Button
+              onClick={handleBind}
+              disabled={!selectedWfId || bindMutation.isPending}
+              className="border-2 border-zinc-900 bg-emerald-600 text-white shadow-[3px_3px_0_0_rgba(24,24,27,1)] hover:bg-emerald-700"
+            >
+              {bindMutation.isPending ? "绑定中…" : "绑定"}
+            </Button>
           </div>
         </CardContent>
       </Card>

@@ -42,6 +42,7 @@ class AgentExecutor:
         model: str = "",
         approved_retry: bool = False,
         conversation_id: str = "",
+        full_auto: bool = False,
     ) -> AsyncGenerator[TaskEvent, None]:
         """执行 Agent CLI 并流式产出事件。
 
@@ -62,7 +63,13 @@ class AgentExecutor:
             approved_retry=approved_retry,
             conversation_id=conversation_id,
         )
-        if approved_retry:
+        if full_auto:
+            if adapter.id == "codex":
+                runtime.approval_policy = "full-auto"
+                runtime.sandbox_mode = "off"
+            else:
+                runtime.permission_mode = "bypass_permissions"
+        elif approved_retry:
             if adapter.id == "codex":
                 runtime.approval_policy = APPROVED_CODEX_APPROVAL_POLICY
                 runtime.sandbox_mode = APPROVED_CODEX_SANDBOX_MODE

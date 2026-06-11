@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -163,7 +163,7 @@ class ScheduleCreate(BaseModel):
     description: Optional[str] = None
     trigger_type: str = Field(..., pattern=r"^(cron|interval|date)$")
     trigger_config: dict
-    task_type: str = Field(..., pattern=r"^(agent|plan|status|custom)$")
+    task_type: str = Field(..., pattern=r"^(agent|plan|workflow|status|custom)$")
     task_config: dict
     workspace_id: str = "default"
 
@@ -214,12 +214,14 @@ class WorkflowCreate(BaseModel):
     description: Optional[str] = None
     definition: dict
     workspace_id: str = "default"
+    enabled: int = 1
 
 
 class WorkflowUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     definition: Optional[dict] = None
+    enabled: Optional[int] = None
 
 
 class WorkflowResponse(BaseModel):
@@ -229,6 +231,7 @@ class WorkflowResponse(BaseModel):
     description: Optional[str] = None
     definition: dict = {}
     version: int = 1
+    enabled: int = 1
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -288,3 +291,88 @@ class LarkBridgeStatus(BaseModel):
     connected: bool
     last_event_at: Optional[str] = None
     pending_notifications: int = 0
+
+
+# ============ 工作项相关模型 ============
+
+class WorkItemCreate(BaseModel):
+    project_id: str
+    title: str
+    description: Optional[str] = None
+    priority: int = 0
+    assignee: Optional[str] = None
+    tags: Optional[List[str]] = None
+    source_type: str = "manual"
+    source_id: Optional[str] = None
+    metadata: Optional[dict] = None
+
+
+class WorkItemUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    priority: Optional[int] = None
+    assignee: Optional[str] = None
+    tags: Optional[List[str]] = None
+    metadata: Optional[dict] = None
+
+
+class WorkItemResponse(BaseModel):
+    id: str
+    project_id: str
+    workflow_id: str
+    current_node_id: str
+    title: str
+    description: Optional[str] = None
+    priority: int = 0
+    assignee: Optional[str] = None
+    tags: Optional[List[str]] = None
+    source_type: str = "manual"
+    source_id: Optional[str] = None
+    metadata: Optional[dict] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class WorkItemTransitionRequest(BaseModel):
+    target_node_id: str
+    operator: Optional[str] = None
+
+
+class WorkItemTransitionResponse(BaseModel):
+    id: str
+    work_item_id: str
+    from_node_id: Optional[str] = None
+    to_node_id: str
+    trigger_type: str = "manual"
+    task_id: Optional[str] = None
+    operator: Optional[str] = None
+    output: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class ProjectSettingsUpdate(BaseModel):
+    workflow_id: Optional[str] = None
+    default_assignee: Optional[str] = None
+    metadata: Optional[dict] = None
+
+
+class ProjectSettingsResponse(BaseModel):
+    project_id: str
+    workflow_id: Optional[str] = None
+    default_assignee: Optional[str] = None
+    metadata: Optional[dict] = None
+    updated_at: Optional[str] = None
+
+
+class WorkItemKanbanColumn(BaseModel):
+    id: str
+    label: str
+    category: Optional[str] = None
+    items: List[WorkItemResponse] = []
+
+
+class WorkItemKanbanResponse(BaseModel):
+    columns: List[WorkItemKanbanColumn] = []
+    workflow: Optional[dict] = None

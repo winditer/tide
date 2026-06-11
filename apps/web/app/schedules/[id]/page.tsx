@@ -76,7 +76,12 @@ export default function ScheduleDetailPage({
           </Button>
           <h1 className="text-2xl font-bold tracking-tight">{schedule.name}</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Cron: <code className="font-mono">{schedule.cron_expr}</code>
+            <span className="mr-2 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase">
+              {schedule.trigger_type}
+            </span>
+            <code className="font-mono">
+              {JSON.stringify(schedule.trigger_config ?? {})}
+            </code>
           </p>
         </div>
         <div className="flex items-center gap-2">

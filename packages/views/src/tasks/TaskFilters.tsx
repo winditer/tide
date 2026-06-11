@@ -87,7 +87,7 @@ export function TaskFilters({ value, onChange, onReset }: TaskFiltersProps) {
   return (
     <div className="mb-4 rounded-lg border bg-card/40 p-3">
       <div className="flex flex-wrap items-end gap-3">
-        <FilterField label="项目" className="min-w-[150px] flex-1 basis-[160px] max-w-[240px]">
+        <FilterField label="项目" className="min-w-[150px] flex-1 basis-[160px] max-w-[180px]">
           <Select
             options={projectOptions}
             value={value.project ?? ""}
@@ -95,7 +95,7 @@ export function TaskFilters({ value, onChange, onReset }: TaskFiltersProps) {
           />
         </FilterField>
 
-        <FilterField label="会话" className="min-w-[150px] flex-1 basis-[160px] max-w-[240px]">
+        <FilterField label="会话" className="min-w-[150px] flex-1 basis-[160px] max-w-[180px]">
           <Select
             options={sessionOptions}
             value={value.session_id ?? ""}
@@ -119,7 +119,7 @@ export function TaskFilters({ value, onChange, onReset }: TaskFiltersProps) {
           />
         </FilterField>
 
-        <FilterField label="创建时间" className="flex-1 min-w-[220px] basis-[240px]">
+        <FilterField label="创建时间" className="flex-1 min-w-[280px] basis-[280px]">
           <div className="flex items-center gap-2">
             <Input
               type="date"
@@ -154,7 +154,7 @@ export function TaskFilters({ value, onChange, onReset }: TaskFiltersProps) {
           size="sm"
           disabled={!hasActive}
           onClick={onReset}
-          className="ml-auto flex-shrink-0 whitespace-nowrap"
+          className="ml-auto shrink-0 whitespace-nowrap"
         >
           清除筛选
         </Button>

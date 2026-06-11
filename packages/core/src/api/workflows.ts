@@ -40,6 +40,10 @@ export function deleteWorkflow(id: string): Promise<void> {
   return apiClient.del<void>(`/api/workflows/${id}`);
 }
 
+export function toggleWorkflow(id: string): Promise<Workflow> {
+  return apiClient.patch<Workflow>(`/api/workflows/${id}/toggle`);
+}
+
 export function runWorkflow(
   id: string,
   body?: RunWorkflowInput

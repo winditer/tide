@@ -66,7 +66,7 @@ export default function ProjectsPage() {
       {/* Editorial hero */}
       <header className="mb-10 border-b-2 border-zinc-900 pb-6">
         <div className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
-          <div>
+          <div className="min-w-0 flex-1">
             <div className="font-mono text-[11px] tracking-[0.4em] text-zinc-500">
               WORKSPACE · CATALOG
             </div>
@@ -74,10 +74,10 @@ export default function ProjectsPage() {
               Projects<span className="text-emerald-600">.</span>
             </h1>
             <p className="mt-3 max-w-xl text-sm text-zinc-600">
-              所有被关注的目录，按最近活跃排序。点击进入查看 conversations、tasks 与统计。
+              关注的目录，按活跃排序
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
             <span className="font-mono text-[10px] tracking-widest text-zinc-500">
               {total} TOTAL · {registeredCount} REGISTERED
               {showArchived && archivedCount > 0 ? ` · ${archivedCount} ARCHIVED` : ""}

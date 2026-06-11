@@ -26,11 +26,11 @@ export default function WorkflowEditorPage() {
   const [dirty, setDirty] = useState(false);
 
   useEffect(() => {
-    if (workflow?.definition && draft === null) {
+    if (workflow?.definition && !dirty) {
       setDraft(workflow.definition);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workflow?.id]);
+  }, [workflow?.definition]);
 
   if (isLoading) {
     return (
@@ -56,8 +56,11 @@ export default function WorkflowEditorPage() {
     update.mutate(
       { id, params: { definition: def } },
       {
-        onSuccess: () => {
+        onSuccess: (data) => {
           setDirty(false);
+          if (data?.definition) {
+            setDraft(data.definition);
+          }
         },
       }
     );

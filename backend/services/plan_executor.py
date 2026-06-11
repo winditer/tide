@@ -413,6 +413,19 @@ class PlanExecutor:
         if not plan:
             return
 
+        # ── workflow_id 集成（可选）──────────────────────
+        # 若 plan definition 中该子任务节点的 data 配置了 workflow_id，则同步
+        # 创建一个 work_item，由 work_item_service 按工作流阶段自动流转。
+        # Plan task 仍按原逻辑继续执行，不被阻塞。
+        try:
+            task_workflow_id = await self._lookup_task_workflow_id(plan, task_id)
+        except Exception:  # noqa: BLE001
+            logger.debug("[plan_executor] workflow_id lookup failed", exc_info=True)
+            task_workflow_id = None
+
+        if task_workflow_id:
+            await self._create_plan_work_item(plan_id, task_id, task, task_workflow_id)
+
         plan_cwd = Path(plan.get("cwd") or task.get("cwd") or ".")
         worktree_path = ""
         branch_name = ""
@@ -802,6 +815,133 @@ class PlanExecutor:
         prompt = (task.get("prompt") or "").strip().splitlines()
         title = prompt[0] if prompt else "tide task"
         return f"tide(plan {plan_id[:8]}): {title[:80]}"
+
+    async def _lookup_task_workflow_id(
+        self, plan: dict, task_id: str
+    ) -> Optional[str]:
+        """从 plan definition + plan_tasks 映射中查找子任务的 workflow_id。
+
+        返回 None 表示该子任务未配置工作流，走默认 Agent 执行路径。
+        """
+        try:
+            raw = plan.get("definition") if isinstance(plan, dict) else None
+            if not raw:
+                return None
+            if isinstance(raw, (bytes, bytearray)):
+                raw = raw.decode("utf-8", errors="replace")
+            if isinstance(raw, str):
+                try:
+                    definition = json.loads(raw)
+                except json.JSONDecodeError:
+                    return None
+            elif isinstance(raw, dict):
+                definition = raw
+            else:
+                return None
+
+            tasks_def = definition.get("tasks") if isinstance(definition, dict) else None
+            if not isinstance(tasks_def, list) or not tasks_def:
+                return None
+
+            # 查 plan_tasks 获取当前 task 的 task_index
+            async with async_session_factory() as session:
+                row = (
+                    await session.execute(
+                        text(
+                            "SELECT task_index FROM plan_tasks "
+                            "WHERE task_id = :task_id LIMIT 1"
+                        ),
+                        {"task_id": task_id},
+                    )
+                ).fetchone()
+            if not row:
+                return None
+            idx = dict(row._mapping).get("task_index")
+            if idx is None or idx < 0 or idx >= len(tasks_def):
+                return None
+
+            task_def = tasks_def[idx] or {}
+            wf = None
+            if isinstance(task_def, dict):
+                # 优先取 task_def.data.workflow_id（前端节点 data 结构）
+                data = task_def.get("data")
+                if isinstance(data, dict):
+                    wf = data.get("workflow_id")
+                # 兼容顶层 workflow_id
+                if not wf:
+                    wf = task_def.get("workflow_id")
+            return wf if isinstance(wf, str) and wf.strip() else None
+        except Exception:  # noqa: BLE001
+            logger.debug("_lookup_task_workflow_id failed", exc_info=True)
+            return None
+
+    async def _create_plan_work_item(
+        self, plan_id: str, task_id: str, task: dict, workflow_id: str
+    ) -> None:
+        """为 Plan 子任务创建对应的 work_item，按工作流阶段流转。
+
+        - 通过 project_settings 表反查 workflow_id 绑定的 project_id
+        - 调用 work_item_service.create_work_item，source_type='plan', source_id=task_id
+        - 异常被吞下，不影响 Plan 主流程
+        """
+        try:
+            # 延迟导入避免循环依赖
+            from backend.services.work_item_service import work_item_service
+
+            # 反查绑定的 project_id
+            async with async_session_factory() as session:
+                row = (
+                    await session.execute(
+                        text(
+                            "SELECT project_id FROM project_settings "
+                            "WHERE workflow_id = :workflow_id LIMIT 1"
+                        ),
+                        {"workflow_id": workflow_id},
+                    )
+                ).fetchone()
+
+            if not row:
+                logger.warning(
+                    "[plan_executor] workflow_id=%s 未绑定任何 project，跳过 work_item 创建 (plan=%s task=%s)",
+                    workflow_id[:8], plan_id[:8], task_id[:8],
+                )
+                return
+
+            project_id = dict(row._mapping).get("project_id")
+            if not project_id:
+                return
+
+            prompt = (task.get("prompt") or "").strip()
+            first_line = prompt.splitlines()[0] if prompt else ""
+            title = (first_line or f"Plan task {task_id[:8]}")[:120]
+
+            item = await work_item_service.create_work_item({
+                "project_id": project_id,
+                "title": title,
+                "description": prompt or None,
+                "priority": 0,
+                "assignee": None,
+                "source_type": "plan",
+                "source_id": task_id,
+                "metadata": {
+                    "plan_id": plan_id,
+                    "plan_task_id": task_id,
+                    "workflow_id": workflow_id,
+                },
+            })
+            logger.info(
+                "[plan_executor] work_item created: item=%s project=%s workflow=%s plan=%s task=%s",
+                (item.get("id") or "")[:8] if isinstance(item, dict) else "-",
+                project_id[:8],
+                workflow_id[:8],
+                plan_id[:8],
+                task_id[:8],
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "[plan_executor] create_work_item failed: plan=%s task=%s workflow=%s",
+                plan_id[:8], task_id[:8], workflow_id[:8],
+            )
 
 
 # 全局单例

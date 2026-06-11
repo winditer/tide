@@ -13,7 +13,7 @@ from typing import Optional
 
 from backend.services.approval_service import approval_service
 
-router = APIRouter(prefix="/approvals", tags=["approvals"])
+router = APIRouter(prefix="/api/approvals", tags=["approvals"])
 
 
 @router.get("")

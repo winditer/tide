@@ -2,6 +2,7 @@
 
 import { Button, Input, Select } from "@tide/ui";
 import type { WorkflowNode, WorkflowNodeType } from "@tide/core";
+import { STAGE_CATEGORY_OPTIONS } from "./node-tones";
 
 const TYPE_LABEL: Record<WorkflowNodeType, string> = {
   start: "起始",
@@ -12,6 +13,7 @@ const TYPE_LABEL: Record<WorkflowNodeType, string> = {
   parallel: "并行分发",
   parallel_join: "并行汇合",
   delay: "延时",
+  stage: "阶段",
 };
 
 const TYPE_GLYPH: Record<WorkflowNodeType, string> = {
@@ -23,6 +25,7 @@ const TYPE_GLYPH: Record<WorkflowNodeType, string> = {
   parallel: "＋",
   parallel_join: "−",
   delay: "⏱",
+  stage: "✦",
 };
 
 const OPERATOR_OPTIONS = [
@@ -34,6 +37,12 @@ const OPERATOR_OPTIONS = [
   { label: "小于等于 (≤)", value: "lte" },
   { label: "包含 (⊃)", value: "contains" },
   { label: "不包含 (⊅)", value: "not_contains" },
+];
+
+const AGENT_OPTIONS = [
+  { label: "Codex", value: "codex" },
+  { label: "Claude Code", value: "claude" },
+  { label: "Qoder", value: "qoder" },
 ];
 
 interface PropertyPanelProps {
@@ -110,15 +119,15 @@ export function PropertyPanel({
                 value={String(data.model ?? "")}
                 disabled={readOnly}
                 onChange={(e) => update({ model: e.target.value })}
-                placeholder="如：gpt-4 / claude-3.5-sonnet"
+                placeholder="留空使用默认模型"
               />
             </FormGroup>
-            <FormGroup label="AGENT_ID">
-              <Input
-                value={String(data.agent_id ?? "")}
+            <FormGroup label="AGENT">
+              <Select
+                options={AGENT_OPTIONS}
+                value={String(data.agent_id ?? "codex")}
                 disabled={readOnly}
                 onChange={(e) => update({ agent_id: e.target.value })}
-                placeholder="可选：Agent 标识"
               />
             </FormGroup>
             <FormGroup label="PROMPT">
@@ -127,8 +136,11 @@ export function PropertyPanel({
                 className="flex min-h-[120px] w-full rounded-none border-2 border-zinc-900 bg-white px-3 py-2 font-mono text-[12px] leading-relaxed text-zinc-900 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900 disabled:opacity-50"
                 value={String(data.prompt ?? "")}
                 onChange={(e) => update({ prompt: e.target.value })}
-                placeholder="发送给 Agent 的提示词…"
+                placeholder="如留空则默认使用 prev_output"
               />
+              <div className="mt-1 font-mono text-[10px] leading-relaxed text-zinc-400">
+                可用变量：<span className="text-emerald-700">{"{prev_output}"}</span> 上一节点输出 · <span className="text-emerald-700">{"{item.title}"}</span> 工作项标题 · <span className="text-emerald-700">{"{item.description}"}</span> 描述
+              </div>
             </FormGroup>
           </>
         )}
@@ -196,6 +208,22 @@ export function PropertyPanel({
               className="font-mono"
             />
           </FormGroup>
+        )}
+
+        {t === "stage" && (
+          <>
+            <FormGroup label="CATEGORY">
+              <Select
+                options={STAGE_CATEGORY_OPTIONS}
+                value={String(data.category ?? "custom")}
+                disabled={readOnly}
+                onChange={(e) => update({ category: e.target.value })}
+              />
+            </FormGroup>
+            <div className="rounded-none border border-dashed border-zinc-300 bg-zinc-50 px-3 py-2 font-mono text-[10px] leading-relaxed text-zinc-500">
+              ◇ STAGE 节点表示工作项阶段，在看板中作为纵列出现。
+            </div>
+          </>
         )}
 
         {(t === "parallel" || t === "parallel_join") && (

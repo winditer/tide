@@ -11,6 +11,24 @@ import {
 } from "@tide/core";
 import type { Schedule } from "@tide/core";
 
+function formatTriggerSummary(schedule: Schedule): string {
+  const cfg = schedule.trigger_config ?? {};
+  switch (schedule.trigger_type) {
+    case "cron":
+      return typeof cfg.cron === "string" ? cfg.cron : "—";
+    case "interval": {
+      const parts: string[] = [];
+      if (cfg.hours) parts.push(`${cfg.hours}h`);
+      if (cfg.minutes) parts.push(`${cfg.minutes}m`);
+      return parts.length ? `每 ${parts.join(" ")}` : "—";
+    }
+    case "date":
+      return typeof cfg.run_at === "string" ? cfg.run_at : "—";
+    default:
+      return "—";
+  }
+}
+
 function formatTime(iso: string | null) {
   if (!iso) return "—";
   try {
@@ -38,11 +56,12 @@ export function ScheduleList({ items, onEdit }: ScheduleListProps) {
   const deleteMutation = useDeleteScheduleMutation();
   const triggerMutation = useTriggerScheduleMutation();
 
-  const filtered = items.filter(
-    (s) =>
-      s.name.toLowerCase().includes(search.toLowerCase()) ||
-      s.cron_expr.includes(search)
-  );
+  const filtered = items.filter((s) => {
+    const q = search.toLowerCase();
+    if (s.name.toLowerCase().includes(q)) return true;
+    const summary = formatTriggerSummary(s).toLowerCase();
+    return summary.includes(q);
+  });
 
   if (items.length === 0) {
     return (
@@ -57,7 +76,7 @@ export function ScheduleList({ items, onEdit }: ScheduleListProps) {
       {/* Search */}
       <div className="mb-4">
         <Input
-          placeholder="搜索名称或 Cron 表达式..."
+          placeholder="搜索名称或触发配置..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="max-w-sm"
@@ -69,7 +88,7 @@ export function ScheduleList({ items, onEdit }: ScheduleListProps) {
           <thead>
             <tr className="border-b text-left text-muted-foreground">
               <th className="px-3 py-3 font-medium">名称</th>
-              <th className="px-3 py-3 font-medium">Cron</th>
+              <th className="px-3 py-3 font-medium">触发</th>
               <th className="px-3 py-3 font-medium">状态</th>
               <th className="px-3 py-3 font-medium">下次执行</th>
               <th className="px-3 py-3 font-medium">上次执行</th>
@@ -85,7 +104,10 @@ export function ScheduleList({ items, onEdit }: ScheduleListProps) {
               >
                 <td className="px-3 py-3 font-medium">{schedule.name}</td>
                 <td className="px-3 py-3 font-mono text-xs">
-                  {schedule.cron_expr}
+                  <span className="mr-1 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase text-muted-foreground">
+                    {schedule.trigger_type}
+                  </span>
+                  {formatTriggerSummary(schedule)}
                 </td>
                 <td className="px-3 py-3">
                   <Badge

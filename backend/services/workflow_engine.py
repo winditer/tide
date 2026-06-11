@@ -10,6 +10,7 @@ WorkflowEngine — DAG 工作流执行引擎。
 - parallel: 并行网关（fork，所有下游并行执行）
 - parallel_join: 并行汇聚（等所有上游完成）
 - delay: 延时节点（asyncio.sleep）
+- stage: 阶段节点（工作项停留阶段，自动化执行时直接跳过）
 
 主要回调：
 - on_task_completed / on_task_failed
@@ -286,6 +287,14 @@ class WorkflowEngine:
                 await self._execute_next_nodes(run_id, node_id, context)
                 return
 
+            if node_type == "stage":
+                # stage 节点是工作项的停留阶段，在一次性自动化执行中直接跳过
+                await self._update_node_status(
+                    run_id, node_id, "completed", output="stage:skipped"
+                )
+                await self._execute_next_nodes(run_id, node_id, context)
+                return
+
             # 未知节点类型 — 直接跳过
             logger.warning("Unknown node type: %s for %s", node_type, node_id)
             await self._update_node_status(
@@ -406,6 +415,7 @@ class WorkflowEngine:
                 prompt=prompt,
                 cwd=cwd,
                 model=model,
+                full_auto=True,
             ):
                 if event.type in ("output", "tool_output", "progress"):
                     if event.content:
@@ -421,10 +431,14 @@ class WorkflowEngine:
                 elif event.type == "cancelled":
                     final_status = "cancelled"
                 elif event.type == "approval_request":
-                    # 工作流中暂不支持交互式审批，视为失败
+                    # full_auto 模式下理论不会触发，仅作 fallback
+                    logger.warning(
+                        "Unexpected approval_request in workflow (full_auto): %s",
+                        event.content,
+                    )
                     if event.content:
                         output_parts.append(event.content)
-                    final_status = "failed"
+                    # 不再设 final_status = "failed"，继续执行
         except asyncio.CancelledError:
             await agent_executor.cancel_task(task_id)
             final_status = "cancelled"

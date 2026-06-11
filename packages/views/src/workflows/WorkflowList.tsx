@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button, Input } from "@tide/ui";
-import { useDeleteWorkflow } from "@tide/core";
+import { useDeleteWorkflow, useToggleWorkflow } from "@tide/core";
 import type { Workflow } from "@tide/core";
 
 function formatTime(iso: string | null) {
@@ -28,6 +28,7 @@ export function WorkflowList({ items }: WorkflowListProps) {
   const router = useRouter();
   const [search, setSearch] = useState("");
   const del = useDeleteWorkflow();
+  const toggle = useToggleWorkflow();
 
   const filtered = items.filter(
     (w) =>
@@ -124,16 +125,23 @@ export function WorkflowList({ items }: WorkflowListProps) {
                   <td className="px-3 py-3 font-mono text-[11px] text-zinc-700">
                     {formatTime(w.updated_at)}
                   </td>
-                  <td className="px-3 py-3">
-                    <span
-                      className={`inline-flex items-center gap-1 border px-2 py-[2px] font-mono text-[10px] tracking-[0.2em] ${
+                  <td
+                    className="px-3 py-3"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <button
+                      type="button"
+                      disabled={toggle.isPending}
+                      onClick={() => toggle.mutate(w.id)}
+                      title={w.enabled ? "点击禁用" : "点击启用"}
+                      className={`inline-flex items-center gap-1 border-2 px-2 py-[2px] font-mono text-[10px] tracking-[0.2em] transition-all hover:translate-x-[1px] hover:translate-y-[1px] disabled:opacity-50 ${
                         w.enabled
-                          ? "border-emerald-600 bg-emerald-50 text-emerald-800"
-                          : "border-zinc-400 bg-zinc-100 text-zinc-700"
+                          ? "border-emerald-700 bg-emerald-50 text-emerald-800 shadow-[2px_2px_0_0_rgba(4,120,87,0.6)] hover:shadow-none"
+                          : "border-zinc-500 bg-zinc-100 text-zinc-600 shadow-[2px_2px_0_0_rgba(82,82,91,0.5)] hover:shadow-none"
                       }`}
                     >
                       {w.enabled ? "● ENABLED" : "○ DISABLED"}
-                    </span>
+                    </button>
                   </td>
                   <td
                     className="px-3 py-3"

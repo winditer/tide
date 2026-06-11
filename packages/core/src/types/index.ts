@@ -6,6 +6,8 @@ export type {
   ScheduleRun,
   CreateScheduleInput,
   UpdateScheduleInput,
+  TriggerType,
+  ScheduleTaskType,
 } from "./schedule";
 export type {
   KanbanColumn,
@@ -14,3 +16,16 @@ export type {
   AgentSwimlane,
   MoveCardInput,
 } from "./kanban";
+
+export type {
+  WorkItem,
+  WorkItemCreate,
+  WorkItemUpdate,
+  WorkItemTransition,
+  WorkItemTriggerType,
+  WorkItemSourceType,
+  WorkItemPriority,
+  ProjectSettings,
+  WorkItemBoardColumn,
+  WorkItemBoard,
+} from "./work-item";

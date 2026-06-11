@@ -3,6 +3,8 @@
 提供工作流定义 CRUD + 运行触发/审批/取消。
 """
 
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException, Query
 
 from backend.models.schemas import (
@@ -29,6 +31,7 @@ async def create_workflow(body: WorkflowCreate):
         name=body.name,
         description=body.description,
         definition_json=body.definition,
+        enabled=body.enabled,
     )
     if not result:
         raise HTTPException(status_code=500, detail="Failed to create workflow")
@@ -40,9 +43,10 @@ async def list_workflows(
     workspace_id: str = Query("default"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    enabled: Optional[int] = Query(None),
 ):
     return await workflow_service.list_workflows(
-        workspace_id=workspace_id, limit=limit, offset=offset
+        workspace_id=workspace_id, limit=limit, offset=offset, enabled=enabled
     )
 
 
@@ -61,7 +65,16 @@ async def update_workflow(workflow_id: str, body: WorkflowUpdate):
         name=body.name,
         description=body.description,
         definition_json=body.definition,
+        enabled=body.enabled,
     )
+    if not result:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    return result
+
+
+@router.patch("/{workflow_id}/toggle", response_model=WorkflowResponse)
+async def toggle_workflow(workflow_id: str):
+    result = await workflow_service.toggle_workflow(workflow_id)
     if not result:
         raise HTTPException(status_code=404, detail="Workflow not found")
     return result

@@ -69,6 +69,14 @@ const ITEMS: PaletteItem[] = [
     swatch: "bg-orange-500",
   },
   {
+    type: "stage",
+    label: "Stage",
+    icon: "✦",
+    glyph: "◰",
+    description: "工作项阶段",
+    swatch: "bg-violet-500",
+  },
+  {
     type: "end",
     label: "End",
     icon: "■",
