@@ -32,7 +32,7 @@ services:
       # Agent CLI 通过 CC Switch CLI 代理转发 LLM API 请求
       HTTP_PROXY: "http://cc-switch:15721"
       HTTPS_PROXY: "http://cc-switch:15721"
-      NO_PROXY: "localhost,127.0.0.1,backend,frontend,cc-switch"
+      NO_PROXY: "localhost,127.0.0.1,backend,frontend,cc-switch,open.larksuite.com,open.feishu.cn,*.larksuite.com,*.feishu.cn"
     volumes:
       - tide-data:/app/data
       - tide-runtime:/app/.tide

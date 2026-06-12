@@ -1,7 +1,8 @@
 FROM node:22-slim AS agent-cli
 
-# 全局安装 Agent CLI
-RUN npm install -g @openai/codex @anthropic-ai/claude-code @qoder-ai/qodercli
+# 全局安装 Agent CLI（显式安装 codex 平台二进制包）
+RUN npm install -g @openai/codex @openai/codex-linux-x64 \
+    @anthropic-ai/claude-code @qoder-ai/qodercli
 
 
 FROM python:3.11-slim
@@ -16,6 +17,8 @@ WORKDIR /app
 # 从 builder 阶段复制 Node.js 运行时和已安装的 Agent CLI
 COPY --from=agent-cli /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=agent-cli /usr/local/bin/node /usr/local/bin/node
+COPY --from=agent-cli /usr/local/bin/npm /usr/local/bin/npm
+COPY --from=agent-cli /usr/local/bin/npx /usr/local/bin/npx
 COPY --from=agent-cli /usr/local/bin/codex /usr/local/bin/codex
 COPY --from=agent-cli /usr/local/bin/claude /usr/local/bin/claude
 COPY --from=agent-cli /usr/local/bin/qodercli /usr/local/bin/qodercli

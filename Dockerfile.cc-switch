@@ -23,7 +23,7 @@ EXPOSE 15721 15722 15723
 #   1. docker exec -it tide-cc-switch cc-switch provider add
 #   2. docker exec -it tide-cc-switch cc-switch proxy enable
 #   3. docker restart tide-cc-switch
-RUN printf '#!/bin/sh\nif cc-switch provider current >/dev/null 2>&1; then\n  echo "[cc-switch] Provider found, starting proxy..."\n  exec cc-switch proxy serve --takeover claude\nelse\n  echo "[cc-switch] No provider configured. Container is idle."\n  echo "[cc-switch] Run: docker exec -it tide-cc-switch cc-switch provider add"\n  echo "[cc-switch] Then: docker restart tide-cc-switch"\n  exec tail -f /dev/null\nfi\n' > /entrypoint.sh \
+RUN printf '#!/bin/sh\nif cc-switch provider current >/dev/null 2>&1; then\n  echo "[cc-switch] Provider found, starting proxy..."\n  exec cc-switch proxy serve --takeover claude --listen-address 0.0.0.0\nelse\n  echo "[cc-switch] No provider configured. Container is idle."\n  echo "[cc-switch] Run: docker exec -it tide-cc-switch cc-switch provider add"\n  echo "[cc-switch] Then: docker restart tide-cc-switch"\n  exec tail -f /dev/null\nfi\n' > /entrypoint.sh \
  && chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
