@@ -22,6 +22,11 @@ COPY packages ./packages
 # 构建时需要 .env 让 next.config.ts 把 NEXT_PUBLIC_* 嵌入产物
 COPY .env ./.env
 
+# 构建时设置 API_BACKEND_URL，Next.js rewrites 会在 build 阶段序列化此值
+# Docker 内部通过服务名 'backend' 访问后端
+ARG API_BACKEND_URL=http://backend:8000
+ENV API_BACKEND_URL=${API_BACKEND_URL}
+
 # 构建（next.config.ts 中 outputFileTracingRoot=../.. 指向 monorepo 根）
 RUN yarn workspace @tide/web build
 
