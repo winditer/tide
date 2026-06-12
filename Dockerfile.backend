@@ -23,6 +23,9 @@ COPY --from=agent-cli /usr/local/bin/codex /usr/local/bin/codex
 COPY --from=agent-cli /usr/local/bin/claude /usr/local/bin/claude
 COPY --from=agent-cli /usr/local/bin/qodercli /usr/local/bin/qodercli
 
+# qodercli 需要 policies 目录在二进制同级路径下
+RUN ln -s /usr/local/lib/node_modules/@qoder-ai/qodercli/bundle/policies /usr/local/bin/policies
+
 # git 用于 Plan worktree；curl 用于健康检查与调试
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git curl ca-certificates \
