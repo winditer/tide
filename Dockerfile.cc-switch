@@ -1,0 +1,24 @@
+FROM alpine:3.19
+
+RUN apk add --no-cache curl ca-certificates
+
+# 下载 CC Switch CLI（Linux x64 musl 静态链接版）
+RUN curl -LO https://github.com/SaladDay/cc-switch-cli/releases/latest/download/cc-switch-cli-linux-x64-musl.tar.gz \
+ && tar -xzf cc-switch-cli-linux-x64-musl.tar.gz \
+ && chmod +x cc-switch \
+ && mv cc-switch /usr/local/bin/ \
+ && rm -f cc-switch-cli-linux-x64-musl.tar.gz
+
+# CC Switch 配置目录
+RUN mkdir -p /root/.cc-switch
+
+# 数据持久化
+VOLUME ["/root/.cc-switch"]
+
+# 代理监听端口（Claude: 15721, Codex: 15722, Gemini: 15723）
+EXPOSE 15721 15722 15723
+
+# 默认启动代理服务（前台模式）
+# 注意：首次使用需先通过 docker exec 进入容器配置 provider
+# 例如：docker exec -it tide-cc-switch cc-switch provider add
+CMD ["cc-switch", "proxy", "serve", "--takeover", "claude"]

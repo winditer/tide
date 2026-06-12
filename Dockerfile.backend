@@ -1,3 +1,9 @@
+FROM node:22-slim AS agent-cli
+
+# 全局安装 Agent CLI
+RUN npm install -g @openai/codex @anthropic-ai/claude-code @qoder-ai/qodercli
+
+
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -6,6 +12,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /app
+
+# 从 builder 阶段复制 Node.js 运行时和已安装的 Agent CLI
+COPY --from=agent-cli /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY --from=agent-cli /usr/local/bin/node /usr/local/bin/node
+COPY --from=agent-cli /usr/local/bin/codex /usr/local/bin/codex
+COPY --from=agent-cli /usr/local/bin/claude /usr/local/bin/claude
+COPY --from=agent-cli /usr/local/bin/qodercli /usr/local/bin/qodercli
 
 # git 用于 Plan worktree；curl 用于健康检查与调试
 RUN apt-get update \
@@ -19,11 +32,14 @@ RUN pip install --no-cache-dir -r backend/requirements.txt
 # 复制后端源码（前端、node_modules 等不需要）
 COPY backend/ ./backend/
 
-# 持久化目录：SQLite 数据库 + .tide 运行时
-RUN mkdir -p /app/data /app/.tide
+# 持久化目录：SQLite 数据库 + .tide 运行时 + Agent 工作目录
+RUN mkdir -p /app/data /app/.tide /app/.agent/codex /app/.agent/claude /app/.agent/qoder
 
 # 默认把 SQLite 写到挂载卷
-ENV DATABASE_URL=sqlite+aiosqlite:////app/data/tide.db
+ENV DATABASE_URL=sqlite+aiosqlite:////app/data/tide.db \
+    CODEX_HOME=/app/.agent/codex \
+    CLAUDE_HOME=/app/.agent/claude \
+    QODER_HOME=/app/.agent/qoder
 
 EXPOSE 8000
 

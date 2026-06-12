@@ -658,3 +658,157 @@ tide/<plan_id>-<task_id>
 ### Lark 双通道联动 (P10)
 - API: POST /api/lark/notify, GET /api/lark/status
 - 功能: Web↔Lark 双向同步，通过内部 HTTP API 松耦合
+
+---
+
+## Docker 容器部署
+
+### 架构说明
+
+部署架构由三个容器组成：
+
+```
+┌─────────────┐     HTTP_PROXY      ┌──────────────────┐     LLM API     ┌──────────────┐
+│  backend    │ ──────────────────▶  │  cc-switch       │ ─────────────▶  │  OpenAI /    │
+│  (Agent CLI │                      │  (CC Switch CLI) │                 │  Anthropic   │
+│   内置)     │                      │  :15721-15723    │                 │  等 LLM 服务  │
+└─────────────┘                      └──────────────────┘                 └──────────────┘
+       ▲
+       │ API :8000
+┌─────────────┐
+│  frontend   │
+│  :3000      │
+└─────────────┘
+```
+
+- **cc-switch**：基于 [CC Switch CLI](https://github.com/SaladDay/cc-switch-cli) 构建的独立代理容器，以 musl 静态链接二进制运行代理服务，为 Agent CLI 转发 LLM API 请求。默认端口：Claude 15721、Codex 15722、Gemini 15723
+- **backend**：Python 后端 + 内置 Agent CLI（codex / claude / qodercli），通过 `HTTP_PROXY` 走 cc-switch:15721
+- **frontend**：Next.js 前端，通过 Docker 内网访问 backend
+
+### 前置条件
+
+1. 安装 Docker 和 Docker Compose
+2. 配置 `.env` 文件（参考 `.env.example`）
+
+### 构建步骤
+
+```bash
+cd /path/to/tide
+docker compose build
+```
+
+构建过程会：
+- 第一阶段：在 Node.js 22 环境中全局安装 codex、claude、qodercli
+- 第二阶段：基于 Python 3.11-slim 构建后端镜像，并从第一阶段复制 Agent CLI
+
+### 启动步骤
+
+```bash
+docker compose up -d
+```
+
+启动顺序（由 `depends_on` 保证）：
+1. `cc-switch` → 代理服务就绪
+2. `backend` → 后端 + Agent CLI 就绪
+3. `frontend` → 前端就绪
+
+启动后访问：
+- 前端：http://localhost:3000
+- 后端 API：http://localhost:8000
+- CC Switch CLI 代理：http://localhost:15721（Claude）、http://localhost:15722（Codex）、http://localhost:15723（Gemini）
+
+### CC Switch CLI 配置
+
+CC Switch 使用 CLI 版本（[cc-switch-cli](https://github.com/SaladDay/cc-switch-cli)），通过 `Dockerfile.cc-switch` 构建独立容器。
+
+#### 首次启动配置
+
+首次启动后需进入容器配置 Provider：
+
+```bash
+docker exec -it tide-cc-switch cc-switch provider add
+```
+
+#### 启用代理路由
+
+```bash
+docker exec -it tide-cc-switch cc-switch proxy enable
+docker exec -it tide-cc-switch cc-switch --app codex proxy enable
+```
+
+#### 验证代理状态
+
+```bash
+docker exec -it tide-cc-switch cc-switch proxy show
+```
+
+#### 代理端口说明
+
+| 应用 | 默认端口 |
+|------|----------|
+| Claude | 15721 |
+| Codex | 15722 |
+| Gemini | 15723 |
+
+### 配置说明
+
+#### .env 文件配置
+
+Agent 相关变量示例：
+
+```env
+# Agent 默认模型（可选，留空则使用 CLI 默认）
+CODEX_MODEL=
+CLAUDE_MODEL=
+QODER_MODEL=
+
+# Lark 应用凭据
+LARK_APP_ID=
+LARK_APP_SECRET=
+```
+
+#### 代理端口自定义
+
+如需修改 CC Switch CLI 监听端口，同步修改以下位置：
+
+1. `docker-compose.yml` 中 `cc-switch` 的 `ports` 映射
+2. `backend` 环境变量中的 `HTTP_PROXY` 和 `HTTPS_PROXY` URL 端口
+3. CC Switch CLI 容器内的代理配置
+
+### 验证方法
+
+确认 Agent CLI 可用：
+
+```bash
+docker exec tide-backend codex --version
+docker exec tide-backend claude --version
+docker exec tide-backend qodercli --version
+```
+
+确认后端健康：
+
+```bash
+curl http://localhost:8000/health
+```
+
+确认代理连通（从后端容器内测试）：
+
+```bash
+docker exec tide-backend curl -x http://cc-switch:15721 https://api.anthropic.com
+```
+
+### 注意事项
+
+1. **启动顺序**：CC switch 必须先于 backend 启动，`depends_on` 已保证此顺序
+2. **数据持久化**：
+   - `tide-data` 卷：SQLite 数据库
+   - `tide-runtime` 卷：.tide 运行时（worktrees、attachments）
+   - `tide-agent-home` 卷：Agent 会话数据（codex/claude/qoder 的 home 目录）
+3. **NO_PROXY 配置**：已排除 `localhost,127.0.0.1,backend,frontend,cc-switch`，避免内部服务间请求走代理
+4. **单进程约束**：backend 必须以单 worker 运行（APScheduler / WS Hub 依赖进程内状态），不要添加 `--workers > 1`
+5. **CC Switch 数据持久化**：`cc-switch-data` 卷保存 Provider 配置和代理状态，容器重建后无需重新配置
+6. **日志查看**：
+   ```bash
+   docker compose logs -f backend
+   docker compose logs -f cc-switch
+   ```
