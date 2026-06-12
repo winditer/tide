@@ -33,11 +33,13 @@ WORKDIR /app
 
 ENV NODE_ENV=production \
     PORT=3000 \
-    HOSTNAME=0.0.0.0
+    HOSTNAME=0.0.0.0 \
+    COREPACK_HOME=/tmp/corepack
 
 RUN corepack enable \
  && addgroup --gid 1001 --system nodejs \
- && adduser --system --uid 1001 --ingroup nodejs --no-create-home nextjs
+ && adduser --system --uid 1001 --ingroup nodejs --no-create-home nextjs \
+ && mkdir -p /tmp/corepack && chown nextjs:nodejs /tmp/corepack
 
 # 复制 monorepo 运行所需文件：node_modules + 工作区 + 构建产物
 COPY --from=builder /app/package.json ./package.json

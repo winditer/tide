@@ -18,7 +18,12 @@ VOLUME ["/root/.cc-switch"]
 # 代理监听端口（Claude: 15721, Codex: 15722, Gemini: 15723）
 EXPOSE 15721 15722 15723
 
-# 默认启动代理服务（前台模式）
-# 注意：首次使用需先通过 docker exec 进入容器配置 provider
-# 例如：docker exec -it tide-cc-switch cc-switch provider add
-CMD ["cc-switch", "proxy", "serve", "--takeover", "claude"]
+# 入口脚本：如果已配置 Provider 则启动代理，否则保持容器运行等待配置
+# 首次使用流程：
+#   1. docker exec -it tide-cc-switch cc-switch provider add
+#   2. docker exec -it tide-cc-switch cc-switch proxy enable
+#   3. docker restart tide-cc-switch
+RUN printf '#!/bin/sh\nif cc-switch provider current >/dev/null 2>&1; then\n  echo "[cc-switch] Provider found, starting proxy..."\n  exec cc-switch proxy serve --takeover claude\nelse\n  echo "[cc-switch] No provider configured. Container is idle."\n  echo "[cc-switch] Run: docker exec -it tide-cc-switch cc-switch provider add"\n  echo "[cc-switch] Then: docker restart tide-cc-switch"\n  exec tail -f /dev/null\nfi\n' > /entrypoint.sh \
+ && chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
