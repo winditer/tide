@@ -54,6 +54,7 @@ export function getMe(): Promise<AuthUser> {
 export function getLarkAuthorizeUrl(): string {
   const base =
     (typeof process !== "undefined" && process.env.NEXT_PUBLIC_API_BASE_URL) ||
+    (typeof process !== "undefined" && process.env.NEXT_PUBLIC_BASE_PATH) ||
     "";
   return `${base}/api/auth/lark/authorize`;
 }

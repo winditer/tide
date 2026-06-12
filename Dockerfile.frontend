@@ -27,6 +27,10 @@ COPY .env ./.env
 ARG API_BACKEND_URL=http://backend:8000
 ENV API_BACKEND_URL=${API_BACKEND_URL}
 
+# basePath 用于子路径部署（如 /tide）
+ARG NEXT_PUBLIC_BASE_PATH=
+ENV NEXT_PUBLIC_BASE_PATH=${NEXT_PUBLIC_BASE_PATH}
+
 # 构建（next.config.ts 中 outputFileTracingRoot=../.. 指向 monorepo 根）
 RUN yarn workspace @tide/web build
 

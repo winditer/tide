@@ -54,6 +54,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
+      args:
+        NEXT_PUBLIC_BASE_PATH: /tide
     image: tide-frontend:latest
     container_name: tide-frontend
     restart: unless-stopped
@@ -61,6 +63,7 @@ services:
       - .env
     environment:
       API_BACKEND_URL: http://backend:8000
+      NEXT_PUBLIC_BASE_PATH: /tide
       NODE_ENV: production
       PORT: "3000"
       HOSTNAME: "0.0.0.0"
@@ -71,10 +74,13 @@ services:
       - "3000:3000"
     networks:
       - tide-network
+      - brainstorming_default
 
 networks:
   tide-network:
     driver: bridge
+  brainstorming_default:
+    external: true
 
 volumes:
   tide-data:

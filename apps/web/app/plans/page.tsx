@@ -158,7 +158,7 @@ function PlansPageInner() {
               <PlanCreateForm
                 onSuccess={(planId) => {
                   setShowCreate(false);
-                  window.location.href = `/plans/${planId}`;
+                  window.location.href = `${process.env.NEXT_PUBLIC_BASE_PATH || ""}/plans/${planId}`;
                 }}
               />
             </div>

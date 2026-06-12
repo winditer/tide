@@ -42,7 +42,8 @@ function getWsBaseUrl(): string {
     return "";
   }
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${window.location.host}/ws`;
+  const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
+  return `${protocol}//${window.location.host}${basePath}/ws`;
 }
 
 function getWsUrl(): string {

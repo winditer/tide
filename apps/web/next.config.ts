@@ -21,6 +21,7 @@ try {
 const API_BACKEND_URL = process.env.API_BACKEND_URL ?? "http://localhost:8000";
 
 const nextConfig: NextConfig = {
+  basePath: process.env.NEXT_PUBLIC_BASE_PATH || "",
   transpilePackages: ["@tide/core", "@tide/ui", "@tide/views"],
   outputFileTracingRoot: path.join(__dirname, "../.."),
   async rewrites() {

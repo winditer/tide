@@ -1,5 +1,6 @@
 const BASE_URL =
   (typeof process !== "undefined" && process.env.NEXT_PUBLIC_API_BASE_URL) ||
+  (typeof process !== "undefined" && process.env.NEXT_PUBLIC_BASE_PATH) ||
   "";
 
 export class ApiError extends Error {
