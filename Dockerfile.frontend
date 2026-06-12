@@ -36,8 +36,8 @@ ENV NODE_ENV=production \
     HOSTNAME=0.0.0.0
 
 RUN corepack enable \
- && addgroup -g 1001 -S nodejs \
- && adduser -S nextjs -u 1001
+ && addgroup --gid 1001 --system nodejs \
+ && adduser --system --uid 1001 --ingroup nodejs --no-create-home nextjs
 
 # 复制 monorepo 运行所需文件：node_modules + 工作区 + 构建产物
 COPY --from=builder /app/package.json ./package.json
