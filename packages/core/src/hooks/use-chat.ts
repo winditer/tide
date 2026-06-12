@@ -253,7 +253,9 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
     }
   }, []);
 
-  // Fetch pending approval for a task and attach to the message
+  // Fetch pending approval for a task and attach to the streaming assistant message.
+  // The interactive controls render inline within that message — we deliberately do NOT
+  // append a separate notice message to avoid duplicate approval prompts (Issue #2).
   const attachApprovalToTask = useCallback(async (taskId: string) => {
     try {
       const resp = await fetchApprovals({ status: "pending" });
@@ -273,21 +275,6 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
           };
         })
       );
-      // Also inject a system-style assistant message to notify the user
-      const notifyMsg: ChatMessage = {
-        id: genId(),
-        role: "assistant",
-        content: "\u26A0\uFE0F 任务需要审批，请在下方操作",
-        timestamp: new Date().toISOString(),
-        status: "completed",
-        interactive: {
-          type: "approval",
-          approvalId: match.id,
-          taskId,
-          status: "pending",
-        },
-      };
-      setMessages((prev) => [...prev, notifyMsg]);
       setHasUnread(true);
     } catch {
       // ignore fetch failure
@@ -459,7 +446,13 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
       setMessages((prev) => [...prev, userMsg, assistantMsg]);
       setIsSending(true);
 
-      const fullPrompt = buildContextPrompt(historyForPrompt, trimmed);
+      // When resuming an existing agent session, the agent already retains the
+      // full conversation history server-side — re-prepending it would cause the
+      // agent to "reference the previous conversation" as a fresh context block
+      // (Issue #6). Only build the context prompt for the very first message.
+      const fullPrompt = finalSessionId
+        ? trimmed
+        : buildContextPrompt(historyForPrompt, trimmed);
 
       try {
         const task = await createTask({

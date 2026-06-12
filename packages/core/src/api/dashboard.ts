@@ -5,6 +5,10 @@ export interface DashboardStats {
   queued: number;
   pending_approval: number;
   completed_today: number;
+  /** 我的待办工作项总数（当前用户、未完成、有权限项目内）。 */
+  my_work_items_count: number;
+  /** 本周（周一 00:00 起）当前用户完成的工作项数。 */
+  weekly_completed_work_items: number;
 }
 
 export interface RecentTask {
@@ -179,5 +183,58 @@ export function fetchUpcomingSchedules(
 ): Promise<UpcomingSchedule[]> {
   return apiClient.get<UpcomingSchedule[]>(
     `/api/dashboard/upcoming-schedules?limit=${limit}`,
+  );
+}
+
+// ---------- 工作项相关：我的待办 + 项目进度 ----------
+
+/** “我的待办”中使用的精简工作项类型。
+ *
+ * 字段与 ``WorkItem`` 保持结构一致，额外包含后端推导出的
+ * ``status`` 与 ``project_name``，避免前端为渲染一个列表重复调用项目 API。
+ */
+export interface MyWorkItem {
+  id: string;
+  project_id: string;
+  workflow_id: string;
+  current_node_id: string;
+  title: string;
+  description?: string | null;
+  priority: number;
+  assignee?: string | null;
+  version_id?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  /** 根据当前节点推导的状态。 */
+  status?:
+    | "pending"
+    | "in_progress"
+    | "pending_approval"
+    | "completed"
+    | "failed"
+    | "stopped"
+    | "waiting";
+  /** 项目名称，后端通过注册表 + cwd 末段解析。 */
+  project_name?: string | null;
+}
+
+export interface ProjectProgress {
+  id: string;
+  name: string;
+  total: number;
+  completed: number;
+}
+
+export function getMyWorkItems(limit = 10): Promise<MyWorkItem[]> {
+  return apiClient.get<MyWorkItem[]>(
+    `/api/dashboard/work-items?limit=${limit}`,
+  );
+}
+
+export function getProjectProgress(limit = 8): Promise<ProjectProgress[]> {
+  return apiClient.get<ProjectProgress[]>(
+    `/api/dashboard/project-progress?limit=${limit}`,
   );
 }

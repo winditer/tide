@@ -6,8 +6,12 @@ Plan API 路由。
 
 from typing import Optional
 
+import uuid
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, Query, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import text
 
 from backend.core.dependencies import (
     check_cwd_write_permission,
@@ -15,6 +19,7 @@ from backend.core.dependencies import (
     get_accessible_project_ids,
     get_optional_user,
 )
+from backend.db.engine import async_session_factory
 from backend.models.schemas import (
     PlanCreate,
     PlanResponse,
@@ -33,6 +38,35 @@ def _ensure_not_viewer(current_user: Optional[dict]) -> None:
         raise HTTPException(status_code=403, detail="Viewers cannot modify resources")
 
 
+async def _ensure_project_membership(cwd: Optional[str], current_user: Optional[dict]) -> None:
+    """确保创建者是 cwd 对应项目的成员，避免列表过滤把自己刚创建的 Plan 过滤掉。"""
+    if not current_user or not cwd:
+        return
+    if current_user.get("role") == "admin":
+        return
+    project_id = encode_project_id(cwd)
+    if not project_id:
+        return
+    async with async_session_factory() as session:
+        await session.execute(
+            text(
+                """
+                INSERT OR IGNORE INTO project_members
+                    (id, project_id, user_id, role, created_at)
+                VALUES (:id, :project_id, :user_id, :role, :created_at)
+                """
+            ),
+            {
+                "id": str(uuid.uuid4()),
+                "project_id": project_id,
+                "user_id": current_user["id"],
+                "role": "member",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        await session.commit()
+
+
 class CommitRequest(BaseModel):
     commit: bool = True
 
@@ -45,6 +79,8 @@ async def create_plan(
     """创建 Plan"""
     _ensure_not_viewer(current_user)
     await check_cwd_write_permission(body.cwd, current_user)
+    # 确保 member 在 project_members 中存在对应项目的成员记录，避免列表过滤把自己刚创建的 Plan 过滤掉
+    await _ensure_project_membership(body.cwd, current_user)
     result = await plan_service.create_plan(
         workspace_id=body.workspace_id,
         definition_json=body.definition.model_dump(),
@@ -83,7 +119,8 @@ async def list_plans(
     if accessible_pids is not None:
         items = [
             it for it in items
-            if encode_project_id(
+            if not ((it.get("cwd") if isinstance(it, dict) else getattr(it, "cwd", "")) or "")
+            or encode_project_id(
                 (it.get("cwd") if isinstance(it, dict) else getattr(it, "cwd", ""))
                 or ""
             ) in accessible_pids

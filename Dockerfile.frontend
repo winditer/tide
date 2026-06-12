@@ -1,0 +1,62 @@
+# syntax=docker/dockerfile:1.6
+
+# ============== Stage 1: builder ==============
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# 启用 corepack 以使用 yarn classic（项目根 yarn.lock 是 classic 格式）
+RUN corepack enable
+
+# monorepo：复制 workspace 清单 + lockfile，先安装依赖以利用缓存
+COPY package.json yarn.lock tsconfig.base.json ./
+COPY apps/web/package.json ./apps/web/package.json
+COPY packages/core/package.json ./packages/core/package.json
+COPY packages/ui/package.json ./packages/ui/package.json
+COPY packages/views/package.json ./packages/views/package.json
+
+RUN yarn install --frozen-lockfile
+
+# 复制源码
+COPY apps ./apps
+COPY packages ./packages
+
+# 构建时需要 .env 让 next.config.ts 把 NEXT_PUBLIC_* 嵌入产物
+COPY .env ./.env
+
+# 构建（next.config.ts 中 outputFileTracingRoot=../.. 指向 monorepo 根）
+RUN yarn workspace @tide/web build
+
+
+# ============== Stage 2: runner ==============
+FROM node:20-alpine AS runner
+
+WORKDIR /app
+
+ENV NODE_ENV=production \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0
+
+RUN corepack enable \
+ && addgroup -g 1001 -S nodejs \
+ && adduser -S nextjs -u 1001
+
+# 复制 monorepo 运行所需文件：node_modules + 工作区 + 构建产物
+COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/yarn.lock ./yarn.lock
+COPY --from=builder /app/tsconfig.base.json ./tsconfig.base.json
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/packages ./packages
+COPY --from=builder /app/apps/web/package.json ./apps/web/package.json
+COPY --from=builder /app/apps/web/next.config.ts ./apps/web/next.config.ts
+COPY --from=builder /app/apps/web/.next ./apps/web/.next
+COPY --from=builder /app/apps/web/node_modules ./apps/web/node_modules
+COPY --from=builder /app/.env ./.env
+
+USER nextjs
+
+EXPOSE 3000
+
+# next.config.ts 通过 rewrites 把 /api 和 /ws 代理到 API_BACKEND_URL
+WORKDIR /app/apps/web
+CMD ["yarn", "start"]

@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useEffect, useState, Suspense } from "react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@tide/ui";
 import {
   useWorkflow,
@@ -13,9 +13,19 @@ import type { WorkflowDefinition } from "@tide/core";
 import { WorkflowCanvas, WorkflowRunHistory } from "@tide/views";
 
 export default function WorkflowEditorPage() {
+  return (
+    <Suspense fallback={null}>
+      <WorkflowEditorPageInner />
+    </Suspense>
+  );
+}
+
+function WorkflowEditorPageInner() {
   const params = useParams<{ id: string }>();
   const id = String(params?.id ?? "");
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const projectId = searchParams?.get("projectId") || undefined;
 
   const { data: workflow, isLoading, isError, error } = useWorkflow(id);
   const update = useUpdateWorkflow();
@@ -122,6 +132,7 @@ export default function WorkflowEditorPage() {
         <WorkflowCanvas
           definition={draft ?? workflow.definition}
           subtitle={workflow.name}
+          projectId={projectId}
           onChange={(def) => {
             setDraft(def);
             setDirty(true);

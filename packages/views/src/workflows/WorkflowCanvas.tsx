@@ -51,6 +51,7 @@ const DEFAULT_LABELS: Record<WorkflowNodeType, string> = {
   parallel_join: "Join",
   delay: "Delay",
   stage: "Stage",
+  git_merge: "Git Merge",
 };
 
 function defaultDataFor(type: WorkflowNodeType): Record<string, any> {
@@ -69,6 +70,15 @@ function defaultDataFor(type: WorkflowNodeType): Record<string, any> {
       return { label: "Join" };
     case "stage":
       return { label: "Stage", category: "custom" };
+    case "git_merge":
+      return {
+        label: "Git Merge",
+        sourceBranch: "",
+        targetBranch: "",
+        mergeStrategy: "merge",
+        deleteSource: false,
+        onConflict: "fail",
+      };
     default:
       return { label: DEFAULT_LABELS[type] };
   }
@@ -185,6 +195,8 @@ export interface WorkflowCanvasProps {
   toolbarExtra?: React.ReactNode;
   /** Sub-title shown in the canvas chrome */
   subtitle?: string;
+  /** Optional project context for member-aware fields (e.g. approval node approvers) */
+  projectId?: string;
 }
 
 function CanvasInner({
@@ -198,6 +210,7 @@ function CanvasInner({
   isRunning,
   toolbarExtra,
   subtitle,
+  projectId,
 }: WorkflowCanvasProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const { screenToFlowPosition } = useReactFlow();
@@ -523,6 +536,7 @@ function CanvasInner({
         readOnly={readOnly}
         onUpdate={handleUpdateNodeData}
         onDelete={handleDeleteNode}
+        projectId={projectId}
       />
     </div>
   );

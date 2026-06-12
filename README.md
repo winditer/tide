@@ -100,6 +100,112 @@ qodercli --help
 
 ---
 
+## Docker Compose 部署
+
+通过 Docker Compose 一键启动「FastAPI 后端 + Next.js 前端」双容器，SQLite 与 `.tide/` 运行时目录通过 volume 持久化。
+
+### 前置条件
+
+- Docker Engine ≥ 20.10
+- Docker Compose v2（`docker compose` 子命令）
+- 项目根目录存在 `.env`（可由 `cp .env.example .env` 生成并按需修改）
+
+### 文件清单
+
+| 文件 | 说明 |
+|------|------|
+| `docker-compose.yml` | 编排 `backend` 与 `frontend` 两个服务、暴露端口、声明卷 |
+| `Dockerfile.backend` | `python:3.11-slim` + `backend/`，单进程 `uvicorn` 启动 |
+| `Dockerfile.frontend` | `node:20-alpine` 多阶段构建，复制 monorepo 后 `next start` |
+
+### 快速启动
+
+```bash
+# 1. 准备 .env（首次）
+cp .env.example .env
+# 至少修改：TIDE_JWT_SECRET、TIDE_ADMIN_PASSWORD；如需 Lark 还要填 LARK_*
+
+# 2. 构建并后台启动
+docker compose up -d --build
+
+# 3. 浏览器访问
+# 前端: http://localhost:3000
+# 后端: http://localhost:8000/docs
+```
+
+### 服务与网络
+
+- `backend` 监听 `8000`，对外暴露 `8000:8000`（仅供调试，可在 `docker-compose.yml` 中注释掉 `ports`）。
+- `frontend` 监听 `3000`，对外暴露 `3000:3000`，通过 `next.config.ts` 的 `rewrites` 把 `/api/*` 与 `/ws` 反向代理到 `API_BACKEND_URL`（compose 内默认覆盖为 `http://backend:8000`，走 docker 内部 DNS）。
+- 用户浏览器始终通过 `http://localhost:3000` 访问，CORS 白名单已包含该地址，无需修改 `backend/main.py`。
+
+### 环境变量策略
+
+- 两个服务都通过 `env_file: .env` 读取根目录的 `.env`。
+- 后端：直接消费全部变量（含 Lark / Codex / Plan / 认证等）。
+- 前端：构建阶段读取 `NEXT_PUBLIC_*`（被 Next.js 在构建时嵌入产物），运行时读取 `API_BACKEND_URL`。
+- `API_BACKEND_URL` 在 `docker-compose.yml` 中显式覆盖为 `http://backend:8000`，避免使用宿主机回环地址。
+- `DATABASE_URL` 在容器内被覆盖为 `sqlite+aiosqlite:////app/data/tide.db`，落到挂载卷。
+
+> ⚠️ `NEXT_PUBLIC_*` 变量在 **镜像构建时** 嵌入。修改这些值后必须 `docker compose build frontend` 才能生效。
+
+### 数据持久化
+
+两个具名卷负责保留有状态数据：
+
+| 卷 | 容器路径 | 内容 |
+|----|----------|------|
+| `tide-data` | `/app/data` | SQLite 数据库 `tide.db`（用户、任务、Plan、调度、工作流、对话） |
+| `tide-runtime` | `/app/.tide` | Plan worktrees、Lark 附件、归档与状态文件 |
+
+备份示例：
+
+```bash
+docker run --rm -v tide-data:/data -v "$PWD":/backup alpine \
+  tar czf /backup/tide-data-$(date +%Y%m%d).tgz -C /data .
+```
+
+### 单进程约束
+
+后端 **必须单进程运行**——APScheduler、Lark Listener、WS Hub、运行中任务表均依赖进程内内存状态。`Dockerfile.backend` 的 `CMD` 没有 `--workers`，请勿添加；如需扩容请走「多实例 + 共享 PostgreSQL/Redis」路线（当前版本不支持）。
+
+### 常用命令
+
+```bash
+# 启动 / 后台启动
+docker compose up
+docker compose up -d
+
+# 停止（保留卷）/ 停止并删除卷（清空数据库）
+docker compose down
+docker compose down -v
+
+# 查看日志
+docker compose logs -f backend
+docker compose logs -f frontend
+
+# 重新构建某个服务（依赖变更或 NEXT_PUBLIC_* 变更后）
+docker compose build backend
+docker compose build frontend
+docker compose up -d --build
+
+# 进入容器排障
+docker compose exec backend bash
+docker compose exec frontend sh
+
+# 查看健康状态
+docker compose ps
+```
+
+### 常见问题
+
+- **前端 502 / API 超时**：检查 `backend` 是否健康（`docker compose ps`），以及 `API_BACKEND_URL` 是否仍指向 `http://backend:8000`。
+- **构建后端失败：缺少 git**：`Dockerfile.backend` 已安装 `git`、`curl`；若自定义镜像请保留 `git`（Plan worktree 需要）。
+- **数据库被重置**：确认未执行过 `docker compose down -v`；`tide-data` 卷保留即可恢复。
+- **Lark 凭据未生效**：变量需写入 `.env` 而不是仅 `export`；修改后 `docker compose up -d` 会自动重启容器。
+
+---
+
 ## 创建任务配置（JSON）
 
 通过 Web 工作台或 REST API `POST /api/tasks` 创建任务时的请求体格式。

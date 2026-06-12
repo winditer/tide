@@ -21,7 +21,9 @@ import {
   useAddProjectMember,
   useAuth,
   useBindProjectWorkflow,
+  useCreateVersion,
   useDeleteProject,
+  useDeleteVersion,
   useProject,
   useProjectChats,
   useProjectMembers,
@@ -31,23 +33,30 @@ import {
   useRemoveProjectMember,
   useUnbindProjectWorkflow,
   useUpdateProjectMember,
+  useUpdateVersion,
+  useVersions,
   useWorkflows,
   type ProjectMember,
   type ProjectSession,
   type ProjectTaskSummary,
+  type Version,
+  type VersionStatus,
 } from "@tide/core";
 import {
+  Pencil,
   Search,
   ShieldCheck,
+  Tag,
   Trash2,
   UserPlus,
 } from "lucide-react";
 
-type TabKey = "conversations" | "tasks" | "members" | "settings";
+type TabKey = "conversations" | "tasks" | "versions" | "members" | "settings";
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "conversations", label: "对话" },
   { key: "tasks", label: "任务" },
+  { key: "versions", label: "版本" },
   { key: "members", label: "成员" },
   { key: "settings", label: "设置" },
 ];
@@ -250,6 +259,8 @@ export default function ProjectDetailPage({
           isError={tasksQuery.isError}
         />
       )}
+
+      {tab === "versions" && <VersionsPane projectId={project.id} />}
 
       {tab === "members" && <MembersPane projectId={project.id} />}
 
@@ -597,7 +608,7 @@ function SettingsPane({
                 <span className="font-medium">{currentWorkflowName}</span>
               </div>
               <a
-                href={`/workflows/${currentWorkflow.workflow_id}`}
+                href={`/workflows/${currentWorkflow.workflow_id}?projectId=${encodeURIComponent(projectId)}`}
                 className="text-xs text-muted-foreground hover:text-foreground transition-smooth"
               >
                 查看工作流 →
@@ -1051,6 +1062,346 @@ function AddMemberDialog({
             onClick={submit}
           >
             {addMutation.isPending ? "添加中…" : "添加成员"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Versions Tab ───────────────────────────────────────────────────
+
+const VERSION_STATUS_OPTIONS: { value: VersionStatus; label: string }[] = [
+  { value: "active", label: "活跃" },
+  { value: "released", label: "已发布" },
+  { value: "archived", label: "已归档" },
+];
+
+const VERSION_STATUS_VARIANT: Record<
+  string,
+  "default" | "secondary" | "destructive" | "outline"
+> = {
+  active: "default",
+  released: "secondary",
+  archived: "outline",
+};
+
+const VERSION_STATUS_LABEL: Record<string, string> = {
+  active: "活跃",
+  released: "已发布",
+  archived: "已归档",
+};
+
+function VersionsPane({ projectId }: { projectId: string }) {
+  const { user } = useAuth();
+  const isGlobalAdmin = user?.role === "admin";
+  const isViewer = user?.role === "viewer";
+
+  const membersQuery = useProjectMembers(projectId);
+  const myProjectRole = useMemo(() => {
+    if (!user) return null;
+    return (
+      membersQuery.data?.members.find((m) => m.id === user.id)?.project_role ??
+      null
+    );
+  }, [membersQuery.data, user]);
+  const canManage =
+    !isViewer &&
+    (isGlobalAdmin ||
+      myProjectRole === "admin" ||
+      myProjectRole === "member");
+
+  const versionsQuery = useVersions(projectId);
+  const versions = versionsQuery.data ?? [];
+
+  const [createOpen, setCreateOpen] = useState(false);
+  const [editing, setEditing] = useState<Version | null>(null);
+
+  const createMutation = useCreateVersion();
+  const updateMutation = useUpdateVersion();
+  const deleteMutation = useDeleteVersion();
+
+  const handleDelete = async (v: Version) => {
+    if (
+      !confirm(
+        `确认删除版本 “${v.name}”？\n关联的工作项会保留，但不再关联该版本。`,
+      )
+    )
+      return;
+    try {
+      await deleteMutation.mutateAsync(v.id);
+      toast({ title: "已删除版本", description: v.name });
+    } catch (err) {
+      toast({
+        title: "删除失败",
+        description: getApiErrorMessage(err),
+        variant: "destructive",
+      });
+    }
+  };
+
+  return (
+    <section className="space-y-4">
+      <div className="flex items-end justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">项目版本</h2>
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            为项目维护版本，工作项可选择关联某个版本 · 共 {versions.length} 个
+          </p>
+        </div>
+        {canManage && (
+          <Button onClick={() => setCreateOpen(true)} className="gap-1.5">
+            <Tag className="h-4 w-4" /> 新建版本
+          </Button>
+        )}
+      </div>
+
+      {versionsQuery.isLoading ? (
+        <div className="bg-card rounded-xl shadow-card py-12 text-center text-sm text-muted-foreground">
+          加载中…
+        </div>
+      ) : versionsQuery.isError ? (
+        <div className="bg-card rounded-xl shadow-card py-12 text-center text-sm text-destructive">
+          加载失败：{getApiErrorMessage(versionsQuery.error)}
+        </div>
+      ) : versions.length === 0 ? (
+        <div className="bg-card rounded-xl shadow-card border border-border/50 py-16 text-center">
+          <Tag
+            className="mx-auto h-8 w-8 text-muted-foreground/60"
+            strokeWidth={1.5}
+          />
+          <p className="mt-3 text-sm text-muted-foreground">该项目暂无版本</p>
+          {canManage && (
+            <Button
+              className="mt-5 gap-1.5"
+              onClick={() => setCreateOpen(true)}
+            >
+              <Tag className="h-4 w-4" /> 创建第一个版本
+            </Button>
+          )}
+        </div>
+      ) : (
+        <div className="bg-card rounded-xl shadow-card overflow-hidden border border-border/50">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border/50 bg-muted/30 text-left text-xs uppercase tracking-wider text-muted-foreground">
+                <th className="px-4 py-3 font-medium">名称</th>
+                <th className="px-4 py-3 font-medium">描述</th>
+                <th className="px-4 py-3 font-medium">状态</th>
+                <th className="px-4 py-3 font-medium">创建时间</th>
+                <th className="px-4 py-3 font-medium text-right">操作</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/50">
+              {versions.map((v) => (
+                <tr key={v.id} className="hover:bg-muted/40 transition-smooth">
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <Tag className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span className="font-medium">{v.name}</span>
+                    </div>
+                  </td>
+                  <td className="max-w-[420px] truncate px-4 py-3 text-muted-foreground">
+                    {v.description || "—"}
+                  </td>
+                  <td className="px-4 py-3">
+                    <Badge
+                      variant={VERSION_STATUS_VARIANT[v.status] ?? "outline"}
+                    >
+                      {VERSION_STATUS_LABEL[v.status] ?? v.status}
+                    </Badge>
+                  </td>
+                  <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
+                    {formatTime(v.created_at)}
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center justify-end gap-1">
+                      {canManage && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => setEditing(v)}
+                            title="编辑版本"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDelete(v)}
+                            title="删除版本"
+                            disabled={deleteMutation.isPending}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-smooth hover:bg-destructive/10 hover:text-destructive"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <VersionFormDialog
+        open={createOpen}
+        title="新建版本"
+        submitting={createMutation.isPending}
+        onClose={() => setCreateOpen(false)}
+        onSubmit={async (form) => {
+          await createMutation.mutateAsync({
+            project_id: projectId,
+            name: form.name,
+            description: form.description || undefined,
+            status: form.status,
+          });
+          toast({ title: "已创建版本", description: form.name });
+          setCreateOpen(false);
+        }}
+      />
+
+      <VersionFormDialog
+        open={!!editing}
+        title="编辑版本"
+        initial={editing ?? undefined}
+        submitting={updateMutation.isPending}
+        onClose={() => setEditing(null)}
+        onSubmit={async (form) => {
+          if (!editing) return;
+          await updateMutation.mutateAsync({
+            id: editing.id,
+            data: {
+              name: form.name,
+              description: form.description || "",
+              status: form.status,
+            },
+          });
+          toast({ title: "已更新版本", description: form.name });
+          setEditing(null);
+        }}
+      />
+    </section>
+  );
+}
+
+function VersionFormDialog({
+  open,
+  title,
+  initial,
+  submitting,
+  onClose,
+  onSubmit,
+}: {
+  open: boolean;
+  title: string;
+  initial?: Version;
+  submitting: boolean;
+  onClose: () => void;
+  onSubmit: (form: {
+    name: string;
+    description: string;
+    status: VersionStatus;
+  }) => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [status, setStatus] = useState<VersionStatus>("active");
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      setName(initial?.name ?? "");
+      setDescription(initial?.description ?? "");
+      setStatus((initial?.status as VersionStatus) ?? "active");
+      setError(null);
+    }
+  }, [open, initial]);
+
+  const submit = async () => {
+    setError(null);
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setError("名称不能为空");
+      return;
+    }
+    try {
+      await onSubmit({
+        name: trimmed,
+        description: description.trim(),
+        status,
+      });
+    } catch (err) {
+      setError(getApiErrorMessage(err));
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="bg-background/95 backdrop-blur-xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Tag className="h-4 w-4" /> {title}
+          </DialogTitle>
+          <DialogDescription>
+            为项目创建或维护一个版本，供工作项在创建时选择关联。
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium text-foreground">
+              名称 <span className="text-destructive">*</span>
+            </span>
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="例如：v1.0.0 / 2026Q3"
+              className="rounded-lg border-border/50"
+              autoFocus
+            />
+          </label>
+
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium text-foreground">
+              描述
+            </span>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={3}
+              placeholder="可选的版本说明"
+              className="w-full rounded-lg border border-border/50 bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+          </label>
+
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium text-foreground">
+              状态
+            </span>
+            <Select
+              value={status}
+              onChange={(e) => setStatus(e.target.value as VersionStatus)}
+              options={VERSION_STATUS_OPTIONS}
+              className="rounded-lg border-border/50"
+            />
+          </label>
+
+          {error && (
+            <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              {error}
+            </div>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            取消
+          </Button>
+          <Button disabled={submitting} onClick={submit}>
+            {submitting ? "提交中…" : "保存"}
           </Button>
         </DialogFooter>
       </DialogContent>

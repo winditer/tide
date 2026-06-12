@@ -7,6 +7,7 @@ export { ParallelNode } from "./ParallelNode";
 export { ParallelJoinNode } from "./ParallelJoinNode";
 export { DelayNode } from "./DelayNode";
 export { StageNode } from "./StageNode";
+export { GitMergeNode } from "./GitMergeNode";
 
 import { StartNode } from "./StartNode";
 import { EndNode } from "./EndNode";
@@ -17,6 +18,7 @@ import { ParallelNode } from "./ParallelNode";
 import { ParallelJoinNode } from "./ParallelJoinNode";
 import { DelayNode } from "./DelayNode";
 import { StageNode } from "./StageNode";
+import { GitMergeNode } from "./GitMergeNode";
 
 export const workflowNodeTypes = {
   start: StartNode,
@@ -28,4 +30,5 @@ export const workflowNodeTypes = {
   parallel_join: ParallelJoinNode,
   delay: DelayNode,
   stage: StageNode,
+  git_merge: GitMergeNode,
 } as const;

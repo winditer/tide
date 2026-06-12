@@ -6,6 +6,7 @@ import type {
   WorkItemTransition,
   WorkItemBoard,
   ProjectSettings,
+  WorkItemArtifact,
 } from "../types/work-item";
 
 function buildQuery(params?: Record<string, string | undefined>): string {
@@ -22,8 +23,21 @@ function buildQuery(params?: Record<string, string | undefined>): string {
 
 // ---------- 工作项 CRUD ----------
 
-export function getWorkItems(projectId?: string): Promise<WorkItem[]> {
-  const qs = buildQuery({ project_id: projectId });
+export interface WorkItemFilters {
+  search?: string;
+  status?: string;
+  assignee?: string;
+  version_id?: string;
+}
+
+export function getWorkItems(projectId?: string, filters?: WorkItemFilters): Promise<WorkItem[]> {
+  const qs = buildQuery({
+    project_id: projectId,
+    search: filters?.search,
+    status: filters?.status,
+    assignee: filters?.assignee,
+    version_id: filters?.version_id,
+  });
   return apiClient.get<WorkItem[]>(`/api/work-items${qs}`);
 }
 
@@ -69,8 +83,11 @@ export function getWorkItemTransitions(
 
 // ---------- 看板 ----------
 
-export function getWorkItemBoard(projectId: string): Promise<WorkItemBoard> {
-  const qs = buildQuery({ project_id: projectId });
+export function getWorkItemBoard(
+  projectId: string,
+  versionId?: string,
+): Promise<WorkItemBoard> {
+  const qs = buildQuery({ project_id: projectId, version_id: versionId });
   return apiClient.get<WorkItemBoard>(`/api/kanban/work-items${qs}`);
 }
 
@@ -107,5 +124,26 @@ export function bindProjectWorkflow(
 export function unbindProjectWorkflow(projectId: string): Promise<void> {
   return apiClient.del<void>(
     `/api/projects/${encodeURIComponent(projectId)}/workflow`
+  );
+}
+
+// ---------- 产物 (Artifacts) ----------
+
+export function addArtifact(
+  workItemId: string,
+  data: { label: string; url: string; stage?: string; type?: string }
+): Promise<{ artifacts: WorkItemArtifact[] }> {
+  return apiClient.post<{ artifacts: WorkItemArtifact[] }>(
+    `/api/work-items/${workItemId}/artifacts`,
+    data
+  );
+}
+
+export function removeArtifact(
+  workItemId: string,
+  artifactId: string
+): Promise<{ artifacts: WorkItemArtifact[] }> {
+  return apiClient.del<{ artifacts: WorkItemArtifact[] }>(
+    `/api/work-items/${workItemId}/artifacts/${artifactId}`
   );
 }

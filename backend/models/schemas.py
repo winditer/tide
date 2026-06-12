@@ -305,6 +305,7 @@ class WorkItemCreate(BaseModel):
     source_type: str = "manual"
     source_id: Optional[str] = None
     metadata: Optional[dict] = None
+    version_id: Optional[str] = None
 
 
 class WorkItemUpdate(BaseModel):
@@ -314,6 +315,7 @@ class WorkItemUpdate(BaseModel):
     assignee: Optional[str] = None
     tags: Optional[List[str]] = None
     metadata: Optional[dict] = None
+    version_id: Optional[str] = None
 
 
 class WorkItemResponse(BaseModel):
@@ -329,6 +331,8 @@ class WorkItemResponse(BaseModel):
     source_type: str = "manual"
     source_id: Optional[str] = None
     metadata: Optional[dict] = None
+    status: Optional[str] = None
+    version_id: Optional[str] = None
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
     created_at: Optional[str] = None
@@ -376,3 +380,28 @@ class WorkItemKanbanColumn(BaseModel):
 class WorkItemKanbanResponse(BaseModel):
     columns: List[WorkItemKanbanColumn] = []
     workflow: Optional[dict] = None
+
+
+# ============ 版本相关模型 ============
+
+class VersionCreate(BaseModel):
+    project_id: str
+    name: str
+    description: Optional[str] = None
+    status: str = "active"  # active | released | archived
+
+
+class VersionUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    status: Optional[str] = None
+
+
+class VersionResponse(BaseModel):
+    id: str
+    project_id: str
+    name: str
+    description: Optional[str] = None
+    status: str = "active"
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None

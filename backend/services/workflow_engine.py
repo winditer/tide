@@ -6,6 +6,7 @@ WorkflowEngine — DAG 工作流执行引擎。
 - end: 结束节点
 - agent: Agent 执行（真实 CLI：通过 AgentExecutor 流式执行，完成后调用 on_task_completed）
 - approval: 人工审批（等待 on_approval_resolved 回调）
+- git_merge: Git 分支合并（支持 merge/squash/rebase 策略，冲突时可等待人工解决）
 - condition: 条件分支（评估表达式选择边）
 - parallel: 并行网关（fork，所有下游并行执行）
 - parallel_join: 并行汇聚（等所有上游完成）
@@ -15,6 +16,7 @@ WorkflowEngine — DAG 工作流执行引擎。
 主要回调：
 - on_task_completed / on_task_failed
 - on_approval_resolved
+- on_merge_resolved
 """
 
 import asyncio
@@ -295,6 +297,10 @@ class WorkflowEngine:
                 await self._execute_next_nodes(run_id, node_id, context)
                 return
 
+            if node_type == "git_merge":
+                await self._execute_git_merge_node(run_id, node, context)
+                return
+
             # 未知节点类型 — 直接跳过
             logger.warning("Unknown node type: %s for %s", node_type, node_id)
             await self._update_node_status(
@@ -308,6 +314,112 @@ class WorkflowEngine:
                 run_id, node_id, "failed", error=str(exc)
             )
             await self._handle_node_failure(run_id, node, str(exc))
+
+    async def _execute_git_merge_node(self, run_id: str, node: dict, context: dict):
+        """执行 Git Merge 节点：将源分支合入目标分支。"""
+        node_id = node["id"]
+        data = node.get("data", {})
+
+        # 1. 从 node.data 提取配置（支持模板变量渲染）
+        source_branch = self._render_template(data.get("sourceBranch", ""), context)
+        target_branch = self._render_template(data.get("targetBranch", ""), context)
+        strategy = data.get("mergeStrategy", "merge")       # merge | squash | rebase
+        delete_source = data.get("deleteSource", False)
+        on_conflict = data.get("onConflict", "fail")        # fail | abort | manual
+        cwd = self._render_template(data.get("cwd", ""), context) or str(Path.cwd())
+
+        # 2. 获取 repo root
+        from backend.runtime.git_utils import git_repo_root, git_merge_branch, work_item_branch_name
+        repo_root = await git_repo_root(Path(cwd))
+        if repo_root is None:
+            error = f"Not a git repository: {cwd}"
+            await self._update_node_status(run_id, node_id, "failed", error=error)
+            await self._handle_node_failure(run_id, node, error)
+            return
+
+        # 3. 校验 source_branch：若为空，尝试从 context 中获取工作项分支
+        if not source_branch:
+            wi_id = (context.get("start", {}).get("input", {}).get("work_item_id", "")
+                     or context.get("work_item_id", ""))
+            if wi_id:
+                source_branch = work_item_branch_name(wi_id)
+                logger.info(
+                    "[workflow] git_merge node: using work item branch as source: %s",
+                    source_branch,
+                )
+
+        if not source_branch:
+            error = "sourceBranch is required but empty"
+            await self._update_node_status(run_id, node_id, "failed", error=error)
+            await self._handle_node_failure(run_id, node, error)
+            return
+
+        # 3.1 校验 target_branch：若为空，默认取工作项的 worktree 分支
+        if not target_branch:
+            wi_id = (context.get("work_item_id", "")
+                     or context.get("start", {}).get("input", {}).get("work_item_id", ""))
+            if wi_id:
+                target_branch = work_item_branch_name(wi_id)
+                logger.info(
+                    "[workflow] git_merge node: using work item branch as target: %s",
+                    target_branch,
+                )
+            else:
+                target_branch = "main"
+
+        # 4. 执行合并
+        success, output, conflicts = await git_merge_branch(
+            repo_root=repo_root,
+            source_branch=source_branch,
+            target_branch=target_branch,
+            strategy=strategy,
+            delete_source=delete_source,
+        )
+
+        # 5. 处理结果
+        if success:
+            result = json.dumps({
+                "merged": True,
+                "source": source_branch,
+                "target": target_branch,
+                "strategy": strategy,
+                "output": output,
+            })
+            await self._update_node_status(run_id, node_id, "completed", output=result)
+            ctx = await self._update_run_context(run_id, node_id, {"output": result})
+            await self._execute_next_nodes(run_id, node_id, ctx)
+        else:
+            # 冲突处理
+            error_detail = f"Merge failed: {output}"
+            if conflicts:
+                error_detail += f" | Conflicts: {', '.join(conflicts)}"
+
+            if on_conflict == "manual":
+                # 类似 approval 节点，暂停等待人工处理
+                await self._update_node_status(run_id, node_id, "waiting_approval")
+                # 存储冲突信息到 context，供 API 查询
+                await self._update_run_context(run_id, node_id, {
+                    "merge_conflict": True,
+                    "conflicts": conflicts,
+                    "source": source_branch,
+                    "target": target_branch,
+                    "error": output,
+                })
+                # 发送 WebSocket 通知
+                try:
+                    await event_emitter.emit("merge_conflict", {
+                        "run_id": run_id,
+                        "node_id": node_id,
+                        "conflicts": conflicts,
+                        "source": source_branch,
+                        "target": target_branch,
+                    })
+                except Exception:
+                    pass
+            else:
+                # fail 或 abort：直接标记失败
+                await self._update_node_status(run_id, node_id, "failed", error=error_detail)
+                await self._handle_node_failure(run_id, node, error_detail)
 
     async def _execute_agent_node(self, run_id: str, node: dict, context: dict):
         """Agent 节点：创建 task 记录 + 真实 Agent CLI 执行 + 完成回调。"""
@@ -586,6 +698,36 @@ class WorkflowEngine:
         nodes = run_info.get("definition", {}).get("nodes", [])
         node = next((n for n in nodes if n["id"] == node_id), None)
         await self._handle_node_failure(run_id, node, reason or "rejected")
+
+    async def on_merge_resolved(
+        self, run_id: str, node_id: str, resolved: bool, message: str = ""
+    ):
+        """Git merge 冲突手工解决后的回调。
+
+        Args:
+            run_id: 工作流运行 ID
+            node_id: git_merge 节点 ID
+            resolved: 是否已解决（True=合并完成，False=放弃合并）
+            message: 可选的备注信息
+        """
+        if resolved:
+            result = json.dumps({
+                "merged": True,
+                "resolved_manually": True,
+                "message": message,
+            })
+            await self._update_node_status(run_id, node_id, "completed", output=result)
+            context = await self._update_run_context(run_id, node_id, {"output": result})
+            await self._execute_next_nodes(run_id, node_id, context)
+        else:
+            error = f"Merge aborted manually: {message}" if message else "Merge aborted manually"
+            await self._update_node_status(run_id, node_id, "failed", error=error)
+            # 获取节点信息触发失败处理
+            run_info = self._runs.get(run_id) or {}
+            nodes = run_info.get("definition", {}).get("nodes", [])
+            node = next((n for n in nodes if n["id"] == node_id), None)
+            if node:
+                await self._handle_node_failure(run_id, node, error)
 
     # ── helpers: persistence ─────────────────────────────
 

@@ -9,6 +9,8 @@ import {
   fetchActivityTimeline,
   fetchTaskStatusDistribution,
   fetchUpcomingSchedules,
+  getMyWorkItems,
+  getProjectProgress,
 } from "../api/dashboard";
 import type { GetSessionsParams } from "../api/dashboard";
 
@@ -77,5 +79,21 @@ export function useUpcomingSchedules(limit = 5) {
     queryKey: ["dashboard", "upcoming-schedules", limit],
     queryFn: () => fetchUpcomingSchedules(limit),
     refetchInterval: 60000,
+  });
+}
+
+export function useMyWorkItems(limit = 10) {
+  return useQuery({
+    queryKey: ["dashboard", "work-items", limit],
+    queryFn: () => getMyWorkItems(limit),
+    refetchInterval: 30000,
+  });
+}
+
+export function useProjectProgress(limit = 8) {
+  return useQuery({
+    queryKey: ["dashboard", "project-progress", limit],
+    queryFn: () => getProjectProgress(limit),
+    refetchInterval: 30000,
   });
 }

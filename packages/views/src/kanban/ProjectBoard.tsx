@@ -5,9 +5,11 @@ import { useProjectBoard, useMoveCard } from "@tide/core";
 import type { KanbanColumn, KanbanCard } from "@tide/core";
 import { useQueryClient } from "@tanstack/react-query";
 import type { DropResult } from "@hello-pangea/dnd";
-import { KanbanBoard } from "./KanbanBoard";
+import { DragDropContext, Droppable } from "@hello-pangea/dnd";
+import { Badge } from "@tide/ui";
 import { KanbanFilters } from "./KanbanFilters";
 import { EmptyState } from "./EmptyState";
+import { ProjectCard } from "./ProjectCard";
 
 export function ProjectBoard() {
   const [search, setSearch] = useState("");
@@ -92,7 +94,49 @@ export function ProjectBoard() {
           hint="请通过 Lark 发送任务，或在项目页添加新的项目"
         />
       ) : (
-        <KanbanBoard columns={columns} onDragEnd={handleDragEnd} />
+        <DragDropContext onDragEnd={handleDragEnd}>
+          <div className="flex gap-4 overflow-x-auto pb-2">
+            {columns.map((column) => (
+              <div
+                key={column.id}
+                className="flex w-72 shrink-0 flex-col rounded-xl border border-border/60 bg-muted/30 p-3 transition-smooth"
+              >
+                {/* Column header */}
+                <div className="mb-3 flex items-center justify-between px-1">
+                  <h3 className="text-sm font-semibold tracking-tight text-foreground">
+                    {column.title}
+                  </h3>
+                  <Badge
+                    variant="secondary"
+                    className="rounded-full bg-background/80 px-2 text-[11px] font-medium"
+                  >
+                    {column.cards.length}
+                  </Badge>
+                </div>
+
+                {/* Droppable area */}
+                <Droppable droppableId={column.id}>
+                  {(provided, snapshot) => (
+                    <div
+                      ref={provided.innerRef}
+                      {...provided.droppableProps}
+                      className={`flex min-h-[140px] flex-1 flex-col gap-3 rounded-lg p-1 transition-smooth ${
+                        snapshot.isDraggingOver
+                          ? "bg-primary/5 ring-1 ring-primary/20"
+                          : ""
+                      }`}
+                    >
+                      {column.cards.map((card, idx) => (
+                        <ProjectCard key={card.id} card={card} index={idx} />
+                      ))}
+                      {provided.placeholder}
+                    </div>
+                  )}
+                </Droppable>
+              </div>
+            ))}
+          </div>
+        </DragDropContext>
       )}
     </div>
   );

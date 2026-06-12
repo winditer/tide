@@ -15,6 +15,8 @@ export { ActiveProjects } from "./dashboard/ActiveProjects";
 export { ActivityTimeline } from "./dashboard/ActivityTimeline";
 export { TaskStatusChart } from "./dashboard/TaskStatusChart";
 export { UpcomingSchedules } from "./dashboard/UpcomingSchedules";
+export { MyWorkItems } from "./dashboard/MyWorkItems";
+export { ProjectProgress } from "./dashboard/ProjectProgress";
 export {
   formatRelativeTime,
   formatAbsoluteTime,
@@ -38,6 +40,7 @@ export { BoardCard } from "./kanban/BoardCard";
 export { KanbanFilters } from "./kanban/KanbanFilters";
 export { EmptyState as KanbanEmptyState } from "./kanban/EmptyState";
 export { ProjectBoard } from "./kanban/ProjectBoard";
+export { ProjectCard } from "./kanban/ProjectCard";
 export { SessionBoard } from "./kanban/SessionBoard";
 export { AgentBoard } from "./kanban/AgentBoard";
 export { WorkflowBoard } from "./kanban/WorkflowBoard";
@@ -49,10 +52,11 @@ export { ScheduleGuide } from "./schedules/ScheduleGuide";
 export { SCHEDULES_GUIDE } from "./schedules/schedules-guide";
 
 // Work items
-export { WorkItemBoard } from "./work-items/WorkItemBoard";
+export { WorkItemBoard, type WorkItemGroupBy } from "./work-items/WorkItemBoard";
 export { WorkItemCard } from "./work-items/WorkItemCard";
 export { WorkItemCreateDialog } from "./work-items/WorkItemCreateDialog";
 export { WorkItemDetailPanel } from "./work-items/WorkItemDetailPanel";
+export { WorkItemListView } from "./work-items/WorkItemListView";
 
 // Workflow views
 export { WorkflowCanvas } from "./workflows/WorkflowCanvas";

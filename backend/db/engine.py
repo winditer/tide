@@ -73,4 +73,13 @@ async def init_db():
             if "metadata" not in conv_columns:
                 await db.execute("ALTER TABLE conversations ADD COLUMN metadata TEXT DEFAULT '{}'")
 
+        # work_items 表补列：version_id（已有数据库兼容）
+        cursor = await db.execute("PRAGMA table_info(work_items)")
+        wi_columns = {row[1] for row in await cursor.fetchall()}
+        if wi_columns and "version_id" not in wi_columns:
+            await db.execute("ALTER TABLE work_items ADD COLUMN version_id TEXT")
+
+        # 确保 version_id 索引存在（迁移后安全创建）
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_work_items_version ON work_items(version_id)")
+
         await db.commit()

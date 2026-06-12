@@ -3,6 +3,8 @@
 import { ActiveProjects } from "@tide/views/dashboard/ActiveProjects";
 import { ActivityTimeline } from "@tide/views/dashboard/ActivityTimeline";
 import { AgentPanel } from "@tide/views/dashboard/AgentPanel";
+import { MyWorkItems } from "@tide/views/dashboard/MyWorkItems";
+import { ProjectProgress } from "@tide/views/dashboard/ProjectProgress";
 import { QuickActions } from "@tide/views/dashboard/QuickActions";
 import { RecentTasks } from "@tide/views/dashboard/RecentTasks";
 import { StatCards } from "@tide/views/dashboard/StatCards";
@@ -25,6 +27,14 @@ export default function DashboardPage() {
       </header>
 
       <StatCards />
+
+      {/* 工作项概览：我的待办（左 2/3） + 项目进度（右 1/3） */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <div className="lg:col-span-2 max-h-[460px] overflow-y-auto">
+          <MyWorkItems />
+        </div>
+        <ProjectProgress />
+      </div>
 
       {/* 上半区：三列等宽 —— 任务状态分布 / Agent 状态 / 活跃项目 */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">

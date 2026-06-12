@@ -52,10 +52,12 @@ class SessionCreate(BaseModel):
     project_cwd: Optional[str] = Field(
         default="", description="项目工作目录；留空则创建普通对话（chat）"
     )
-    agent_id: str = Field("codex", description="Agent 标识")
+    # 注意：所有字符串字段统一为 Optional，避免前端显式传 null 时 Pydantic 直接 422。
+    # 真正的回退默认值在端点函数内处理，这里只做格式校验。
+    agent_id: Optional[str] = Field("codex", description="Agent 标识")
     title: Optional[str] = Field(None, description="可选会话标题，作为初始 prompt")
     model: Optional[str] = None
-    workspace_id: str = "default"
+    workspace_id: Optional[str] = Field("default", description="工作区 ID")
     session_type: Optional[str] = Field(
         default=None,
         description="会话类型：'convo'/'chat'，可选，默认根据是否提供 cwd 推断",
@@ -233,11 +235,12 @@ async def list_sessions(
     if agent_id:
         merged = [it for it in merged if it.get("agent_id") == agent_id]
 
-    # 项目级权限过滤：非 admin 用户只能看到可访问项目下的会话
+    # 项目级权限过滤：非 admin 用户只能看到可访问项目下的会话；无 cwd 的会话(chat)对所有认证用户可见
     if accessible_pids is not None:
         merged = [
             it for it in merged
-            if encode_project_id(it.get("cwd") or "") in accessible_pids
+            if not (it.get("cwd") or "")
+            or encode_project_id(it.get("cwd") or "") in accessible_pids
         ]
 
     # type 过滤
@@ -369,26 +372,33 @@ async def create_session(
     default_prompt = "新会话" if session_type == "convo" else "新对话"
     prompt = (body.title or default_prompt).strip() or default_prompt
 
+    # 字段回退：前端可能传 null/空字符串，统一兜底
+    agent_id = (body.agent_id or "codex").strip() or "codex"
+    workspace_id = (body.workspace_id or "default").strip() or "default"
+
     # 预先生成 session_id，确保 tasks 表 session_id 列非空，
     # 否则后续 get_session/list_sessions 按 session_id 查询会 404。
     session_id = str(uuid.uuid4())
 
-    task = await task_service.create_task(
-        workspace_id=body.workspace_id,
-        prompt=prompt,
-        agent_id=body.agent_id,
-        model=body.model or "",
-        cwd=cwd,
-        attachments=[],
-        session_id=session_id,
-    )
+    try:
+        task = await task_service.create_task(
+            workspace_id=workspace_id,
+            prompt=prompt,
+            agent_id=agent_id,
+            model=body.model or "",
+            cwd=cwd,
+            attachments=[],
+            session_id=session_id,
+        )
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     if not task:
         raise HTTPException(status_code=500, detail="Failed to create session")
 
     return {
         "session_id": session_id,
         "task_id": task.get("id"),
-        "agent_id": body.agent_id,
+        "agent_id": agent_id,
         "cwd": cwd,
         "title": prompt,
         "status": task.get("status") or "queued",

@@ -2,7 +2,7 @@ import base64
 import json
 import logging
 import os
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -96,6 +96,57 @@ def _build_cwd_filter(
     return f" AND {column} IN ({placeholders})", params, set(cwds)
 
 
+def _build_work_item_pid_clause(
+    accessible_pids: Optional[set[str]],
+    prefix: str = "wpid",
+) -> tuple[Optional[str], dict]:
+    """构造工作项表的 ``project_id`` 过滤片段。
+
+    返回 ``(sql_fragment, params)``：
+    - ``accessible_pids`` 为 ``None`` 表示不限制（admin/匿名），返回空片段。
+    - ``accessible_pids`` 为空集合表示“无可访问项目”，返回 ``None``
+      表示上层应跳过查询。
+    - 其余返回 " AND project_id IN (...)" 片段及其参数。
+    """
+    if accessible_pids is None:
+        return "", {}
+    if not accessible_pids:
+        return None, {}
+    placeholders = ",".join(f":{prefix}{i}" for i in range(len(accessible_pids)))
+    params = {f"{prefix}{i}": pid for i, pid in enumerate(accessible_pids)}
+    return f" AND project_id IN ({placeholders})", params
+
+
+def _current_user_assignees(current_user: Optional[dict]) -> list[str]:
+    """返回“当前用户作为 assignee 可能的字符串”集合。
+
+    work_items 创建时 assignee 写入 ``display_name or username``（
+    参见 ``WorkItemCreateDialog``），这里同时返回两者，SQL 中以
+    ``IN`` 多值匹配，最大限度覆盖列表页“未指定务名字”的人工输入场景。
+    """
+    if not current_user:
+        return []
+    candidates: list[str] = []
+    for key in ("display_name", "username"):
+        v = current_user.get(key)
+        if isinstance(v, str) and v and v not in candidates:
+            candidates.append(v)
+    return candidates
+
+
+def _week_start_iso() -> str:
+    """返回本周周一 00:00:00 的 ISO8601 字符串（UTC）。
+
+    与 SQLite 的 TIMESTAMP 文本比较：ISO 格式下字符串比较与时间比较
+    一致，作为 ``completed_at >= :week_start`` 的边界不会出现偏差。
+    """
+    now = datetime.now(timezone.utc)
+    monday = (now - timedelta(days=now.weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    return monday.isoformat().replace("+00:00", "Z")
+
+
 @router.get("/stats")
 async def get_stats(
     workspace_id: str = "default",
@@ -132,10 +183,13 @@ async def get_stats(
         )
         queued = r.scalar() or 0
 
+        # 普通任务审批：通过 tasks 表反查（排除 work_item_transition 类型，
+        # 因为该类型的 a.task_id 实际是 work_item_id，无法在 tasks 表中查到）。
         r = await session.execute(
             text(
                 "SELECT COUNT(*) FROM approvals a"
                 " WHERE a.workspace_id = :ws AND a.status = 'pending'"
+                " AND a.type != 'work_item_transition'"
                 " AND a.task_id IN ("
                 "   SELECT id FROM tasks"
                 "   WHERE status IN ('review', 'pending', 'running')"
@@ -144,7 +198,37 @@ async def get_stats(
             ),
             {"ws": workspace_id, **cwd_params},
         )
-        pending_approval = r.scalar() or 0
+        task_approval_count = r.scalar() or 0
+
+        # 工作项审批：a.task_id 实际存的是 work_item_id，需通过 work_items 表反查。
+        # work_items.project_id 已经是编码后的 project_id，可直接与
+        # accessible_pids 比对。该类型审批创建时 workspace_id 固定为 "default"，
+        # 这里不再按当前 workspace_id 过滤，避免漏计。
+        wi_sql = (
+            "SELECT COUNT(*) FROM approvals a"
+            " WHERE a.status = 'pending'"
+            " AND a.type = 'work_item_transition'"
+            " AND a.task_id IN (SELECT id FROM work_items{wi_filter})"
+        )
+        wi_params: dict = {}
+        if accessible_pids is None:
+            wi_filter = ""
+        elif not accessible_pids:
+            wi_filter = " WHERE 1=0"
+        else:
+            placeholders = ",".join(
+                f":wp{i}" for i in range(len(accessible_pids))
+            )
+            wi_filter = f" WHERE project_id IN ({placeholders})"
+            for i, pid in enumerate(accessible_pids):
+                wi_params[f"wp{i}"] = pid
+        r = await session.execute(
+            text(wi_sql.format(wi_filter=wi_filter)),
+            wi_params,
+        )
+        work_item_approval_count = r.scalar() or 0
+
+        pending_approval = task_approval_count + work_item_approval_count
 
         r = await session.execute(
             text(
@@ -156,13 +240,33 @@ async def get_stats(
         )
         db_completed_today = r.scalar() or 0
 
-    # 今日完成 = DB 完成任务 + 今日 last_active 的本地 Agent 会话
+        # 获取今日已完成 DB 任务的 session_id 集合，用于去重
+        r = await session.execute(
+            text(
+                "SELECT session_id FROM tasks WHERE workspace_id = :ws"
+                " AND status = 'completed' AND DATE(completed_at) = DATE('now')"
+                " AND session_id IS NOT NULL AND session_id != ''"
+                f"{cwd_clause}"
+            ),
+            {"ws": workspace_id, **cwd_params},
+        )
+        db_session_ids = {row[0] for row in r.fetchall()}
+
+    # 今日完成 = DB 完成任务 + 今日 last_active 的本地 Agent 会话（去重）
     today_iso = date.today().isoformat()
     try:
         all_sessions = discover_sessions()
         file_completed_today = 0
         for s in all_sessions:
+            # 仅统计 last_active 为今天的会话
             if not (s.get("last_active") or "").startswith(today_iso):
+                continue
+            # 与 tasks.py 一致：仅计入 session_source=="exec" 的文件会话
+            if s.get("session_source") != "exec":
+                continue
+            # 去重：已在 DB 中有对应 completed 记录的不重复计数
+            sid = s.get("session_id") or s.get("id") or ""
+            if sid and sid in db_session_ids:
                 continue
             if allowed_cwds is not None and (s.get("cwd") or "") not in allowed_cwds:
                 continue
@@ -172,11 +276,52 @@ async def get_stats(
 
     completed_today = db_completed_today + file_completed_today
 
+    # ── 工作项统计（我的待办 / 本周完成）─────────────────────
+    # assignee 在 work_items 中以“display_name 或 username”入库（参见
+    # WorkItemCreateDialog），这里同时匹配两者以提高统计准确性。
+    # 当未登录或无可访问项目时，返回 0，不报错。
+    my_work_items_count = 0
+    weekly_completed_work_items = 0
+    wi_assignees = _current_user_assignees(current_user)
+    wi_pid_clause, wi_pid_params = _build_work_item_pid_clause(accessible_pids)
+    if wi_assignees and wi_pid_clause is not None:
+        a_placeholders = ",".join(f":a{i}" for i in range(len(wi_assignees)))
+        a_params = {f"a{i}": v for i, v in enumerate(wi_assignees)}
+        try:
+            async with async_session_factory() as session:
+                r = await session.execute(
+                    text(
+                        "SELECT COUNT(*) FROM work_items"
+                        f" WHERE assignee IN ({a_placeholders})"
+                        " AND completed_at IS NULL"
+                        f"{wi_pid_clause}"
+                    ),
+                    {**a_params, **wi_pid_params},
+                )
+                my_work_items_count = int(r.scalar() or 0)
+
+                week_start = _week_start_iso()
+                r = await session.execute(
+                    text(
+                        "SELECT COUNT(*) FROM work_items"
+                        f" WHERE assignee IN ({a_placeholders})"
+                        " AND completed_at IS NOT NULL"
+                        " AND completed_at >= :week_start"
+                        f"{wi_pid_clause}"
+                    ),
+                    {**a_params, "week_start": week_start, **wi_pid_params},
+                )
+                weekly_completed_work_items = int(r.scalar() or 0)
+        except Exception as exc:  # 表不存在 / 迁移未完成 → 返回 0。
+            logger.warning("work-item stats query failed: %s", exc)
+
     return {
         "running": running,
         "queued": queued,
         "pending_approval": pending_approval,
         "completed_today": completed_today,
+        "my_work_items_count": my_work_items_count,
+        "weekly_completed_work_items": weekly_completed_work_items,
     }
 
 
@@ -540,7 +685,7 @@ async def get_upcoming_schedules(
             elif isinstance(raw_cfg, dict):
                 cfg = raw_cfg
             cwd = cfg.get("cwd") if isinstance(cfg, dict) else ""
-            if not cwd or _encode_project_id(cwd) not in accessible_pids:
+            if cwd and _encode_project_id(cwd) not in accessible_pids:
                 continue
 
         next_run_at = next_run_map.get(sid) or row[3]
@@ -559,3 +704,149 @@ async def get_upcoming_schedules(
     # next_run_at ASC；空值排最后
     items.sort(key=lambda x: (x["next_run_at"] is None, x["next_run_at"] or ""))
     return items[:limit]
+
+
+# ---------- 工作项相关：我的工作项 / 项目进度 ----------
+
+
+@router.get("/work-items")
+async def get_my_work_items(
+    limit: int = Query(10, ge=1, le=50),
+    current_user=Depends(get_optional_user),
+):
+    """获取当前用户的待办工作项（默认前 10 条）。
+
+    数据源：``work_items`` 表，过滤条件：
+    - ``assignee`` 命中当前用户的 display_name 或 username；
+    - ``completed_at IS NULL``（即未完成）；
+    - ``project_id`` 在用户可访问项目集合内（admin / 关闭鉴权时不限制）。
+
+    排序：``priority DESC, created_at DESC``。
+    每条返回项额外附带：
+    - ``project_name``：通过 cwd 解码 + ``registered_projects.json`` 解析；
+    - ``status``：通过 workflow definition + 节点类型推导（与列表页一致）。
+    """
+    accessible_pids = await get_accessible_project_ids(current_user)
+    assignees = _current_user_assignees(current_user)
+    if not assignees:
+        return []
+    pid_clause, pid_params = _build_work_item_pid_clause(accessible_pids)
+    if pid_clause is None:
+        return []
+
+    a_placeholders = ",".join(f":a{i}" for i in range(len(assignees)))
+    a_params = {f"a{i}": v for i, v in enumerate(assignees)}
+
+    try:
+        async with async_session_factory() as session:
+            r = await session.execute(
+                text(
+                    "SELECT id, project_id, workflow_id, current_node_id,"
+                    " title, description, priority, assignee, version_id,"
+                    " started_at, completed_at, created_at, updated_at"
+                    " FROM work_items"
+                    f" WHERE assignee IN ({a_placeholders})"
+                    " AND completed_at IS NULL"
+                    f"{pid_clause}"
+                    " ORDER BY priority DESC, created_at DESC"
+                    " LIMIT :limit"
+                ),
+                {**a_params, **pid_params, "limit": limit},
+            )
+            rows = r.fetchall()
+    except Exception as exc:
+        logger.warning("get_my_work_items query failed: %s", exc)
+        return []
+
+    if not rows:
+        return []
+
+    # 通过 work_item_service 推导 status，复用与工作项列表页一致的逻辑。
+    from backend.services.work_item_service import work_item_service
+
+    items: list[dict] = [
+        {
+            "id": row[0],
+            "project_id": row[1],
+            "workflow_id": row[2],
+            "current_node_id": row[3],
+            "title": row[4],
+            "description": row[5],
+            "priority": int(row[6] or 0),
+            "assignee": row[7],
+            "version_id": row[8],
+            "started_at": row[9],
+            "completed_at": row[10],
+            "created_at": row[11],
+            "updated_at": row[12],
+        }
+        for row in rows
+    ]
+    try:
+        await work_item_service._enrich_status(items)
+    except Exception as exc:  # 推导失败不影响列表展示
+        logger.warning("enrich work-item status failed: %s", exc)
+
+    # 解析 project_name
+    registry = _load_registered_projects()
+    for item in items:
+        cwd = _decode_project_id(item["project_id"]) or ""
+        reg = registry.get(cwd) or {}
+        item["project_name"] = (
+            reg.get("name") or _project_name_from_cwd(cwd) if cwd else None
+        )
+    return items
+
+
+@router.get("/project-progress")
+async def get_project_progress(
+    limit: int = Query(8, ge=1, le=50),
+    current_user=Depends(get_optional_user),
+):
+    """获取各项目工作项进度（仅返回总数 > 0 的项目）。
+
+    返回字段：``id / name / total / completed``，按 ``total DESC`` 排序。
+    项目名称通过 cwd 反解 + 注册表解析；找不到则使用 cwd 路径末段。
+    """
+    accessible_pids = await get_accessible_project_ids(current_user)
+    pid_clause, pid_params = _build_work_item_pid_clause(accessible_pids)
+    if pid_clause is None:
+        return []
+
+    try:
+        async with async_session_factory() as session:
+            r = await session.execute(
+                text(
+                    "SELECT project_id, COUNT(*) AS total,"
+                    " SUM(CASE WHEN completed_at IS NOT NULL THEN 1 ELSE 0 END)"
+                    " AS completed"
+                    " FROM work_items"
+                    " WHERE 1=1"
+                    f"{pid_clause}"
+                    " GROUP BY project_id"
+                    " HAVING total > 0"
+                    " ORDER BY total DESC"
+                    " LIMIT :limit"
+                ),
+                {**pid_params, "limit": limit},
+            )
+            rows = r.fetchall()
+    except Exception as exc:
+        logger.warning("project-progress query failed: %s", exc)
+        return []
+
+    registry = _load_registered_projects()
+    results: list[dict] = []
+    for row in rows:
+        pid = row[0]
+        cwd = _decode_project_id(pid) or ""
+        reg = registry.get(cwd) or {}
+        results.append(
+            {
+                "id": pid,
+                "name": reg.get("name") or _project_name_from_cwd(cwd) or pid,
+                "total": int(row[1] or 0),
+                "completed": int(row[2] or 0),
+            }
+        )
+    return results

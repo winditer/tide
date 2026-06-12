@@ -252,6 +252,7 @@ class TaskService:
 
         self._schedule_agent_start(task_id, workspace_id, agent_id, prompt, cwd, model,
                                     conversation_id=conversation_id or "",
+                                    session_id=session_id or "",
                                     full_auto=full_auto)
 
         # 查询并返回
@@ -269,6 +270,7 @@ class TaskService:
         model: str,
         approved_retry: bool = False,
         conversation_id: str = "",
+        session_id: str = "",
         full_auto: bool = False,
     ) -> None:
         """启动 Agent；缺少 CLI 时显式失败，不伪造成功结果。"""
@@ -294,6 +296,7 @@ class TaskService:
                 model,
                 approved_retry=approved_retry,
                 conversation_id=conversation_id,
+                session_id=session_id,
                 full_auto=full_auto,
             )
         )
@@ -324,6 +327,7 @@ class TaskService:
         model: str,
         approved_retry: bool = False,
         conversation_id: str = "",
+        session_id: str = "",
         full_auto: bool = False,
     ):
         """使用 AgentExecutor 执行真实 Agent CLI"""
@@ -336,6 +340,7 @@ class TaskService:
                 model=model,
                 approved_retry=approved_retry,
                 conversation_id=conversation_id,
+                session_id=session_id,
                 full_auto=full_auto,
             ):
                 if event.type == "started":

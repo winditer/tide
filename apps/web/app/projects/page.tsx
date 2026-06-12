@@ -10,6 +10,7 @@ import {
   useDeleteProject,
   useArchiveProject,
   useUnarchiveProject,
+  useProjectRoots,
   type ProjectInfo,
 } from "@tide/core";
 
@@ -340,40 +341,70 @@ function ProjectDialog({
 }: {
   mode: DialogMode;
   onClose: () => void;
-  onSubmit: (input: { cwd: string; name?: string; tags?: string[] }) => Promise<void>;
+  onSubmit: (input: {
+    cwd: string;
+    name?: string;
+    tags?: string[];
+    create_dir?: boolean;
+  }) => Promise<void>;
   isPending: boolean;
 }) {
-  const [cwd, setCwd] = useState("");
+  const { data: rootsData, isLoading: rootsLoading } = useProjectRoots();
+  const roots = rootsData?.roots ?? [];
+  const [root, setRoot] = useState<string>("");
+  const [relPath, setRelPath] = useState("");
   const [name, setName] = useState("");
   const [tagsRaw, setTagsRaw] = useState("");
   const [error, setError] = useState<string | null>(null);
 
+  // 首次拿到根目录后选中默认值
+  useEffect(() => {
+    if (!root && roots.length > 0) {
+      setRoot(rootsData?.default ?? roots[0]);
+    }
+  }, [root, roots, rootsData?.default]);
+
   const title = mode === "new" ? "新建项目" : "添加已有项目";
   const subtitle =
     mode === "new"
-      ? "告诉系统关注一个目录（不会执行 git init）"
+      ? "在项目根目录下创建一个新目录并注册（不会执行 git init）"
       : "把已有的目录注册到工作台";
+
+  /** 拼接根目录与相对路径，去除多余斜杠。 */
+  const fullCwd = useMemo(() => {
+    const r = (root || "").replace(/\/+$/, "");
+    const p = (relPath || "").trim().replace(/^\/+/, "").replace(/\/+$/, "");
+    if (!r) return p;
+    return p ? `${r}/${p}` : r;
+  }, [root, relPath]);
 
   const submit = async () => {
     setError(null);
-    const trimmed = cwd.trim();
+    const trimmed = relPath.trim().replace(/^\/+/, "").replace(/\/+$/, "");
     if (!trimmed) {
-      setError("路径不能为空");
+      setError("请填写项目路径");
+      return;
+    }
+    if (!root) {
+      setError("未取到可用根目录");
       return;
     }
     try {
       await onSubmit({
-        cwd: trimmed,
+        cwd: fullCwd,
         name: name.trim() || undefined,
         tags: tagsRaw
           .split(",")
           .map((s) => s.trim())
           .filter(Boolean),
+        create_dir: mode === "new",
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
   };
+
+  const multipleRoots = roots.length > 1;
 
   return (
     <div
@@ -401,14 +432,48 @@ function ProjectDialog({
             <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
           </div>
 
-          <Field label="项目路径 (绝对路径)" required>
-            <Input
-              autoFocus
-              placeholder="/Users/your/path/to/project"
-              value={cwd}
-              onChange={(e) => setCwd(e.target.value)}
-              className="rounded-lg border-border/50 focus:ring-2 focus:ring-ring font-mono text-sm"
-            />
+          <Field label="项目路径" required>
+            {rootsLoading ? (
+              <div className="text-xs text-muted-foreground">加载根目录中…</div>
+            ) : (
+              <div className="flex items-stretch gap-0 rounded-lg border border-border/50 focus-within:ring-2 focus-within:ring-ring overflow-hidden">
+                {multipleRoots ? (
+                  <select
+                    value={root}
+                    onChange={(e) => setRoot(e.target.value)}
+                    className="shrink-0 max-w-[55%] truncate bg-muted px-2 py-2 font-mono text-xs text-muted-foreground border-r border-border/50 focus:outline-none"
+                  >
+                    {roots.map((r) => (
+                      <option key={r} value={r}>
+                        {r}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <span
+                    className="shrink-0 max-w-[55%] truncate bg-muted px-2 py-2 font-mono text-xs text-muted-foreground border-r border-border/50 flex items-center"
+                    title={root}
+                  >
+                    {root || "—"}
+                  </span>
+                )}
+                <span className="shrink-0 select-none bg-muted px-1 py-2 font-mono text-xs text-muted-foreground">
+                  /
+                </span>
+                <input
+                  autoFocus
+                  placeholder="my-project"
+                  value={relPath}
+                  onChange={(e) => setRelPath(e.target.value)}
+                  className="flex-1 min-w-0 bg-transparent px-2 py-2 font-mono text-sm focus:outline-none"
+                />
+              </div>
+            )}
+            {fullCwd && (
+              <p className="mt-1.5 truncate font-mono text-[11px] text-muted-foreground">
+                → {fullCwd}
+              </p>
+            )}
           </Field>
 
           <Field label="项目名（可选）">

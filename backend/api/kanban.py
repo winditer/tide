@@ -55,7 +55,20 @@ async def get_session_board(
     current_user=Depends(get_optional_user),
 ):
     """会话看板：按 Agent 分组，按任务状态分列。"""
-    return await kanban_service.get_session_board(workspace_id)
+    accessible_pids = await get_accessible_project_ids(current_user)
+    board = await kanban_service.get_session_board(workspace_id)
+    if accessible_pids is not None:
+        groups = board.get("groups") or {}
+        for agent, columns in list(groups.items()):
+            for col_key, items in list(columns.items()):
+                if not isinstance(items, list):
+                    continue
+                columns[col_key] = [
+                    it for it in items
+                    if not (it.get("cwd") or "")
+                    or encode_project_id(it.get("cwd") or "") in accessible_pids
+                ]
+    return board
 
 
 @router.get("/agents")
@@ -64,7 +77,25 @@ async def get_agent_board(
     current_user=Depends(get_optional_user),
 ):
     """Agent 看板（泳道式）。"""
-    return await kanban_service.get_agent_board(workspace_id)
+    accessible_pids = await get_accessible_project_ids(current_user)
+    board = await kanban_service.get_agent_board(workspace_id)
+    if accessible_pids is not None:
+        swimlanes = board.get("swimlanes") or {}
+        for agent, lane in list(swimlanes.items()):
+            for col_key in ("running", "queued", "review", "completed", "failed"):
+                items = lane.get(col_key)
+                if not isinstance(items, list):
+                    continue
+                lane[col_key] = [
+                    it for it in items
+                    if not (it.get("cwd") or "")
+                    or encode_project_id(it.get("cwd") or "") in accessible_pids
+                ]
+            # Recalculate idle state after filtering
+            lane["idle"] = not (
+                lane.get("running") or lane.get("queued") or lane.get("review")
+            )
+    return board
 
 
 @router.get("/workflows")
@@ -106,10 +137,13 @@ async def move_card(
 @router.get("/work-items", response_model=WorkItemKanbanResponse)
 async def get_work_item_board(
     project_id: str = Query(..., description="项目 ID"),
+    version_id: Optional[str] = Query(None, description="版本筛选"),
     current_user=Depends(get_optional_user),
 ):
     """工作项看板：按 workflow 可见节点划列。"""
-    return await work_item_service.get_work_item_board(project_id)
+    return await work_item_service.get_work_item_board(
+        project_id, version_id=version_id
+    )
 
 
 @router.post("/work-items/{item_id}/move", response_model=WorkItemTransitionResponse)

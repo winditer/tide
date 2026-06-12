@@ -323,49 +323,9 @@ class ScheduleService:
         if not schedule:
             return None
 
-        # Execute immediately in background
-        asyncio.create_task(self._execute_scheduled_task(schedule_id))
-        return schedule
-
-    async def get_runs(self, schedule_id: str, limit: int = 20) -> list:
-        """获取执行历史"""
-        async with async_session_factory() as session:
-            result = await session.execute(
-                text("""
-                SELECT id, schedule_id, task_id, status, trigger_type,
-                       started_at, completed_at, result, error
-                FROM schedule_runs
-                WHERE schedule_id = :schedule_id
-                ORDER BY started_at DESC
-                LIMIT :limit
-                """),
-                {"schedule_id": schedule_id, "limit": limit},
-            )
-            rows = result.fetchall()
-            return [dict(row._mapping) for row in rows]
-
-    # ── Execution callback ────────────────────────────────
-
-    async def _execute_scheduled_task(self, schedule_id: str):
-        """
-        APScheduler job 执行函数。
-        1. 记录 schedule_runs (status=running)
-        2. 广播 WS: schedule.run.started
-        3. 根据 task_type 调用 TaskService.create_task()
-        4. 更新 schedule_runs (status=completed/failed)
-        5. 更新 schedules.last_run_at + run_count
-        6. 广播 WS: schedule.run.completed
-        """
+        # Pre-create the schedule_run record so the frontend can see it immediately
         run_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-        # Load schedule info
-        schedule = await self.get_schedule(schedule_id)
-        if not schedule:
-            logger.warning("Schedule %s not found during execution", schedule_id[:8])
-            return
-
-        # 1. Record run start
         async with async_session_factory() as session:
             await session.execute(
                 text("""
@@ -376,19 +336,97 @@ class ScheduleService:
                 {
                     "id": run_id,
                     "schedule_id": schedule_id,
-                    "trigger_type": schedule["trigger_type"],
+                    "trigger_type": "manual",
                     "started_at": now,
                 },
             )
             await session.commit()
 
+        # Execute in background, passing pre-created run_id
+        asyncio.create_task(self._execute_scheduled_task(schedule_id, pre_run_id=run_id))
+        return schedule
+
+    async def get_runs(self, schedule_id: str, limit: int = 20) -> list:
+        """获取执行历史，LEFT JOIN tasks 获取关联任务标题"""
+        async with async_session_factory() as session:
+            result = await session.execute(
+                text("""
+                SELECT sr.id, sr.schedule_id, sr.task_id, sr.status, sr.trigger_type,
+                       sr.started_at, sr.completed_at, sr.result, sr.error,
+                       t.title as task_title,
+                       s.task_type
+                FROM schedule_runs sr
+                LEFT JOIN tasks t ON sr.task_id = t.id
+                LEFT JOIN schedules s ON sr.schedule_id = s.id
+                WHERE sr.schedule_id = :schedule_id
+                ORDER BY sr.started_at DESC
+                LIMIT :limit
+                """),
+                {"schedule_id": schedule_id, "limit": limit},
+            )
+            rows = result.fetchall()
+            items = []
+            for row in rows:
+                item = dict(row._mapping)
+                # Normalize status: stored 'completed' -> API 'success' for frontend compat
+                if item.get("status") == "completed":
+                    item["status"] = "success"
+                # Add finished_at alias for frontend compatibility
+                item["finished_at"] = item.get("completed_at")
+                items.append(item)
+            return items
+
+    # ── Execution callback ────────────────────────────────
+
+    async def _execute_scheduled_task(self, schedule_id: str, pre_run_id: str | None = None):
+        """
+        APScheduler job 执行函数。
+        1. 记录 schedule_runs (status=running) — 若 pre_run_id 已提供则跳过
+        2. 广播 WS: schedule.run.started
+        3. 根据 task_type 调用 TaskService.create_task()
+        4. 更新 schedule_runs (status=completed/failed)
+        5. 更新 schedules.last_run_at + run_count
+        6. 广播 WS: schedule.run.completed
+        """
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+        # Load schedule info
+        schedule = await self.get_schedule(schedule_id)
+        if not schedule:
+            logger.warning("Schedule %s not found during execution", schedule_id[:8])
+            return
+
+        # 1. Record run start (skip if pre-created by trigger_now)
+        if pre_run_id:
+            run_id = pre_run_id
+        else:
+            run_id = str(uuid.uuid4())
+            async with async_session_factory() as session:
+                await session.execute(
+                    text("""
+                    INSERT INTO schedule_runs
+                        (id, schedule_id, status, trigger_type, started_at)
+                    VALUES (:id, :schedule_id, 'running', :trigger_type, :started_at)
+                    """),
+                    {
+                        "id": run_id,
+                        "schedule_id": schedule_id,
+                        "trigger_type": schedule["trigger_type"],
+                        "started_at": now,
+                    },
+                )
+                await session.commit()
+
         # 2. Broadcast WS: schedule.run.started
-        await ws_hub.broadcast("schedules", {
-            "type": "schedule.run.started",
-            "schedule_id": schedule_id,
-            "run_id": run_id,
-            "workspace_id": schedule["workspace_id"],
-        })
+        try:
+            await ws_hub.broadcast("schedules", {
+                "type": "schedule.run.started",
+                "schedule_id": schedule_id,
+                "run_id": run_id,
+                "workspace_id": schedule["workspace_id"],
+            })
+        except Exception as exc:
+            logger.warning("WS broadcast failed for schedule.run.started: %s", exc)
 
         task_id = None
         error_msg = None
@@ -404,6 +442,7 @@ class ScheduleService:
                     agent_id=task_config.get("agent_id", "codex"),
                     model=task_config.get("model", ""),
                     cwd=task_config.get("cwd", ""),
+                    full_auto=True,
                 )
                 task_id = task["id"] if task else None
             elif schedule["task_type"] == "plan":
@@ -467,6 +506,7 @@ class ScheduleService:
                     agent_id=task_config.get("agent_id", "codex"),
                     model=task_config.get("model", ""),
                     cwd=task_config.get("cwd", ""),
+                    full_auto=True,
                 )
                 task_id = task["id"] if task else None
 

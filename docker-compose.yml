@@ -1,0 +1,55 @@
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    image: tide-backend:latest
+    container_name: tide-backend
+    restart: unless-stopped
+    # SQLite + APScheduler + Lark Listener 共享进程内状态，必须单进程运行
+    command: ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    env_file:
+      - .env
+    environment:
+      # 容器内 SQLite 落到挂载卷里，避免容器重建丢数据
+      DATABASE_URL: sqlite+aiosqlite:////app/data/tide.db
+    volumes:
+      # SQLite 数据库 + .tide/（worktrees、attachments 等运行时产物）
+      - tide-data:/app/data
+      - tide-runtime:/app/.tide
+    ports:
+      # 如不需要从宿主机直接访问后端，可以注释这一行（前端通过 docker 内网访问即可）
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status==200 else sys.exit(1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    image: tide-frontend:latest
+    container_name: tide-frontend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # 覆盖 .env 中可能存在的 API_BACKEND_URL，确保走 docker 内网 DNS
+      API_BACKEND_URL: http://backend:8000
+      NODE_ENV: production
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+    depends_on:
+      backend:
+        condition: service_started
+    ports:
+      - "3000:3000"
+
+volumes:
+  tide-data:
+  tide-runtime:

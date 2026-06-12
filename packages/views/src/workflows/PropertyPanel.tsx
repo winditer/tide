@@ -1,7 +1,7 @@
 "use client";
 
 import { Button, Input, Select } from "@tide/ui";
-import type { WorkflowNode, WorkflowNodeType } from "@tide/core";
+import { useProjectMembers, type WorkflowNode, type WorkflowNodeType } from "@tide/core";
 import { STAGE_CATEGORY_OPTIONS } from "./node-tones";
 
 const TYPE_LABEL: Record<WorkflowNodeType, string> = {
@@ -14,6 +14,7 @@ const TYPE_LABEL: Record<WorkflowNodeType, string> = {
   parallel_join: "并行汇合",
   delay: "延时",
   stage: "阶段",
+  git_merge: "Git合并",
 };
 
 const TYPE_GLYPH: Record<WorkflowNodeType, string> = {
@@ -26,6 +27,7 @@ const TYPE_GLYPH: Record<WorkflowNodeType, string> = {
   parallel_join: "−",
   delay: "⏱",
   stage: "✦",
+  git_merge: "🔀",
 };
 
 const OPERATOR_OPTIONS = [
@@ -50,6 +52,8 @@ interface PropertyPanelProps {
   onUpdate: (id: string, data: Record<string, any>) => void;
   onDelete?: (id: string) => void;
   readOnly?: boolean;
+  /** 当前工作流编辑上下文的项目 ID，供审批人下拉获取项目成员使用 */
+  projectId?: string;
 }
 
 export function PropertyPanel({
@@ -57,7 +61,10 @@ export function PropertyPanel({
   onUpdate,
   onDelete,
   readOnly,
+  projectId,
 }: PropertyPanelProps) {
+  const { data: membersData } = useProjectMembers(projectId);
+  const members = membersData?.members ?? [];
   if (!node) {
     return (
       <div className="flex h-full w-[300px] flex-col border-l border-border/50 bg-card">
@@ -145,27 +152,77 @@ export function PropertyPanel({
                   可用变量：<span className="text-emerald-600">{"{prev_output}"}</span> 上一节点输出 · <span className="text-emerald-600">{"{item.title}"}</span> 工作项标题 · <span className="text-emerald-600">{"{item.description}"}</span> 描述
                 </div>
               </FormGroup>
+              <FormGroup label="工作目录 (cwd)">
+                <Input
+                  value={String(data.cwd ?? "")}
+                  disabled={readOnly}
+                  onChange={(e) => update({ cwd: e.target.value })}
+                  placeholder="留空则使用项目根路径"
+                  className="rounded-lg font-mono text-xs"
+                />
+              </FormGroup>
+              <FormGroup label="高级选项">
+                <label
+                  className={`flex items-start gap-2.5 rounded-lg border border-input bg-background px-3 py-2.5 transition-colors ${
+                    readOnly
+                      ? "cursor-not-allowed opacity-60"
+                      : "cursor-pointer hover:bg-muted/40"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 h-3.5 w-3.5 accent-primary"
+                    checked={data.useWorktree !== false}
+                    disabled={readOnly}
+                    onChange={(e) =>
+                      update({ useWorktree: e.target.checked })
+                    }
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[12px] font-medium text-foreground">
+                      启用工作区隔离
+                    </div>
+                    <div className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
+                      Agent 将在独立的 Git Worktree 中执行，避免多工作项并行冲突
+                    </div>
+                  </div>
+                </label>
+              </FormGroup>
             </>
           )}
 
           {t === "approval" && (
-            <FormGroup label="审批人（逗号分隔）">
-              <Input
-                value={
-                  Array.isArray(data.approvers) ? data.approvers.join(", ") : ""
-                }
-                disabled={readOnly}
-                onChange={(e) =>
-                  update({
-                    approvers: e.target.value
-                      .split(",")
-                      .map((s) => s.trim())
-                      .filter(Boolean),
-                  })
-                }
-                placeholder="user1, user2"
-                className="rounded-lg"
-              />
+            <FormGroup label="审批人">
+              {projectId && members.length > 0 ? (
+                <ApproverPicker
+                  members={members}
+                  value={Array.isArray(data.approvers) ? data.approvers : []}
+                  disabled={readOnly}
+                  onChange={(next) => update({ approvers: next })}
+                />
+              ) : (
+                <Input
+                  value={
+                    Array.isArray(data.approvers) ? data.approvers.join(", ") : ""
+                  }
+                  disabled={readOnly}
+                  onChange={(e) =>
+                    update({
+                      approvers: e.target.value
+                        .split(",")
+                        .map((s) => s.trim())
+                        .filter(Boolean),
+                    })
+                  }
+                  placeholder="user1, user2"
+                  className="rounded-lg"
+                />
+              )}
+              {!projectId && (
+                <div className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+                  项目上下文未提供，请以逗号分隔手动输入审批人
+                </div>
+              )}
             </FormGroup>
           )}
 
@@ -228,6 +285,66 @@ export function PropertyPanel({
               <div className="rounded-lg border border-border/50 bg-muted/30 px-3 py-2 text-[10px] leading-relaxed text-muted-foreground">
                 STAGE 节点表示工作项阶段，在看板中作为纵列出现。
               </div>
+            </>
+          )}
+
+          {t === "git_merge" && (
+            <>
+              <FormGroup label="源分支">
+                <Input
+                  value={String(data.sourceBranch ?? "")}
+                  disabled={readOnly}
+                  onChange={(e) => update({ sourceBranch: e.target.value })}
+                  placeholder="留空则自动使用工作项分支"
+                  className="rounded-lg font-mono text-xs"
+                />
+              </FormGroup>
+              <FormGroup label="目标分支">
+                <Input
+                  value={String(data.targetBranch ?? "")}
+                  disabled={readOnly}
+                  onChange={(e) => update({ targetBranch: e.target.value })}
+                  placeholder="留空则自动使用工作项分支"
+                  className="rounded-lg font-mono text-xs"
+                />
+              </FormGroup>
+              <FormGroup label="合并策略">
+                <select
+                  value={String(data.mergeStrategy ?? "merge")}
+                  disabled={readOnly}
+                  onChange={(e) => update({ mergeStrategy: e.target.value })}
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2 text-xs"
+                >
+                  <option value="merge">Merge (保留提交历史)</option>
+                  <option value="squash">Squash (压缩为单次提交)</option>
+                  <option value="rebase">Rebase (变基)</option>
+                </select>
+              </FormGroup>
+              <FormGroup label="冲突处理">
+                <select
+                  value={String(data.onConflict ?? "fail")}
+                  disabled={readOnly}
+                  onChange={(e) => update({ onConflict: e.target.value })}
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2 text-xs"
+                >
+                  <option value="fail">失败并停止</option>
+                  <option value="manual">等待手动处理</option>
+                </select>
+              </FormGroup>
+              <FormGroup label="高级选项">
+                <label className={`flex items-start gap-2.5 rounded-lg border border-input bg-background px-3 py-2.5 transition-colors ${readOnly ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:bg-muted/40"}`}>
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 h-3.5 w-3.5 accent-primary"
+                    checked={data.deleteSource === true}
+                    disabled={readOnly}
+                    onChange={(e) => update({ deleteSource: e.target.checked })}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[12px] font-medium text-foreground">合并后删除源分支</div>
+                  </div>
+                </label>
+              </FormGroup>
             </>
           )}
 
@@ -322,6 +439,72 @@ function Field({
       >
         {value || "—"}
       </div>
+    </div>
+  );
+}
+
+interface ApproverPickerProps {
+  members: { id: string; username: string; display_name: string | null }[];
+  value: string[];
+  disabled?: boolean;
+  onChange: (next: string[]) => void;
+}
+
+function ApproverPicker({
+  members,
+  value,
+  disabled,
+  onChange,
+}: ApproverPickerProps) {
+  const selected = new Set(value);
+  const toggle = (name: string) => {
+    if (disabled) return;
+    const next = new Set(selected);
+    if (next.has(name)) next.delete(name);
+    else next.add(name);
+    onChange(Array.from(next));
+  };
+  return (
+    <div className="space-y-2">
+      <div className="max-h-44 overflow-y-auto rounded-lg border border-input bg-background p-1">
+        {members.length === 0 ? (
+          <div className="px-2 py-3 text-center text-[11px] text-muted-foreground">
+            项目暂无成员
+          </div>
+        ) : (
+          members.map((m) => {
+            const name = m.display_name || m.username;
+            const checked = selected.has(name);
+            return (
+              <label
+                key={m.id}
+                className={`flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs transition-colors ${
+                  checked
+                    ? "bg-primary/10 text-foreground"
+                    : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                } ${disabled ? "cursor-not-allowed opacity-60" : ""}`}
+              >
+                <input
+                  type="checkbox"
+                  className="h-3.5 w-3.5 accent-primary"
+                  checked={checked}
+                  disabled={disabled}
+                  onChange={() => toggle(name)}
+                />
+                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/10 text-[10px] font-semibold uppercase text-primary">
+                  {name.slice(0, 1)}
+                </span>
+                <span className="flex-1 truncate">{name}</span>
+              </label>
+            );
+          })
+        )}
+      </div>
+      {value.length > 0 && (
+        <div className="text-[10px] text-muted-foreground">
+          已选 {value.length} 人：{value.join("、")}
+        </div>
+      )}
     </div>
   );
 }

@@ -61,14 +61,15 @@ export default function PlanDetailPage({
   } | null>(null);
 
   const handleNodeClick = (nodeId: string, data: PlanDAGNodeData) => {
-    // Backend uses node id `task-{task_index}` or task uuid; map to actual task id
+    // Backend DAG node id format: `task-{task_uuid}`. Strip prefix to get raw task id.
+    const stripped = nodeId.startsWith("task-") ? nodeId.slice(5) : nodeId;
     const t = tasks?.find(
       (it) =>
+        it.task_id === stripped ||
         it.task_id === nodeId ||
-        String(it.task_index) === nodeId ||
-        nodeId.endsWith(String(it.task_index))
+        String(it.task_index) === stripped
     );
-    setSelected({ taskId: t?.task_id ?? nodeId, data });
+    setSelected({ taskId: t?.task_id ?? stripped, data });
   };
 
   if (isLoading) {

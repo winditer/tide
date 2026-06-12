@@ -16,6 +16,16 @@ export type WorkItemTriggerType =
 /** 工作项优先级：0=无, 1=低, 2=中, 3=高, 4=紧急 */
 export type WorkItemPriority = 0 | 1 | 2 | 3 | 4;
 
+/** 工作项状态 */
+export type WorkItemStatus =
+  | "pending"
+  | "in_progress"
+  | "pending_approval"
+  | "completed"
+  | "failed"
+  | "stopped"
+  | "waiting";
+
 export interface WorkItem {
   id: string;
   project_id: string;
@@ -30,6 +40,10 @@ export interface WorkItem {
   source_type: WorkItemSourceType;
   source_id?: string;
   metadata?: Record<string, any>;
+  /** 关联版本 ID（可选） */
+  version_id?: string | null;
+  /** 推导状态：待操作、进行中、待审批、已完成、失败、已停止、等待中 */
+  status?: WorkItemStatus;
   started_at?: string;
   completed_at?: string;
   created_at: string;
@@ -66,6 +80,7 @@ export interface WorkItemCreate {
   source_type?: string;
   source_id?: string;
   metadata?: Record<string, any>;
+  version_id?: string | null;
 }
 
 export interface WorkItemUpdate {
@@ -75,6 +90,16 @@ export interface WorkItemUpdate {
   assignee?: string;
   tags?: string[];
   metadata?: Record<string, any>;
+  version_id?: string | null;
+}
+
+export interface WorkItemArtifact {
+  id: string;
+  stage: string;
+  label: string;
+  url: string;
+  type: string;
+  created_at: string;
 }
 
 export interface WorkItemBoardColumn {

@@ -57,6 +57,61 @@ BOARD_COLUMN_NODE_TYPES = VISIBLE_NODE_TYPES | {"end"}
 class WorkItemService:
     """工作项服务：CRUD + 流转引擎 + 看板数据。"""
 
+    # ── status 推导 ─────────────────────────────────────
+
+    @staticmethod
+    def _derive_node_status(node_type: Optional[str], has_completed: bool) -> str:
+        """根据节点类型推导工作项状态。
+
+        返回值: pending | in_progress | pending_approval | completed | waiting | failed | stopped
+        """
+        if has_completed:
+            return "completed"
+        if node_type == "end":
+            return "completed"
+        if node_type == "approval":
+            return "pending_approval"
+        if node_type == "agent":
+            return "in_progress"
+        if node_type == "delay":
+            return "waiting"
+        # stage 或其他
+        return "pending"
+
+    async def _enrich_status(self, items: List[dict]) -> List[dict]:
+        """为工作项列表批量推导 status 字段。
+
+        1. 按 workflow_id 分组，批量加载 definition
+        2. 对每个 item，根据 current_node_id 找到节点 type
+        3. 调用 _derive_node_status 推导 status
+        """
+        if not items:
+            return items
+
+        # 收集所有 workflow_id 并批量加载 definition
+        workflow_ids = {item["workflow_id"] for item in items if item.get("workflow_id")}
+        definitions: dict[str, dict] = {}
+        for wf_id in workflow_ids:
+            defn = await self._load_workflow_definition(wf_id)
+            if defn:
+                definitions[wf_id] = defn
+
+        # 为每个 item 推导 status
+        for item in items:
+            wf_id = item.get("workflow_id")
+            defn = definitions.get(wf_id) if wf_id else None
+            node_type: Optional[str] = None
+            if defn:
+                node_map = {n["id"]: n for n in defn.get("nodes", [])}
+                current_node = node_map.get(item.get("current_node_id", ""))
+                if current_node:
+                    node_type = current_node.get("type")
+            item["status"] = self._derive_node_status(
+                node_type, bool(item.get("completed_at"))
+            )
+
+        return items
+
     # ── helpers ──────────────────────────────────────────
 
     def _get_visible_nodes(
@@ -194,6 +249,24 @@ class WorkItemService:
 
     # ── workflow loading ─────────────────────────────────
 
+    async def _find_default_workflow_id(self) -> Optional[str]:
+        """返回一个可作为默认值的 workflow_id：取最早创建的 enabled 工作流。
+
+        当项目未绑定工作流（``project_settings`` 缺失）时，作为兜底使用，
+        避免普通成员在尚未配置工作流的项目中新建工作项直接报 400。
+        """
+        async with async_session_factory() as session:
+            result = await session.execute(
+                text(
+                    "SELECT id FROM workflows WHERE enabled = 1"
+                    " ORDER BY created_at ASC LIMIT 1"
+                )
+            )
+            row = result.fetchone()
+        if not row:
+            return None
+        return row[0]
+
     async def _load_workflow_definition(self, workflow_id: str) -> Optional[dict]:
         """加载 workflow 的 definition（{nodes, edges}）。"""
         async with async_session_factory() as session:
@@ -256,13 +329,20 @@ class WorkItemService:
         source_type = (data.source_type if hasattr(data, "source_type") else data.get("source_type", "manual")) or "manual"
         source_id = (data.source_id if hasattr(data, "source_id") else data.get("source_id")) or None
         metadata = (data.metadata if hasattr(data, "metadata") else data.get("metadata")) or None
+        version_id = (data.version_id if hasattr(data, "version_id") else data.get("version_id")) or None
 
-        # 1. 查找 project_settings
+        # 1. 查找 project_settings；若项目尚未绑定工作流，则尝试自动绑定一个
+        #    默认（最早创建且 enabled）的工作流，避免普通成员在新项目首次创建
+        #    工作项时直接 400。仅在系统中存在 enabled 工作流时才自动绑定。
         settings = await self.get_project_settings(project_id)
-        if not settings or not settings.get("workflow_id"):
-            raise ValueError(f"Project {project_id} has no workflow bound. Use set_project_workflow first.")
-
-        workflow_id = settings["workflow_id"]
+        workflow_id = settings.get("workflow_id") if settings else None
+        if not workflow_id:
+            workflow_id = await self._find_default_workflow_id()
+            if not workflow_id:
+                raise ValueError(
+                    f"Project {project_id} has no workflow bound and no default workflow available."
+                )
+            await self.set_project_workflow(project_id, workflow_id)
 
         # 2. 加载 workflow definition
         definition = await self._load_workflow_definition(workflow_id)
@@ -288,10 +368,10 @@ class WorkItemService:
                     INSERT INTO work_items
                         (id, project_id, workflow_id, current_node_id, title, description,
                          priority, assignee, tags, source_type, source_id, metadata,
-                         started_at, created_at, updated_at)
+                         version_id, started_at, created_at, updated_at)
                     VALUES (:id, :project_id, :workflow_id, :current_node_id, :title, :description,
                             :priority, :assignee, :tags, :source_type, :source_id, :metadata,
-                            :started_at, :created_at, :updated_at)
+                            :version_id, :started_at, :created_at, :updated_at)
                 """),
                 {
                     "id": item_id,
@@ -306,6 +386,7 @@ class WorkItemService:
                     "source_type": source_type,
                     "source_id": source_id,
                     "metadata": metadata_json,
+                    "version_id": version_id,
                     "started_at": now,
                     "created_at": now,
                     "updated_at": now,
@@ -322,10 +403,18 @@ class WorkItemService:
             operator="system",
         )
 
-        # 6. 如果初始节点是 agent 类型，触发自动化
+        # 6. 如果初始节点需要自动化处理，按节点类型触发
         item = await self.get_work_item(item_id)
-        if first_node.get("type") == "agent" and item:
-            asyncio.create_task(self._safe_trigger_agent(item, first_node))
+        if item:
+            node_type = first_node.get("type", "stage")
+            if node_type == "agent":
+                asyncio.create_task(self._safe_trigger_agent(item, first_node))
+            elif node_type == "approval":
+                asyncio.create_task(self._trigger_approval_node(item, first_node))
+            elif node_type == "condition":
+                asyncio.create_task(self._handle_condition_node(item, first_node, definition))
+            elif node_type == "delay":
+                asyncio.create_task(self._handle_delay_node(item, first_node, definition))
 
         # 7. WebSocket 广播
         await ws_hub.broadcast("work_items", {
@@ -345,7 +434,7 @@ class WorkItemService:
                 text("""
                     SELECT id, project_id, workflow_id, current_node_id, title, description,
                            priority, assignee, tags, source_type, source_id, metadata,
-                           started_at, completed_at, created_at, updated_at
+                           version_id, started_at, completed_at, created_at, updated_at
                     FROM work_items WHERE id = :id
                 """),
                 {"id": item_id},
@@ -356,14 +445,19 @@ class WorkItemService:
         item = dict(row._mapping)
         item["tags"] = _safe_json_loads(item.get("tags"), None)
         item["metadata"] = _safe_json_loads(item.get("metadata"), None)
+        # 推导 status
+        await self._enrich_status([item])
         return item
 
     async def list_work_items(
         self,
         project_id: Optional[str] = None,
         status: Optional[str] = None,
+        search: Optional[str] = None,
+        assignee: Optional[str] = None,
+        version_id: Optional[str] = None,
     ) -> List[dict]:
-        """列出工作项，支持按项目和状态筛选。"""
+        """列出工作项，支持按项目、状态、关键词、负责人和版本筛选。"""
         conditions = []
         params: dict = {}
 
@@ -375,6 +469,15 @@ class WorkItemService:
                 conditions.append("completed_at IS NOT NULL")
             elif status == "active":
                 conditions.append("completed_at IS NULL")
+        if search:
+            conditions.append("(title LIKE :search OR description LIKE :search)")
+            params["search"] = f"%{search}%"
+        if assignee:
+            conditions.append("assignee = :assignee")
+            params["assignee"] = assignee
+        if version_id:
+            conditions.append("version_id = :version_id")
+            params["version_id"] = version_id
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
@@ -383,7 +486,7 @@ class WorkItemService:
                 text(f"""
                     SELECT id, project_id, workflow_id, current_node_id, title, description,
                            priority, assignee, tags, source_type, source_id, metadata,
-                           started_at, completed_at, created_at, updated_at
+                           version_id, started_at, completed_at, created_at, updated_at
                     FROM work_items
                     {where}
                     ORDER BY created_at DESC
@@ -398,6 +501,11 @@ class WorkItemService:
             item["tags"] = _safe_json_loads(item.get("tags"), None)
             item["metadata"] = _safe_json_loads(item.get("metadata"), None)
             items.append(item)
+        # 批量推导 status
+        await self._enrich_status(items)
+        # 状态是推导出来的，需要在 Python 侧过滤
+        if status and status not in ("completed", "active"):
+            items = [it for it in items if it.get("status") == status]
         return items
 
     async def update_work_item(self, item_id: str, data) -> Optional[dict]:
@@ -415,6 +523,7 @@ class WorkItemService:
         assignee = data.assignee if hasattr(data, "assignee") else data.get("assignee")
         tags = data.tags if hasattr(data, "tags") else data.get("tags")
         metadata = data.metadata if hasattr(data, "metadata") else data.get("metadata")
+        version_id = data.version_id if hasattr(data, "version_id") else data.get("version_id") if isinstance(data, dict) else None
 
         if title is not None:
             sets.append("title = :title")
@@ -427,13 +536,18 @@ class WorkItemService:
             params["priority"] = priority
         if assignee is not None:
             sets.append("assignee = :assignee")
-            params["assignee"] = assignee
+            # 传空字符串表示取消分配
+            params["assignee"] = assignee or None
         if tags is not None:
             sets.append("tags = :tags")
             params["tags"] = json.dumps(tags, ensure_ascii=False)
         if metadata is not None:
             sets.append("metadata = :metadata")
             params["metadata"] = json.dumps(metadata, ensure_ascii=False)
+        if version_id is not None:
+            # 传空字符串表示取消关联
+            sets.append("version_id = :version_id")
+            params["version_id"] = version_id or None
 
         if not sets:
             return existing
@@ -525,6 +639,16 @@ class WorkItemService:
         if not target_node:
             raise ValueError(f"Node {target_node_id} not found in workflow.")
 
+        # 3.1 防护：手动流转禁止从 end 节点拖出（已完成不应被重置）
+        #     仅对 trigger_type == "manual" 生效，系统/审批/agent_completed 等流转不受限。
+        if trigger_type == "manual":
+            from_node = node_map.get(from_node_id) if from_node_id else None
+            if from_node and from_node.get("type") == "end":
+                raise ValueError("Cannot transition from end node")
+            # 3.2 防护：手动流转禁止直接拖入 end 节点（end 应由工作流自动到达）
+            if target_node.get("type") == "end":
+                raise ValueError("Cannot manually transition to end node")
+
         # 4. 记录 transition
         transition = await self._record_transition(
             item_id=item_id,
@@ -564,6 +688,8 @@ class WorkItemService:
             asyncio.create_task(self._handle_condition_node(item, target_node, definition))
         elif node_type == "delay" and item:
             asyncio.create_task(self._handle_delay_node(item, target_node, definition))
+        elif node_type == "git_merge" and item:
+            asyncio.create_task(self._trigger_git_merge_node(item, target_node))
         elif node_type == "end":
             logger.info("Work item %s completed.", item_id[:8])
 
@@ -616,9 +742,10 @@ class WorkItemService:
         Agent 节点自动化：
         1. 从 node.data 提取 prompt, model, agent_id
         2. 渲染 prompt 模板
-        3. 调用 task_service.create_task()
-        4. task 的 metadata 中记录 work_item_id 和 workflow_node_id
-        5. 更新 transition 的 task_id
+        3. 工作项级 worktree 隔离（可选）
+        4. 调用 task_service.create_task()
+        5. task 的 metadata 中记录 work_item_id 和 workflow_node_id
+        6. 更新 transition 的 task_id
         """
         logger.info(
             "[WorkItem] Triggering agent node '%s' for item '%s' title='%s'",
@@ -636,6 +763,27 @@ class WorkItemService:
             node_cwd = data.get("cwd") or ""
             project_cwd = await self._get_project_path(item["project_id"])
             cwd = node_cwd or project_cwd or str(Path.cwd())
+
+            # 工作项级 worktree 隔离
+            worktree_path_str = ""
+            branch_name = ""
+            use_worktree = data.get("useWorktree", True)  # 默认启用 worktree 隔离
+
+            if use_worktree:
+                from backend.runtime.git_utils import prepare_work_item_worktree
+                wt_path, wt_branch, _ = await prepare_work_item_worktree(
+                    work_item_id=item["id"],
+                    project_path=Path(cwd),
+                )
+                if wt_path:
+                    # worktree 创建成功，使用 worktree 路径
+                    worktree_path_str = str(wt_path)
+                    branch_name = wt_branch
+                    cwd = worktree_path_str  # 覆盖 cwd 为 worktree 路径
+                    logger.info(
+                        "[work_item] worktree created for item=%s branch=%s path=%s",
+                        item["id"], branch_name, worktree_path_str
+                    )
 
             # 渲染 prompt
             prompt = self._render_prompt_template(prompt_template, item)
@@ -660,6 +808,22 @@ class WorkItemService:
                     "[WorkItem] Task created: %s for agent node '%s', item '%s'",
                     task_id, node.get("id"), item.get("id"),
                 )
+                # 将 worktree_path 和 branch_name 写入 tasks 表
+                if worktree_path_str or branch_name:
+                    async with async_session_factory() as session:
+                        await session.execute(
+                            text("""
+                                UPDATE tasks
+                                SET worktree_path = :wt_path, branch_name = :branch
+                                WHERE id = :task_id
+                            """),
+                            {
+                                "wt_path": worktree_path_str,
+                                "branch": branch_name,
+                                "task_id": task_id,
+                            },
+                        )
+                        await session.commit()
             else:
                 logger.error(
                     "[WorkItem] task_service.create_task returned no task for agent node '%s', item '%s'",
@@ -830,6 +994,123 @@ class WorkItemService:
                 item["id"][:8], exc,
             )
 
+    async def _trigger_git_merge_node(self, item: dict, node: dict):
+        """处理 git_merge 节点：将工作项 worktree 分支合入目标分支。"""
+        data = node.get("data", {})
+        from backend.runtime.git_utils import work_item_branch_name
+        target_branch = data.get("targetBranch", "") or work_item_branch_name(item["id"])
+        strategy = data.get("mergeStrategy", "merge")
+        delete_source = data.get("deleteSource", True)  # 工作项场景默认删除源分支
+        on_conflict = data.get("onConflict", "fail")
+
+        # 1. 从工作项的 transitions 中找到前序 Agent 的 branch_name
+        source_branch = ""
+        worktree_path = ""
+
+        async with async_session_factory() as session:
+            row = await session.execute(
+                text("""
+                    SELECT t.branch_name, t.worktree_path
+                    FROM work_item_transitions wit
+                    JOIN tasks t ON t.id = wit.task_id
+                    WHERE wit.work_item_id = :item_id
+                      AND t.branch_name IS NOT NULL
+                      AND t.branch_name != ''
+                    ORDER BY wit.created_at DESC
+                    LIMIT 1
+                """),
+                {"item_id": item["id"]}
+            )
+            result = row.fetchone()
+            if result:
+                source_branch = result[0] or ""
+                worktree_path = result[1] or ""
+
+        if not source_branch:
+            # 尝试从 node.data.sourceBranch 获取（支持手动配置）
+            source_branch = data.get("sourceBranch", "")
+
+        if not source_branch:
+            # 最终 fallback：使用工作项的 worktree 分支名
+            source_branch = work_item_branch_name(item["id"])
+            logger.info("[work_item] git_merge node: using work item branch as source: %s", source_branch)
+
+        # 2. 获取 repo root
+        from backend.runtime.git_utils import git_repo_root, git_merge_branch, cleanup_work_item_worktree
+
+        project_cwd = await self._get_project_path(item["project_id"])
+        cwd = project_cwd or str(Path.cwd())
+        repo_root = await git_repo_root(Path(cwd))
+
+        if repo_root is None:
+            logger.error("[work_item] git_merge: not a git repo: %s", cwd)
+            await self._advance_past_node(item, node)
+            return
+
+        # 3. 执行合并
+        success, output, conflicts = await git_merge_branch(
+            repo_root=repo_root,
+            source_branch=source_branch,
+            target_branch=target_branch,
+            strategy=strategy,
+            delete_source=delete_source,
+        )
+
+        if success:
+            logger.info(
+                "[work_item] git_merge success: item=%s source=%s target=%s",
+                item["id"], source_branch, target_branch
+            )
+            # 4. 清理 worktree
+            if worktree_path:
+                await cleanup_work_item_worktree(
+                    worktree_path=worktree_path,
+                    branch_name="" if delete_source else source_branch,
+                    repo_root=repo_root,
+                )
+            # 5. 自动推进到下游节点
+            await self._advance_past_node(item, node)
+        else:
+            # 冲突处理
+            error_msg = f"Merge conflict: {output}"
+            if conflicts:
+                error_msg += f" | Files: {', '.join(conflicts)}"
+            logger.warning("[work_item] git_merge conflict: item=%s error=%s", item["id"], error_msg)
+
+            if on_conflict == "manual":
+                # 暂停，等待人工处理
+                async with async_session_factory() as session:
+                    metadata = json.dumps({
+                        "merge_conflict": True,
+                        "source_branch": source_branch,
+                        "target_branch": target_branch,
+                        "conflicts": conflicts,
+                        "worktree_path": worktree_path,
+                    }, ensure_ascii=False)
+                    await session.execute(
+                        text("UPDATE work_items SET metadata = :meta WHERE id = :id"),
+                        {"meta": metadata, "id": item["id"]}
+                    )
+                    await session.commit()
+            else:
+                # fail: 记录错误但不推进，让工作项停留在 git_merge 节点
+                pass
+
+    async def _advance_past_node(self, item: dict, node: dict):
+        """自动推进工作项到指定节点的下游节点。"""
+        definition = await self._load_workflow_definition(item["workflow_id"])
+        if not definition:
+            return
+        downstream = self._get_downstream_nodes(definition, node["id"])
+        if downstream:
+            next_node = downstream[0]
+            await self.transition_work_item(
+                item["id"],
+                next_node["id"],
+                operator="system",
+                trigger_type="git_merge_completed",
+            )
+
     # ── 回调 ─────────────────────────────────────────────
 
     async def on_work_item_task_completed(self, task_id: str, result: str):
@@ -884,6 +1165,28 @@ class WorkItemService:
         mapping = dict(row._mapping)
         item_id = mapping["work_item_id"]
         current_node_id = mapping["to_node_id"]
+
+        # Agent 完成后在 worktree 中 commit 改动（如果有）
+        async with async_session_factory() as session:
+            task_row_result = await session.execute(
+                text("SELECT worktree_path, branch_name FROM tasks WHERE id = :id"),
+                {"id": task_id},
+            )
+            task_row = task_row_result.fetchone()
+        if task_row:
+            task_mapping = dict(task_row._mapping)
+            worktree_path = task_mapping.get("worktree_path") or ""
+            branch_name_val = task_mapping.get("branch_name") or ""
+            if worktree_path and branch_name_val:
+                from backend.runtime.git_utils import has_git_changes, commit_changes
+                wt = Path(worktree_path)
+                if wt.exists():
+                    try:
+                        if await has_git_changes(wt):
+                            await commit_changes(wt, f"tide: work item {item_id} - agent completed")
+                            logger.info("[work_item] auto-committed changes in worktree: %s", worktree_path)
+                    except Exception as exc:
+                        logger.warning("[work_item] auto-commit failed: %s", exc)
 
         # 加载工作项
         item = await self.get_work_item(item_id)
@@ -1168,7 +1471,11 @@ class WorkItemService:
 
     # ── 看板数据 ─────────────────────────────────────────
 
-    async def get_work_item_board(self, project_id: str) -> dict:
+    async def get_work_item_board(
+        self,
+        project_id: str,
+        version_id: Optional[str] = None,
+    ) -> dict:
         """
         获取工作项看板：
         1. 查找项目的 workflow_id
@@ -1208,8 +1515,10 @@ class WorkItemService:
         # 提取可见节点作为列（包含 end，使已完成工作项也能在看板上呈现）
         visible_nodes = self._get_visible_nodes(definition, include_end=True)
 
-        # 查询全部工作项（含已完成）
-        items = await self.list_work_items(project_id=project_id)
+        # 查询全部工作项（含已完成），可选按版本过滤
+        items = await self.list_work_items(
+            project_id=project_id, version_id=version_id
+        )
 
         # 按 current_node_id 分组
         items_by_node: dict[str, list] = {}

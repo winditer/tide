@@ -17,6 +17,7 @@ import base64
 import binascii
 import json
 import os
+import re
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -63,6 +64,41 @@ class ProjectCreate(BaseModel):
     cwd: str
     name: Optional[str] = None
     tags: Optional[list[str]] = None
+    # mode == "new" 时为 True：路径不存在时自动 mkdir -p 创建。
+    create_dir: Optional[bool] = False
+
+
+def _parse_project_roots() -> list[str]:
+    """解析可用项目根目录列表。
+
+    优先使用 ``CODEX_PROJECTS_ROOT``（支持逗号/分号分隔多个）；
+    未设置时回退到 ``CODEX_DEFAULT_CWD`` 的父目录。
+    """
+    raw = (os.getenv("CODEX_PROJECTS_ROOT", "") or "").strip()
+    roots: list[str] = []
+    if raw:
+        for item in re.split(r"[,;]", raw):
+            s = item.strip()
+            if not s:
+                continue
+            try:
+                roots.append(str(Path(s).expanduser().resolve()))
+            except OSError:
+                roots.append(str(Path(s).expanduser()))
+    if not roots:
+        default_cwd = os.getenv("CODEX_DEFAULT_CWD", "") or os.getcwd()
+        try:
+            roots.append(str(Path(default_cwd).expanduser().resolve().parent))
+        except OSError:
+            roots.append(str(Path(default_cwd).expanduser().parent))
+    # 去重但保留顺序
+    seen: set[str] = set()
+    unique: list[str] = []
+    for r in roots:
+        if r and r not in seen:
+            seen.add(r)
+            unique.append(r)
+    return unique
 
 
 def _load_registry() -> list[dict]:
@@ -325,20 +361,47 @@ async def list_projects(
     return {"projects": projects}
 
 
+@router.get("/roots")
+async def get_project_roots(current_user=Depends(get_optional_user)):
+    """返回可选项目根目录。
+
+    前端创建/添加项目弹窗用于拼接完整路径。
+    """
+    roots = _parse_project_roots()
+    return {"roots": roots, "default": roots[0] if roots else None}
+
+
 @router.post("")
 async def create_project(
     body: ProjectCreate,
     current_user=Depends(get_optional_user),
 ):
-    """注册项目（告诉系统关注某个目录，不会执行 git init）。"""
+    """注册项目（告诉系统关注某个目录，不会执行 git init）。
+
+    参数 ``create_dir=True`` 时，若路径不存在会自动 mkdir -p；默认 False 要求路径已存在。
+    """
     _ensure_not_viewer(current_user)
     raw_cwd = (body.cwd or "").strip()
     if not raw_cwd:
         raise HTTPException(status_code=400, detail="cwd is required")
     path = Path(raw_cwd).expanduser()
-    if not path.exists() or not path.is_dir():
+    if not path.exists():
+        if body.create_dir:
+            try:
+                path.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Failed to create directory {raw_cwd}: {exc}",
+                ) from exc
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Path does not exist: {raw_cwd}",
+            )
+    elif not path.is_dir():
         raise HTTPException(
-            status_code=400, detail=f"Path does not exist or is not a directory: {raw_cwd}"
+            status_code=400, detail=f"Path is not a directory: {raw_cwd}"
         )
     cwd = str(path.resolve())
     name = (body.name or path.name or cwd).strip()

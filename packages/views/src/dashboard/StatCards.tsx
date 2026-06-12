@@ -6,15 +6,22 @@ import {
   Hourglass,
   BellRing,
   CheckCircle2,
-  FolderOpen,
+  ClipboardList,
+  CheckCheck,
   type LucideIcon,
 } from "lucide-react";
-import { useActiveProjects, useDashboardStats } from "@tide/core";
+import { useDashboardStats } from "@tide/core";
 
-type StatKey = "running" | "queued" | "pending_approval" | "completed_today";
+type StatKey =
+  | "running"
+  | "queued"
+  | "pending_approval"
+  | "completed_today"
+  | "my_work_items_count"
+  | "weekly_completed_work_items";
 
 interface StatItem {
-  key: StatKey | "active_projects";
+  key: StatKey;
   label: string;
   href: string;
   icon: LucideIcon;
@@ -66,30 +73,37 @@ const STATS: StatItem[] = [
     valueColor: "text-emerald-600",
   },
   {
-    key: "active_projects",
-    label: "活跃项目",
-    href: "/projects",
-    icon: FolderOpen,
-    accent: "bg-violet-500",
-    iconBg: "bg-violet-50",
-    iconColor: "text-violet-600",
-    valueColor: "text-violet-600",
+    key: "my_work_items_count",
+    label: "我的待办",
+    href: "/work-items",
+    icon: ClipboardList,
+    accent: "bg-sky-500",
+    iconBg: "bg-sky-50",
+    iconColor: "text-sky-600",
+    valueColor: "text-sky-600",
+  },
+  {
+    key: "weekly_completed_work_items",
+    label: "本周完成",
+    href: "/work-items?status=completed",
+    icon: CheckCheck,
+    accent: "bg-teal-500",
+    iconBg: "bg-teal-50",
+    iconColor: "text-teal-600",
+    valueColor: "text-teal-600",
   },
 ];
 
 export function StatCards() {
   const { data, isLoading } = useDashboardStats();
-  const { data: projects, isLoading: projectsLoading } = useActiveProjects(20);
 
   const getValue = (key: StatItem["key"]): number | undefined => {
-    if (key === "active_projects") return projects?.length;
     return data?.[key];
   };
-  const getLoading = (key: StatItem["key"]): boolean =>
-    key === "active_projects" ? projectsLoading : isLoading;
+  const getLoading = (_key: StatItem["key"]): boolean => isLoading;
 
   return (
-    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
       {STATS.map((stat) => {
         const Icon = stat.icon;
         const value = getValue(stat.key);

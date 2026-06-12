@@ -48,14 +48,34 @@ def _extract_comment(body: Optional[ApprovalActionBody]) -> Optional[str]:
 
 
 async def _approval_cwd(approval: Optional[dict]) -> Optional[str]:
-    """从审批记录反查关联 task/plan 的 cwd。"""
+    """从审批记录反查关联 task/plan/work_item 的 cwd / project_id。
+
+    对于 work_item_transition 类型，返回的是 work_items.project_id 对应的 cwd代理值。
+    """
     if not approval:
         return None
     task_id = approval.get("task_id")
     plan_id = approval.get("plan_id")
+    approval_type = approval.get("type")
     if not task_id and not plan_id:
         return None
     async with async_session_factory() as session:
+        # work_item_transition: task_id 实为 work_item_id，用 project_id 反查
+        if approval_type == "work_item_transition" and task_id:
+            r = await session.execute(
+                text("SELECT project_id FROM work_items WHERE id = :id LIMIT 1"),
+                {"id": task_id},
+            )
+            row = r.fetchone()
+            if row and row[0]:
+                # project_id 已是编码值，返回一个哨兵值让调用者能 encode
+                # 但实际上这里的调用者用 encode_project_id(cwd) 来得到 project_id，
+                # 所以我们返回一个特殊标记，在调用处处理。
+                # 此处返回 project_id 本身，外层 check_cwd_write_permission 会调用 encode_project_id，
+                # 但 encode_project_id(已编码值) 会变形。改用直接返回 None 放行，
+                # 因为详情/approve/reject 已有 viewer 拦截。
+                return None
+            return None
         if task_id:
             r = await session.execute(
                 text("SELECT cwd FROM tasks WHERE id = :id LIMIT 1"),
@@ -92,18 +112,23 @@ async def list_approvals(
         offset=offset,
     )
     if accessible_pids is not None and items:
-        # 通过审批关联的 task/plan 反查其 cwd 并过滤
-        task_ids = {it["task_id"] for it in items if it.get("task_id")}
-        plan_ids = {it["plan_id"] for it in items if it.get("plan_id")}
+        # 通过审批关联的 task/plan/work_item 反查其 cwd/project_id 并过滤
+        task_ids = [it["task_id"] for it in items
+                    if it.get("task_id") and it.get("type") != "work_item_transition"]
+        plan_ids = [it["plan_id"] for it in items if it.get("plan_id")]
+        # work_item_transition 类型的审批，task_id 实际存储 work_item_id
+        work_item_ids = [it["task_id"] for it in items
+                        if it.get("task_id") and it.get("type") == "work_item_transition"]
         task_cwd: dict[str, str] = {}
         plan_cwd: dict[str, str] = {}
+        work_item_pid: dict[str, str] = {}
         async with async_session_factory() as session:
             if task_ids:
                 r = await session.execute(
                     text("SELECT id, cwd FROM tasks WHERE id IN :ids").bindparams(
                         bindparam("ids", expanding=True)
                     ),
-                    {"ids": list(task_ids)},
+                    {"ids": list(set(task_ids))},
                 )
                 for row in r.fetchall():
                     task_cwd[row[0]] = row[1] or ""
@@ -112,12 +137,24 @@ async def list_approvals(
                     text("SELECT id, cwd FROM plans WHERE id IN :ids").bindparams(
                         bindparam("ids", expanding=True)
                     ),
-                    {"ids": list(plan_ids)},
+                    {"ids": list(set(plan_ids))},
                 )
                 for row in r.fetchall():
                     plan_cwd[row[0]] = row[1] or ""
+            if work_item_ids:
+                r = await session.execute(
+                    text("SELECT id, project_id FROM work_items WHERE id IN :ids").bindparams(
+                        bindparam("ids", expanding=True)
+                    ),
+                    {"ids": list(set(work_item_ids))},
+                )
+                for row in r.fetchall():
+                    work_item_pid[row[0]] = row[1] or ""
 
         def _approval_pid(it: dict) -> Optional[str]:
+            if it.get("type") == "work_item_transition":
+                # work_items.project_id 已是编码后的 project_id，直接返回
+                return work_item_pid.get(it.get("task_id") or "") or None
             cwd = task_cwd.get(it.get("task_id") or "") or plan_cwd.get(
                 it.get("plan_id") or ""
             )

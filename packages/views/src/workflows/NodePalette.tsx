@@ -68,6 +68,13 @@ const ITEMS: PaletteItem[] = [
     swatch: "bg-violet-500",
   },
   {
+    type: "git_merge",
+    label: "Git Merge",
+    icon: "🔀",
+    description: "分支合并",
+    swatch: "bg-blue-600",
+  },
+  {
     type: "end",
     label: "End",
     icon: "■",

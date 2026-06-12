@@ -7,12 +7,13 @@ export type WorkflowNodeType =
   | "parallel"
   | "parallel_join"
   | "delay"
-  | "stage";
+  | "stage"
+  | "git_merge";
 
 export interface WorkflowNodeData {
   label: string;
   // Node-type specific fields are kept open for forward compatibility:
-  // agent: prompt, model, agent_id
+  // agent: prompt, model, agent_id, cwd, useWorktree (default true)
   // approval: approvers (string[])
   // condition: field, operator, value
   // delay: seconds

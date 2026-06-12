@@ -49,7 +49,8 @@ async def list_conversations(
     if accessible_pids is not None:
         items = [
             it for it in items
-            if encode_project_id(it.get("cwd") or "") in accessible_pids
+            if not (it.get("cwd") or "")
+            or encode_project_id(it.get("cwd") or "") in accessible_pids
         ]
     return {"items": items, "total": len(items)}
 

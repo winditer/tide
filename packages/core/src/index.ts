@@ -69,6 +69,8 @@ export {
   useActivityTimeline,
   useTaskStatusDistribution,
   useUpcomingSchedules,
+  useMyWorkItems,
+  useProjectProgress,
 } from "./hooks/use-dashboard";
 
 export {
@@ -81,6 +83,8 @@ export {
   fetchActivityTimeline,
   fetchTaskStatusDistribution,
   fetchUpcomingSchedules,
+  getMyWorkItems,
+  getProjectProgress,
 } from "./api/dashboard";
 export type {
   DashboardStats,
@@ -97,6 +101,8 @@ export type {
   ActivityEvent,
   TaskStatusDistribution,
   UpcomingSchedule,
+  MyWorkItem,
+  ProjectProgress,
 } from "./api/dashboard";
 
 export {
@@ -268,6 +274,7 @@ export {
   getProjectSessions,
   getProjectChats,
   getProjectTasks,
+  getProjectRoots,
   createProject,
   deleteProject,
   archiveProject,
@@ -282,6 +289,7 @@ export type {
   ProjectTaskSummary,
   ProjectTasksResponse,
   CreateProjectInput,
+  ProjectRootsResponse,
   ArchiveProjectResult,
 } from "./api/projects";
 export {
@@ -289,6 +297,7 @@ export {
   useProjectSessions,
   useProjectChats,
   useProjectTasks,
+  useProjectRoots,
   useCreateProject,
   useDeleteProject,
   useArchiveProject,
@@ -304,9 +313,11 @@ export type {
   WorkItemTriggerType,
   WorkItemSourceType,
   WorkItemPriority,
+  WorkItemStatus,
   ProjectSettings,
   WorkItemBoardColumn,
   WorkItemBoard,
+  WorkItemArtifact,
 } from "./types/work-item";
 export {
   getWorkItems,
@@ -321,6 +332,9 @@ export {
   getProjectWorkflow,
   bindProjectWorkflow,
   unbindProjectWorkflow,
+  addArtifact,
+  removeArtifact,
+  type WorkItemFilters,
 } from "./api/work-items";
 export {
   useWorkItemBoard,
@@ -334,7 +348,29 @@ export {
   useProjectWorkflow,
   useBindProjectWorkflow,
   useUnbindProjectWorkflow,
+  useAddArtifact,
+  useRemoveArtifact,
 } from "./hooks/use-work-items";
+
+// Versions
+export type {
+  Version,
+  VersionStatus,
+  CreateVersionInput,
+  UpdateVersionInput,
+} from "./api/versions";
+export {
+  getVersions,
+  createVersion,
+  updateVersion,
+  deleteVersion,
+} from "./api/versions";
+export {
+  useVersions,
+  useCreateVersion,
+  useUpdateVersion,
+  useDeleteVersion,
+} from "./hooks/use-versions";
 
 // Approvals
 export {

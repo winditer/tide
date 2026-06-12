@@ -64,6 +64,13 @@ export interface CreateProjectInput {
   cwd: string;
   name?: string;
   tags?: string[];
+  /** 为 true 时，路径不存在会被后端 mkdir -p 创建（新建项目场景）。 */
+  create_dir?: boolean;
+}
+
+export interface ProjectRootsResponse {
+  roots: string[];
+  default: string | null;
 }
 
 export function getProject(projectId: string): Promise<ProjectDetail> {
@@ -102,6 +109,10 @@ export function getProjectTasks(
 
 export function createProject(body: CreateProjectInput): Promise<ProjectDetail> {
   return apiClient.post<ProjectDetail>("/api/projects", body);
+}
+
+export function getProjectRoots(): Promise<ProjectRootsResponse> {
+  return apiClient.get<ProjectRootsResponse>("/api/projects/roots");
 }
 
 export function deleteProject(projectId: string): Promise<{ removed: boolean; cwd: string }> {

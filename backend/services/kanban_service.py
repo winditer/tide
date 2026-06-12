@@ -19,6 +19,7 @@ KanbanService — 四维看板数据聚合。
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
@@ -214,7 +215,213 @@ class KanbanService:
         for col in columns.values():
             col.sort(key=lambda x: x.get("last_active_at") or "", reverse=True)
 
+        # 6) 为每个项目附加丰富数据（工作项统计、成员、工作流、版本、健康度）
+        all_projects = []
+        for col in columns.values():
+            all_projects.extend(col)
+        await self._enrich_project_cards(all_projects)
+
         return {"columns": columns}
+
+    # ── 项目卡片数据丰富化 ─────────────────────────────────────
+
+    async def _enrich_project_cards(self, projects: list[dict]) -> None:
+        """为项目卡片补充工作项统计、成员、工作流、版本和健康度数据。"""
+        if not projects:
+            return
+
+        # 收集所有 project_id
+        project_ids = [p["id"] for p in projects]
+
+        try:
+            async with async_session_factory() as session:
+                # ── 工作项统计 ──
+                work_item_stats = await self._query_work_item_stats(session, project_ids)
+                # ── 成员 ──
+                members_map = await self._query_project_members(session, project_ids)
+                # ── 工作流绑定 ──
+                workflow_map = await self._query_project_workflows(session, project_ids)
+                # ── 版本 ──
+                version_map = await self._query_project_versions(session, project_ids)
+        except Exception:
+            work_item_stats = {}
+            members_map = {}
+            workflow_map = {}
+            version_map = {}
+
+        now = datetime.utcnow()
+        for p in projects:
+            pid = p["id"]
+
+            # 工作项统计
+            stats = work_item_stats.get(pid, {"total": 0, "completed": 0, "stale_count": 0})
+            p["work_item_stats"] = stats
+
+            # 成员（最多5个）
+            p["members"] = members_map.get(pid, [])[:5]
+
+            # 工作流名称
+            wf_info = workflow_map.get(pid)
+            p["workflow_name"] = wf_info["name"] if wf_info else None
+
+            # 版本信息
+            ver_info = version_map.get(pid, {})
+            p["versions_count"] = ver_info.get("count", 0)
+            p["active_version"] = ver_info.get("active_name")
+
+            # 最近活动时间
+            last_activity_str = p.get("last_active_at")
+            last_activity_dt = _parse_iso(last_activity_str)
+            p["last_activity"] = last_activity_str
+
+            # 健康度
+            p["health"] = self._calc_health(
+                stats["total"], stats["completed"], stats["stale_count"], last_activity_dt, now
+            )
+
+    @staticmethod
+    def _calc_health(
+        total: int, completed: int, stale_count: int,
+        last_activity: Optional[datetime], now: datetime
+    ) -> str:
+        """计算项目健康度。green/yellow/red。"""
+        if total == 0:
+            return "green"
+        incomplete = total - completed
+        if incomplete == 0:
+            return "green"
+        stale_ratio = stale_count / incomplete if incomplete > 0 else 0
+
+        # 7天无活动 → 红
+        days_inactive = (now - last_activity).days if last_activity else 999
+        if days_inactive >= 7:
+            return "red"
+        # 超过50%滞留 → 红
+        if stale_ratio >= 0.5:
+            return "red"
+        # 有滞留项 → 黄
+        if stale_count > 0:
+            return "yellow"
+        return "green"
+
+    async def _query_work_item_stats(
+        self, session: Any, project_ids: list[str]
+    ) -> dict[str, dict]:
+        """查询每个项目的工作项统计（total, completed, stale_count）。"""
+        try:
+            result = await session.execute(
+                text(
+                    """
+                    SELECT project_id,
+                           COUNT(*) AS total,
+                           SUM(CASE WHEN completed_at IS NOT NULL THEN 1 ELSE 0 END) AS completed,
+                           SUM(CASE WHEN completed_at IS NULL
+                                    AND updated_at < datetime('now', '-3 days')
+                               THEN 1 ELSE 0 END) AS stale_count
+                    FROM work_items
+                    WHERE project_id IN (SELECT value FROM json_each(:ids))
+                    GROUP BY project_id
+                    """
+                ),
+                {"ids": json.dumps(project_ids)}
+            )
+            stats = {}
+            for row in result.fetchall():
+                r = dict(row._mapping)
+                stats[r["project_id"]] = {
+                    "total": int(r.get("total") or 0),
+                    "completed": int(r.get("completed") or 0),
+                    "stale_count": int(r.get("stale_count") or 0),
+                }
+            return stats
+        except OperationalError:
+            return {}
+
+    async def _query_project_members(
+        self, session: Any, project_ids: list[str]
+    ) -> dict[str, list[dict]]:
+        """查询每个项目的成员列表（最多5个）。"""
+        try:
+            result = await session.execute(
+                text(
+                    """
+                    SELECT pm.project_id, u.id AS user_id, u.display_name
+                    FROM project_members pm
+                    JOIN users u ON u.id = pm.user_id
+                    WHERE pm.project_id IN (SELECT value FROM json_each(:ids))
+                    ORDER BY pm.created_at ASC
+                    """
+                ),
+                {"ids": json.dumps(project_ids)}
+            )
+            members: dict[str, list[dict]] = {}
+            for row in result.fetchall():
+                r = dict(row._mapping)
+                pid = r["project_id"]
+                if pid not in members:
+                    members[pid] = []
+                if len(members[pid]) < 5:
+                    members[pid].append({
+                        "user_id": r["user_id"],
+                        "display_name": r.get("display_name") or "?",
+                    })
+            return members
+        except OperationalError:
+            return {}
+
+    async def _query_project_workflows(
+        self, session: Any, project_ids: list[str]
+    ) -> dict[str, dict]:
+        """查询项目绑定的工作流名称。"""
+        try:
+            result = await session.execute(
+                text(
+                    """
+                    SELECT ps.project_id, w.name AS workflow_name
+                    FROM project_settings ps
+                    JOIN workflows w ON w.id = ps.workflow_id
+                    WHERE ps.project_id IN (SELECT value FROM json_each(:ids))
+                      AND ps.workflow_id IS NOT NULL
+                    """
+                ),
+                {"ids": json.dumps(project_ids)}
+            )
+            wf_map = {}
+            for row in result.fetchall():
+                r = dict(row._mapping)
+                wf_map[r["project_id"]] = {"name": r.get("workflow_name")}
+            return wf_map
+        except OperationalError:
+            return {}
+
+    async def _query_project_versions(
+        self, session: Any, project_ids: list[str]
+    ) -> dict[str, dict]:
+        """查询每个项目的版本数量和当前活跃版本。"""
+        try:
+            result = await session.execute(
+                text(
+                    """
+                    SELECT project_id,
+                           COUNT(*) AS versions_count,
+                           MAX(CASE WHEN status = 'active' THEN name END) AS active_version_name
+                    FROM versions
+                    WHERE project_id IN (SELECT value FROM json_each(:ids))
+                    GROUP BY project_id
+                    """
+                ),
+                {"ids": json.dumps(project_ids)}
+            )
+            ver_map = {}
+            for row in result.fetchall():
+                r = dict(row._mapping)
+                ver_map[r["project_id"]] = {
+                    "count": int(r.get("versions_count") or 0),
+                    "active_name": r.get("active_version_name"),
+                }
+            return ver_map
+        except OperationalError:
+            return {}
 
     # ── 会话看板 ────────────────────────────────────────────
 

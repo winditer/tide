@@ -20,9 +20,13 @@ export interface Schedule {
 export interface ScheduleRun {
   id: string;
   schedule_id: string;
+  task_id: string | null;
+  task_title: string | null;
+  task_type: string | null;
   status: "success" | "failed" | "running";
   started_at: string;
   finished_at: string | null;
+  completed_at: string | null;
   result: Record<string, any> | null;
   error: string | null;
 }

@@ -1,0 +1,31 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /app
+
+# git 用于 Plan worktree；curl 用于健康检查与调试
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git curl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+# 先复制依赖清单以利用层缓存
+COPY backend/requirements.txt ./backend/requirements.txt
+RUN pip install --no-cache-dir -r backend/requirements.txt
+
+# 复制后端源码（前端、node_modules 等不需要）
+COPY backend/ ./backend/
+
+# 持久化目录：SQLite 数据库 + .tide 运行时
+RUN mkdir -p /app/data /app/.tide
+
+# 默认把 SQLite 写到挂载卷
+ENV DATABASE_URL=sqlite+aiosqlite:////app/data/tide.db
+
+EXPOSE 8000
+
+# 单进程运行：APScheduler / Lark Listener / WS Hub 都依赖进程内内存状态，禁止 --workers > 1
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -15,6 +15,9 @@ import {
   getProjectWorkflow,
   bindProjectWorkflow,
   unbindProjectWorkflow,
+  addArtifact,
+  removeArtifact,
+  type WorkItemFilters,
 } from "../api/work-items";
 import type {
   WorkItemCreate,
@@ -22,18 +25,21 @@ import type {
   ProjectSettings,
 } from "../types/work-item";
 
-export function useWorkItemBoard(projectId: string | undefined) {
+export function useWorkItemBoard(
+  projectId: string | undefined,
+  versionId?: string,
+) {
   return useQuery({
-    queryKey: ["work-items", "board", projectId],
-    queryFn: () => getWorkItemBoard(projectId!),
+    queryKey: ["work-items", "board", projectId, versionId ?? null],
+    queryFn: () => getWorkItemBoard(projectId!, versionId),
     enabled: !!projectId,
   });
 }
 
-export function useWorkItems(projectId?: string) {
+export function useWorkItems(projectId?: string, filters?: WorkItemFilters) {
   return useQuery({
-    queryKey: ["work-items", "list", projectId],
-    queryFn: () => getWorkItems(projectId),
+    queryKey: ["work-items", "list", projectId, filters],
+    queryFn: () => getWorkItems(projectId, filters),
   });
 }
 
@@ -120,6 +126,38 @@ export function useUnbindProjectWorkflow() {
     mutationFn: (projectId: string) => unbindProjectWorkflow(projectId),
     onSuccess: (_data, projectId) => {
       qc.invalidateQueries({ queryKey: ["project-workflow", projectId] });
+    },
+  });
+}
+
+export function useAddArtifact() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      workItemId,
+      data,
+    }: {
+      workItemId: string;
+      data: { label: string; url: string; stage?: string };
+    }) => addArtifact(workItemId, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["work-items"] });
+    },
+  });
+}
+
+export function useRemoveArtifact() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      workItemId,
+      artifactId,
+    }: {
+      workItemId: string;
+      artifactId: string;
+    }) => removeArtifact(workItemId, artifactId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["work-items"] });
     },
   });
 }

@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Button, Input, Select } from "@tide/ui";
-import { useCreateWorkItem } from "@tide/core";
+import { useCreateWorkItem, useVersions, useProjectMembers } from "@tide/core";
 
 interface WorkItemCreateDialogProps {
   projectId: string;
@@ -28,9 +28,35 @@ export function WorkItemCreateDialog({
   const [priority, setPriority] = useState("0");
   const [assignee, setAssignee] = useState("");
   const [tagsRaw, setTagsRaw] = useState("");
+  const [versionId, setVersionId] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const createMutation = useCreateWorkItem();
+  const { data: versions = [] } = useVersions(projectId);
+  const { data: membersData } = useProjectMembers(projectId);
+
+  const assigneeOptions = useMemo(() => {
+    const opts = [{ value: "", label: "未指定" }];
+    for (const m of membersData?.members ?? []) {
+      const name = m.display_name || m.username;
+      opts.push({ value: name, label: name });
+    }
+    return opts;
+  }, [membersData]);
+
+  const versionOptions = useMemo(() => {
+    const opts = [{ value: "", label: "不关联版本" }];
+    for (const v of versions) {
+      const suffix =
+        v.status === "released"
+          ? " · 已发布"
+          : v.status === "archived"
+            ? " · 已归档"
+            : "";
+      opts.push({ value: v.id, label: `${v.name}${suffix}` });
+    }
+    return opts;
+  }, [versions]);
 
   const handleSubmit = async () => {
     setError(null);
@@ -51,6 +77,7 @@ export function WorkItemCreateDialog({
           .split(",")
           .map((s) => s.trim())
           .filter(Boolean),
+        version_id: versionId || null,
       });
       onSuccess?.();
       onClose();
@@ -120,11 +147,11 @@ export function WorkItemCreateDialog({
             </Field>
 
             <Field label="负责人">
-              <Input
-                placeholder="可选"
+              <Select
                 value={assignee}
                 onChange={(e) => setAssignee(e.target.value)}
-                className="h-10 rounded-lg border-0 bg-muted/50 text-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0"
+                options={assigneeOptions}
+                className="h-10 rounded-lg border-0 bg-muted/50 focus:ring-2 focus:ring-ring"
               />
             </Field>
           </div>
@@ -135,6 +162,15 @@ export function WorkItemCreateDialog({
               value={tagsRaw}
               onChange={(e) => setTagsRaw(e.target.value)}
               className="h-10 rounded-lg border-0 bg-muted/50 text-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0"
+            />
+          </Field>
+
+          <Field label="版本（可选）">
+            <Select
+              value={versionId}
+              onChange={(e) => setVersionId(e.target.value)}
+              options={versionOptions}
+              className="h-10 rounded-lg border-0 bg-muted/50 focus:ring-2 focus:ring-ring"
             />
           </Field>
 

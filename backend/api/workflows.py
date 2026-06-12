@@ -102,10 +102,20 @@ async def list_workflows(
                 {"pids": list(accessible_pids)},
             )
             allowed_wf_ids = {row[0] for row in r.fetchall() if row[0]}
+            # 查询所有已绑定项目的 workflow_id，未绑定任何项目的工作流对所有认证用户可见
+            r2 = await session.execute(
+                text(
+                    "SELECT DISTINCT workflow_id FROM project_settings"
+                    " WHERE workflow_id IS NOT NULL"
+                )
+            )
+            all_bound_wf_ids = {row[0] for row in r2.fetchall() if row[0]}
         items = [
             it for it in items
-            if (it.get("id") if isinstance(it, dict) else getattr(it, "id", None))
-            in allowed_wf_ids
+            if (
+                (wf_id := (it.get("id") if isinstance(it, dict) else getattr(it, "id", None)))
+                and (wf_id in allowed_wf_ids or wf_id not in all_bound_wf_ids)
+            )
         ]
     return items
 
@@ -276,3 +286,26 @@ async def reject_node(
         run_id, node_id, approved=False, reason=body.reason or ""
     )
     return await workflow_service.get_run_detail(run_id)
+
+
+@router.post("/{workflow_id}/runs/{run_id}/nodes/{node_id}/resolve-merge")
+async def resolve_merge_node(
+    workflow_id: str,
+    run_id: str,
+    node_id: str,
+    resolved: bool = True,
+    message: str = "",
+    current_user=Depends(get_optional_user),
+):
+    """手动解决 Git merge 冲突后的回调。
+
+    当 git_merge 节点因冲突进入 waiting_approval 状态后，
+    用户手动解决冲突并调用此接口恢复工作流执行。
+    """
+    _ensure_not_viewer(current_user)
+    await _check_workflow_project_write(workflow_id, current_user)
+    detail = await workflow_service.get_run_detail(run_id)
+    if not detail or detail.get("workflow_id") != workflow_id:
+        raise HTTPException(status_code=404, detail="Run not found")
+    await workflow_engine.on_merge_resolved(run_id, node_id, resolved, message)
+    return {"ok": True, "run_id": run_id, "node_id": node_id, "resolved": resolved}

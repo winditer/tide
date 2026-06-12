@@ -208,6 +208,18 @@ CREATE TABLE IF NOT EXISTS project_settings (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- versions 版本（项目级版本管理）
+CREATE TABLE IF NOT EXISTS versions (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
+    status TEXT DEFAULT 'active',  -- active | released | archived
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_versions_project ON versions(project_id);
+
 -- work_items 工作项
 CREATE TABLE IF NOT EXISTS work_items (
     id TEXT PRIMARY KEY,
@@ -222,11 +234,13 @@ CREATE TABLE IF NOT EXISTS work_items (
     source_type TEXT DEFAULT 'manual',
     source_id TEXT,
     metadata TEXT,
+    version_id TEXT REFERENCES versions(id),
     started_at TIMESTAMP,
     completed_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+-- idx_work_items_version 索引在 engine.py 迁移后创建（兼容旧表缺少 version_id 列）
 
 -- work_item_transitions 工作项流转记录
 CREATE TABLE IF NOT EXISTS work_item_transitions (

@@ -1,30 +1,38 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
-import { Button, Badge, Input } from "@tide/ui";
+import { useMemo, useState } from "react";
+import { Pencil, Trash2 } from "lucide-react";
+import { Button, Badge, Input, Select } from "@tide/ui";
 import {
   useWorkItem,
   useWorkItemTransitions,
   useUpdateWorkItem,
   useDeleteWorkItem,
   useWorkflow,
+  useVersions,
+  useProjectMembers,
   useApprovals,
   useApproveApproval,
   useRejectApproval,
   parseApprovalDetail,
+  useAddArtifact,
+  useRemoveArtifact,
+  useAuth,
   type WorkItem,
+  type WorkItemUpdate,
   type WorkItemTransition,
+  type WorkItemArtifact,
   type Approval,
 } from "@tide/core";
 
-const PRIORITY_LABELS: Record<number, { label: string; color: string }> = {
-  0: { label: "无", color: "text-zinc-500" },
-  1: { label: "低", color: "text-blue-600" },
-  2: { label: "中", color: "text-amber-600" },
-  3: { label: "高", color: "text-orange-600" },
-  4: { label: "紧急", color: "text-rose-600" },
-};
+const PRIORITY_OPTIONS: { value: string; label: string }[] = [
+  { value: "0", label: "无" },
+  { value: "1", label: "低" },
+  { value: "2", label: "中" },
+  { value: "3", label: "高" },
+  { value: "4", label: "紧急" },
+];
 
 function formatTime(iso: string | null | undefined) {
   if (!iso) return "—";
@@ -67,8 +75,57 @@ export function WorkItemDetailPanel({
 }: WorkItemDetailPanelProps) {
   const { data: item, isLoading } = useWorkItem(itemId);
   const { data: transitions } = useWorkItemTransitions(itemId);
+  const { data: workflow } = useWorkflow(item?.workflow_id || "");
+  const { data: versions } = useVersions(item?.project_id);
+  const { data: membersData } = useProjectMembers(item?.project_id);
+  const { user } = useAuth();
+  const isViewer = user?.role === "viewer";
   const updateMutation = useUpdateWorkItem();
   const deleteMutation = useDeleteWorkItem();
+
+  const nodeNameMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const n of workflow?.definition?.nodes ?? []) {
+      const label = (n.data?.label as string | undefined) || n.id;
+      map[n.id] = label;
+    }
+    return map;
+  }, [workflow]);
+
+  const versionOptions = useMemo(() => {
+    const opts: { value: string; label: string }[] = [
+      { value: "", label: "未关联" },
+    ];
+    for (const v of versions ?? []) {
+      const suffix =
+        v.status === "released"
+          ? " · 已发布"
+          : v.status === "archived"
+            ? " · 已归档"
+            : "";
+      opts.push({ value: v.id, label: `${v.name}${suffix}` });
+    }
+    // 兼容工作项已绑定但版本列表中不存在该版本的情况，避免回显成空
+    if (item?.version_id && !opts.some((o) => o.value === item.version_id)) {
+      opts.push({ value: item.version_id, label: item.version_id });
+    }
+    return opts;
+  }, [versions, item?.version_id]);
+
+  const assigneeOptions = useMemo(() => {
+    const opts: { value: string; label: string }[] = [
+      { value: "", label: "未分配" },
+    ];
+    for (const m of membersData?.members ?? []) {
+      const name = m.display_name || m.username;
+      opts.push({ value: name, label: name });
+    }
+    // 兼容当前 assignee 不在成员列表中的情况，仍可回显
+    if (item?.assignee && !opts.some((o) => o.value === item.assignee)) {
+      opts.push({ value: item.assignee, label: item.assignee });
+    }
+    return opts;
+  }, [membersData, item?.assignee]);
 
   const [editing, setEditing] = useState(false);
   const [editTitle, setEditTitle] = useState("");
@@ -100,6 +157,11 @@ export function WorkItemDetailPanel({
     onClose();
   };
 
+  const handleFieldUpdate = (data: WorkItemUpdate) => {
+    if (!item) return;
+    updateMutation.mutate({ id: item.id, data });
+  };
+
   if (isLoading || !item) {
     return (
       <PanelShell onClose={onClose}>
@@ -110,7 +172,9 @@ export function WorkItemDetailPanel({
     );
   }
 
-  const prio = PRIORITY_LABELS[item.priority] ?? PRIORITY_LABELS[0];
+  const inlineSelectClass =
+    "h-7 w-full rounded-md border border-border/50 bg-background px-2 py-0 text-xs focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-0";
+  const fieldDisabled = updateMutation.isPending || isViewer;
 
   return (
     <PanelShell onClose={onClose}>
@@ -149,40 +213,79 @@ export function WorkItemDetailPanel({
           </div>
         ) : (
           <div>
-            <h2 className="text-2xl font-semibold tracking-tight text-foreground">
-              {item.title}
-            </h2>
+            <div className="flex items-start justify-between gap-3">
+              <h2 className="flex-1 text-2xl font-semibold tracking-tight text-foreground">
+                {item.title}
+              </h2>
+              <div className="flex shrink-0 items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
+                  onClick={startEditing}
+                  aria-label="编辑"
+                  title="编辑"
+                >
+                  <Pencil className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 w-8 p-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                  onClick={handleDelete}
+                  disabled={deleteMutation.isPending}
+                  aria-label="删除"
+                  title="删除"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
             {item.description && (
               <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
                 {item.description}
               </p>
             )}
-            <div className="mt-4 flex gap-2">
-              <Button size="sm" variant="outline" onClick={startEditing}>
-                编辑
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                onClick={handleDelete}
-                disabled={deleteMutation.isPending}
-              >
-                删除
-              </Button>
-            </div>
           </div>
         )}
 
         {/* Metadata */}
-        <div className="grid grid-cols-2 gap-4 rounded-xl border border-border/50 bg-muted/30 p-4">
+        <div className="grid grid-cols-2 gap-x-4 gap-y-3 rounded-xl border border-border/50 bg-muted/30 p-4">
           <MetaItem label="优先级">
-            <span className={`text-sm font-medium ${prio.color}`}>{prio.label}</span>
+            <Select
+              aria-label="优先级"
+              value={String(item.priority ?? 0)}
+              onChange={(e) =>
+                handleFieldUpdate({ priority: Number(e.target.value) })
+              }
+              disabled={fieldDisabled}
+              options={PRIORITY_OPTIONS}
+              className={inlineSelectClass}
+            />
           </MetaItem>
           <MetaItem label="负责人">
-            <span className="text-sm">
-              {item.assignee || <span className="text-muted-foreground">未分配</span>}
-            </span>
+            <Select
+              aria-label="负责人"
+              value={item.assignee ?? ""}
+              onChange={(e) =>
+                handleFieldUpdate({ assignee: e.target.value })
+              }
+              disabled={fieldDisabled}
+              options={assigneeOptions}
+              className={inlineSelectClass}
+            />
+          </MetaItem>
+          <MetaItem label="版本">
+            <Select
+              aria-label="版本"
+              value={item.version_id ?? ""}
+              onChange={(e) =>
+                handleFieldUpdate({ version_id: e.target.value })
+              }
+              disabled={fieldDisabled}
+              options={versionOptions}
+              className={inlineSelectClass}
+            />
           </MetaItem>
           <MetaItem label="来源">
             <Badge variant="outline" className="text-[10px]">
@@ -219,6 +322,9 @@ export function WorkItemDetailPanel({
         {/* Approval action area */}
         <WorkItemApprovalSection item={item} />
 
+        {/* 产物 Artifacts */}
+        <WorkItemArtifactsSection item={item} />
+
         {/* Transitions */}
         <div>
           <div className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
@@ -236,12 +342,20 @@ export function WorkItemDetailPanel({
                     className="rounded-lg border border-border/50 bg-card p-3 shadow-card transition-smooth hover:shadow-card-hover"
                   >
                     <div className="flex items-center gap-3 text-xs">
-                      <span className="rounded-md bg-muted/60 px-2 py-0.5 font-mono text-muted-foreground">
-                        {t.from_node_id ?? "—"}
+                      <span
+                        className="rounded-md bg-muted/60 px-2 py-0.5 text-muted-foreground"
+                        title={t.from_node_id ?? "—"}
+                      >
+                        {t.from_node_id
+                          ? nodeNameMap[t.from_node_id] || t.from_node_id
+                          : "—"}
                       </span>
                       <span className="text-muted-foreground/60">→</span>
-                      <span className="rounded-md bg-primary/10 px-2 py-0.5 font-mono font-medium text-primary">
-                        {t.to_node_id}
+                      <span
+                        className="rounded-md bg-primary/10 px-2 py-0.5 font-medium text-primary"
+                        title={t.to_node_id}
+                      >
+                        {nodeNameMap[t.to_node_id] || t.to_node_id}
                       </span>
                       <span className="ml-auto text-[10px] tabular-nums text-muted-foreground">
                         {formatTime(t.created_at)}
@@ -289,6 +403,150 @@ export function WorkItemDetailPanel({
         </div>
       </div>
     </PanelShell>
+  );
+}
+
+interface WorkItemArtifactsSectionProps {
+  item: WorkItem;
+}
+
+function WorkItemArtifactsSection({ item }: WorkItemArtifactsSectionProps) {
+  const { user } = useAuth();
+  const isViewer = user?.role === "viewer";
+  const addMutation = useAddArtifact();
+  const removeMutation = useRemoveArtifact();
+  const [showForm, setShowForm] = useState(false);
+  const [label, setLabel] = useState("");
+  const [url, setUrl] = useState("");
+  const [stage, setStage] = useState("");
+
+  const artifacts: WorkItemArtifact[] = (() => {
+    const meta = item.metadata;
+    if (!meta || typeof meta !== "object") return [];
+    const list = (meta as Record<string, any>).artifacts;
+    if (!Array.isArray(list)) return [];
+    return list as WorkItemArtifact[];
+  })();
+
+  // 按 stage 分组
+  const grouped = artifacts.reduce<Record<string, WorkItemArtifact[]>>(
+    (acc, a) => {
+      const key = a.stage || "";
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(a);
+      return acc;
+    },
+    {}
+  );
+  const groupedEntries = Object.entries(grouped);
+
+  const handleAdd = async () => {
+    if (!label.trim() || !url.trim()) return;
+    await addMutation.mutateAsync({
+      workItemId: item.id,
+      data: { label: label.trim(), url: url.trim(), stage: stage.trim() },
+    });
+    setLabel("");
+    setUrl("");
+    setStage("");
+    setShowForm(false);
+  };
+
+  const handleRemove = (artifactId: string) => {
+    removeMutation.mutate({ workItemId: item.id, artifactId });
+  };
+
+  return (
+    <div>
+      <div className="mb-3 flex items-center justify-between">
+        <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          产物
+        </div>
+        {!isViewer && (
+          <button
+            onClick={() => setShowForm(!showForm)}
+            className="text-xs font-medium text-primary hover:text-primary/80 transition-smooth"
+          >
+            {showForm ? "取消" : "+ 添加"}
+          </button>
+        )}
+      </div>
+
+      {showForm && (
+        <div className="mb-3 space-y-2 rounded-lg border border-border/50 bg-muted/30 p-3">
+          <Input
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            placeholder="产物名称"
+            className="h-8 text-sm"
+          />
+          <Input
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="链接地址 (https://...)"
+            className="h-8 text-sm"
+          />
+          <Input
+            value={stage}
+            onChange={(e) => setStage(e.target.value)}
+            placeholder="阶段名称（可选）"
+            className="h-8 text-sm"
+          />
+          <Button
+            size="sm"
+            onClick={handleAdd}
+            disabled={!label.trim() || !url.trim() || addMutation.isPending}
+          >
+            {addMutation.isPending ? "添加中…" : "确认添加"}
+          </Button>
+        </div>
+      )}
+
+      {groupedEntries.length > 0 ? (
+        <div className="space-y-3">
+          {groupedEntries.map(([stageKey, items]) => (
+            <div key={stageKey}>
+              {stageKey && (
+                <p className="mb-1 text-[11px] font-medium text-muted-foreground">
+                  {stageKey}
+                </p>
+              )}
+              <div className="space-y-1">
+                {items.map((artifact) => (
+                  <div
+                    key={artifact.id}
+                    className="group flex items-center gap-2 rounded-md px-2 py-1 transition-smooth hover:bg-muted/50"
+                  >
+                    <span className="text-xs text-muted-foreground">•</span>
+                    <a
+                      href={artifact.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex-1 truncate text-sm text-primary hover:underline"
+                    >
+                      {artifact.label}
+                    </a>
+                    {!isViewer && (
+                      <button
+                        onClick={() => handleRemove(artifact.id)}
+                        className="hidden text-xs text-muted-foreground hover:text-destructive group-hover:inline-block"
+                        title="删除"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-lg border border-dashed border-border/60 bg-muted/20 px-4 py-4 text-center text-xs text-muted-foreground">
+          暂无产物
+        </div>
+      )}
+    </div>
   );
 }
 

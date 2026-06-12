@@ -44,11 +44,36 @@ function formatTime(iso: string | null | undefined) {
 }
 
 function formatDuration(ms: number | null | undefined) {
-  if (ms == null) return "—";
-  if (ms < 1000) return `${ms}ms`;
+  if (ms == null || Number.isNaN(ms)) return "—";
+  if (ms < 1000) return `${Math.max(0, Math.round(ms))}ms`;
   if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
   if (ms < 3_600_000) return `${(ms / 60000).toFixed(1)}m`;
   return `${(ms / 3_600_000).toFixed(1)}h`;
+}
+
+/**
+ * 计算耗时：优先使用 duration_ms；否则从 started_at/completed_at 推算；
+ * 若任务仍在运行，则使用当前时间作为终点。
+ */
+function computeDurationMs(
+  duration_ms: number | null | undefined,
+  started_at: string | null | undefined,
+  completed_at: string | null | undefined,
+  status: string
+): number | null {
+  if (typeof duration_ms === "number" && duration_ms >= 0) return duration_ms;
+  if (!started_at) return null;
+  const start = Date.parse(started_at);
+  if (Number.isNaN(start)) return null;
+  const endIso = completed_at;
+  if (endIso) {
+    const end = Date.parse(endIso);
+    if (!Number.isNaN(end)) return Math.max(0, end - start);
+  }
+  if (status === "running" || status === "queued") {
+    return Math.max(0, Date.now() - start);
+  }
+  return null;
 }
 
 interface PlanDetailPanelProps {
@@ -75,6 +100,12 @@ export function PlanDetailPanel({
   const status = String(task?.status ?? nodeData?.status ?? "queued");
   const title = nodeData?.title ?? task?.prompt?.slice(0, 60) ?? "Untitled";
   const agent = nodeData?.agentId ?? nodeData?.agent_id ?? task?.agent_id ?? "—";
+  const durationMs = computeDurationMs(
+    task?.duration_ms,
+    task?.started_at,
+    task?.completed_at,
+    status
+  );
 
   const canStop = status === "queued" || status === "running";
   const canRetry =
@@ -131,15 +162,27 @@ export function PlanDetailPanel({
           </div>
 
           <div className="grid grid-cols-2 gap-x-4 gap-y-3 border-b border-border/50 px-5 py-4 text-sm">
+            <Field
+              label="开始时间"
+              value={formatTime(task?.started_at ?? null)}
+            />
+            <Field
+              label="结束时间"
+              value={formatTime(task?.completed_at ?? null)}
+            />
+            <Field
+              label="耗时"
+              value={formatDuration(durationMs)}
+              mono
+            />
+            <Field
+              label="创建时间"
+              value={formatTime(task?.created_at ?? null)}
+            />
             <Field label="Agent" value={agent || "—"} mono />
             <Field
               label="模型"
               value={task?.model ?? "—"}
-              mono
-            />
-            <Field
-              label="耗时"
-              value={formatDuration(task?.duration_ms ?? null)}
               mono
             />
             <Field
@@ -148,12 +191,9 @@ export function PlanDetailPanel({
               mono
             />
             <Field
-              label="开始"
-              value={formatTime(task?.started_at ?? null)}
-            />
-            <Field
-              label="完成"
-              value={formatTime(task?.completed_at ?? null)}
+              label="会话"
+              value={task?.session_id ? task.session_id.slice(0, 8) : "—"}
+              mono
             />
           </div>
 

@@ -28,6 +28,7 @@ from backend.api.plans import router as plans_router
 from backend.api.workflows import router as workflows_router
 from backend.api.work_items import router as work_items_router
 from backend.api.kanban import router as kanban_router
+from backend.api.versions import router as versions_router
 from backend.api.lark_bridge import router as lark_bridge_router
 from backend.api.lark_callback import router as lark_callback_router
 from backend.api.conversations import router as conversations_router
@@ -105,6 +106,7 @@ app.include_router(plans_router)
 app.include_router(workflows_router)
 app.include_router(work_items_router)
 app.include_router(kanban_router)
+app.include_router(versions_router)
 app.include_router(lark_bridge_router)
 app.include_router(lark_callback_router)
 app.include_router(conversations_router)

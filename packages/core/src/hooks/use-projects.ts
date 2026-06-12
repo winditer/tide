@@ -5,6 +5,7 @@ import {
   deleteProject,
   getProject,
   getProjectChats,
+  getProjectRoots,
   getProjectSessions,
   getProjectTasks,
   unarchiveProject,
@@ -56,6 +57,14 @@ export function useCreateProject() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["projects"] });
     },
+  });
+}
+
+export function useProjectRoots() {
+  return useQuery({
+    queryKey: ["project-roots"],
+    queryFn: () => getProjectRoots(),
+    staleTime: 5 * 60 * 1000,
   });
 }
 
