@@ -47,26 +47,32 @@ function storageKey(projectId?: string): string {
   return `${STORAGE_PREFIX}${projectId || "_global_"}`;
 }
 
-function sessionStorageKey(projectId?: string): string {
-  return `${SESSION_STORAGE_PREFIX}${projectId || "_global_"}`;
+function sessionStorageKey(projectId?: string, agentId?: string): string {
+  const base = projectId || "_global_";
+  const agent = agentId || "_auto_";
+  return `${SESSION_STORAGE_PREFIX}${base}.${agent}`;
 }
 
-function loadSessionFromStorage(projectId?: string): string {
+function loadSessionFromStorage(projectId?: string, agentId?: string): string {
   if (typeof window === "undefined") return "";
   try {
-    return window.localStorage.getItem(sessionStorageKey(projectId)) || "";
+    return window.localStorage.getItem(sessionStorageKey(projectId, agentId)) || "";
   } catch {
     return "";
   }
 }
 
-function saveSessionToStorage(projectId: string | undefined, sid: string) {
+function saveSessionToStorage(
+  projectId: string | undefined,
+  agentId: string | undefined,
+  sid: string
+) {
   if (typeof window === "undefined") return;
   try {
     if (sid) {
-      window.localStorage.setItem(sessionStorageKey(projectId), sid);
+      window.localStorage.setItem(sessionStorageKey(projectId, agentId), sid);
     } else {
-      window.localStorage.removeItem(sessionStorageKey(projectId));
+      window.localStorage.removeItem(sessionStorageKey(projectId, agentId));
     }
   } catch {
     // ignore
@@ -167,17 +173,25 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
 
   const { subscribe } = useWs();
 
-  // Hydrate from localStorage when projectId changes
+  // Hydrate messages from localStorage when projectId changes.
+  // Note: messages are scoped per project (NOT per agent) so the UI history
+  // remains stable when the user switches agent in the floating chat.
   useEffect(() => {
     const key = storageKey(projectId);
     if (hydratedKeyRef.current === key) return;
     hydratedKeyRef.current = key;
     const stored = loadFromStorage(projectId);
     setMessages(stored);
-    // Hydrate per-project session id alongside history
-    setChatSessionId(loadSessionFromStorage(projectId));
     sessionFetchedRef.current = new Set();
   }, [projectId]);
+
+  // Reload the session_id whenever the (projectId, agentId) pair changes.
+  // Each agent has its own session_id so resuming after switching back works.
+  useEffect(() => {
+    const sid = loadSessionFromStorage(projectId, agentId);
+    setChatSessionId(sid);
+    sessionFetchedRef.current = new Set();
+  }, [projectId, agentId]);
 
   // Persist on every change
   useEffect(() => {
@@ -185,11 +199,11 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
     saveToStorage(projectId, messages);
   }, [messages, projectId]);
 
-  // Persist session id
+  // Persist session id keyed by (projectId, agentId)
   useEffect(() => {
     if (hydratedKeyRef.current !== storageKey(projectId)) return;
-    saveSessionToStorage(projectId, chatSessionId);
-  }, [chatSessionId, projectId]);
+    saveSessionToStorage(projectId, agentId, chatSessionId);
+  }, [chatSessionId, projectId, agentId]);
 
   // Lazily capture session_id from a task once available (after agent stream starts)
   const captureSessionFromTask = useCallback(async (taskId: string) => {
@@ -470,17 +484,75 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
         );
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : "提交失败";
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantMsg.id
-              ? {
-                  ...m,
-                  status: "failed" as const,
-                  content: `提交失败：${errMsg}`,
-                }
-              : m
-          )
-        );
+
+        // Session fallback: if createTask failed while using a session_id,
+        // check whether the error indicates a stale/invalid session and retry
+        // without session_id (similar to backend executor.py L189-222).
+        const sessionKeywords = ["session", "404", "not found", "not_found", "logged", "login"];
+        const isSessionError =
+          !!finalSessionId &&
+          sessionKeywords.some((kw) => errMsg.toLowerCase().includes(kw));
+
+        if (isSessionError) {
+          console.warn(
+            "[useChat] Session invalid, clearing session and retrying:",
+            errMsg
+          );
+          // Clear stale session
+          setChatSessionId("");
+          try {
+            window.localStorage.removeItem(
+              sessionStorageKey(projectId, agentId)
+            );
+          } catch {
+            // ignore storage errors
+          }
+
+          // Rebuild prompt with full context since we lost the session
+          const fallbackPrompt = buildContextPrompt(historyForPrompt, trimmed);
+
+          try {
+            const task = await createTask({
+              prompt: fallbackPrompt,
+              agent_id: finalAgentId || undefined,
+              cwd: finalCwd || undefined,
+              session_id: undefined,
+            });
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantMsg.id
+                  ? { ...m, taskId: task.id, status: "running" as const }
+                  : m
+              )
+            );
+          } catch (retryErr) {
+            const retryMsg =
+              retryErr instanceof Error ? retryErr.message : "提交失败";
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantMsg.id
+                  ? {
+                      ...m,
+                      status: "failed" as const,
+                      content: `提交失败：${retryMsg}`,
+                    }
+                  : m
+              )
+            );
+          }
+        } else {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMsg.id
+                ? {
+                    ...m,
+                    status: "failed" as const,
+                    content: `提交失败：${errMsg}`,
+                  }
+                : m
+            )
+          );
+        }
       } finally {
         setIsSending(false);
       }
@@ -495,12 +567,12 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
     if (typeof window !== "undefined") {
       try {
         window.localStorage.removeItem(storageKey(projectId));
-        window.localStorage.removeItem(sessionStorageKey(projectId));
+        window.localStorage.removeItem(sessionStorageKey(projectId, agentId));
       } catch {
         // ignore
       }
     }
-  }, [projectId]);
+  }, [projectId, agentId]);
 
   const markRead = useCallback(() => {
     setHasUnread(false);

@@ -1,7 +1,7 @@
 FROM node:22-slim AS agent-cli
 
-# 全局安装 Agent CLI（显式安装 codex 平台二进制包）
-RUN npm install -g @openai/codex @openai/codex-linux-x64 \
+# 全局安装 Agent CLI（linux-x64 平台包由 npm 自动解析 optional dep）
+RUN npm install -g @openai/codex \
     @anthropic-ai/claude-code @qoder-ai/qodercli
 
 
@@ -19,9 +19,11 @@ COPY --from=agent-cli /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=agent-cli /usr/local/bin/node /usr/local/bin/node
 COPY --from=agent-cli /usr/local/bin/npm /usr/local/bin/npm
 COPY --from=agent-cli /usr/local/bin/npx /usr/local/bin/npx
-COPY --from=agent-cli /usr/local/bin/codex /usr/local/bin/codex
-COPY --from=agent-cli /usr/local/bin/claude /usr/local/bin/claude
-COPY --from=agent-cli /usr/local/bin/qodercli /usr/local/bin/qodercli
+# CLI 入口必须保留为符号链接（指向 node_modules 内的脚本），
+# 否则 __dirname 会变成 /usr/local/bin，导致 require.resolve 无法在全局 node_modules 中查找包
+RUN ln -s /usr/local/lib/node_modules/@openai/codex/bin/codex.js /usr/local/bin/codex \
+ && ln -s /usr/local/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe /usr/local/bin/claude \
+ && ln -s /usr/local/lib/node_modules/@qoder-ai/qodercli/bundle/qodercli.js /usr/local/bin/qodercli
 
 # qodercli 需要 policies 目录在二进制同级路径下
 RUN ln -s /usr/local/lib/node_modules/@qoder-ai/qodercli/bundle/policies /usr/local/bin/policies
@@ -40,6 +42,9 @@ COPY backend/ ./backend/
 
 # 持久化目录：SQLite 数据库 + .tide 运行时 + Agent 工作目录
 RUN mkdir -p /app/data /app/.tide /app/.agent/codex /app/.agent/claude /app/.agent/qoder
+
+# Claude CLI settings - API 请求通过 CC Switch 代理路由（不使用 HTTP_PROXY）
+RUN mkdir -p /root/.claude && echo '{"theme":"dark","env":{"ANTHROPIC_API_KEY":"PROXY_MANAGED","ANTHROPIC_BASE_URL":"http://tide-cc-switch:15721"}}' > /root/.claude/settings.json
 
 # 默认把 SQLite 写到挂载卷
 ENV DATABASE_URL=sqlite+aiosqlite:////app/data/tide.db \

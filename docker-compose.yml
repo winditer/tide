@@ -29,14 +29,28 @@ services:
       - .env
     environment:
       DATABASE_URL: sqlite+aiosqlite:////app/data/tide.db
-      # Agent CLI 通过 CC Switch CLI 代理转发 LLM API 请求
-      HTTP_PROXY: "http://cc-switch:15721"
-      HTTPS_PROXY: "http://cc-switch:15721"
+      # Codex CLI 通过 config.toml 中 model_providers 直连 CC Switch API 路由
+      # 不使用 HTTP_PROXY/HTTPS_PROXY（CC Switch 不支持 CONNECT 隧道）
       NO_PROXY: "localhost,127.0.0.1,backend,frontend,cc-switch,open.larksuite.com,open.feishu.cn,*.larksuite.com,*.feishu.cn"
+      OPENAI_API_KEY: "proxy-placeholder"
+      # Claude CLI 通过 CC Switch 代理访问 Anthropic API
+      ANTHROPIC_API_KEY: "PROXY_MANAGED"
+      ANTHROPIC_BASE_URL: "http://tide-cc-switch:15721"
+      # 容器内强制使用绝对路径，覆盖 .env 中可能的 "~/..." 字面值（Docker 不展开 ~）
+      CODEX_HOME: /app/.agent/codex
+      CLAUDE_HOME: /app/.agent/claude
+      QODER_HOME: /app/.agent/qoder
+      CODEX_SESSIONS_DIR: /app/.agent/codex/sessions
+      CLAUDE_PROJECTS_DIR: /app/.agent/claude/projects
+      QODER_PROJECTS_DIR: /app/.agent/qoder/projects
+      # Qoder CLI PAT 认证（从 .env 中读取）
+      QODER_PERSONAL_ACCESS_TOKEN: ${QODER_PERSONAL_ACCESS_TOKEN:-}
     volumes:
       - tide-data:/app/data
       - tide-runtime:/app/.tide
       - tide-agent-home:/app/.agent
+      - tide-qoder-home:/root/.qoder
+      - tide-claude-home:/root/.claude
     ports:
       - "8000:8000"
     depends_on:
@@ -86,4 +100,6 @@ volumes:
   tide-data:
   tide-runtime:
   tide-agent-home:
+  tide-qoder-home:
+  tide-claude-home:
   cc-switch-data:

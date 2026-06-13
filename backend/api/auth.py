@@ -104,7 +104,25 @@ def _client_meta(request: Request) -> tuple[Optional[str], Optional[str]]:
 
 
 def _frontend_origin(request: Request) -> str:
-    """根据 Referer/Origin 推断前端地址，回退到本地默认端口。"""
+    """推断前端地址（含 basePath）。
+
+    优先使用 TIDE_FRONTEND_URL 环境变量（推荐，确保含 basePath），
+    其次从 LARK_APP_REDIRECT_URI 反推，最后从请求头回退。
+    """
+    import os
+
+    # 1. 显式配置最优先
+    explicit = os.getenv("TIDE_FRONTEND_URL", "").rstrip("/")
+    if explicit:
+        return explicit
+
+    # 2. 从 LARK_APP_REDIRECT_URI 反推（去掉 /api/auth/lark/callback）
+    if LARK_APP_REDIRECT_URI:
+        suffix = "/api/auth/lark/callback"
+        if LARK_APP_REDIRECT_URI.endswith(suffix):
+            return LARK_APP_REDIRECT_URI[: -len(suffix)]
+
+    # 3. 请求头推断（不含 basePath，仅开发模式回退）
     origin = request.headers.get("origin") or request.headers.get("referer") or ""
     if origin:
         try:

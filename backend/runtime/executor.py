@@ -35,7 +35,13 @@ class AgentExecutor:
 
     @staticmethod
     def _is_resume_error(output: str) -> bool:
-        """判断输出是否为 Codex resume 失败的错误（thread 不存在）。"""
+        """判断输出是否为 resume 失败的错误（session/thread 不存在或不可达）。
+
+        覆盖 Codex、Claude、Qoder 三种 CLI 的 resume 失败格式：
+        - Codex: "no rollout found", "thread/resume failed"
+        - Claude: "No conversation found with session ID"
+        - 通用: "not logged in"（通过 CC Switch 代理时 resume 无效 session 可能返回此错误）
+        """
         if not output:
             return False
         haystack = output.lower()
@@ -43,6 +49,12 @@ class AgentExecutor:
             "no rollout found",
             "thread/resume failed",
             "thread/resume:",
+            "no previous sessions found",
+            "error resuming session",
+            "no conversation found",
+            "session not found",
+            "not logged in",
+            "please run /login",
         )
         return any(signal in haystack for signal in resume_error_signals)
 
@@ -102,7 +114,7 @@ class AgentExecutor:
             return
 
         # 记录是否使用了 resume，以便失败时降级
-        used_resume = runtime.session_id and "resume" in command
+        used_resume = runtime.session_id and any("resume" in arg for arg in command)
 
         logger.info("[executor] task=%s agent=%s cmd=%s", task_id, adapter.id, command)
         yield TaskEvent(type="started", metadata={"command": list(command)})
@@ -164,6 +176,8 @@ class AgentExecutor:
                             output_parts.append(content)
                         yield TaskEvent(type="output", content=content, session_id=session_id)
                     elif event_type == "tool_output":
+                        if content:
+                            output_parts.append(content)
                         yield TaskEvent(type="tool_output", content=content, session_id=session_id)
                     elif event_type == "progress":
                         yield TaskEvent(type="progress", content=content, session_id=session_id)
