@@ -9,6 +9,7 @@ import {
   ShieldCheck,
   ChevronRight,
   Lock,
+  Network,
   type LucideIcon,
 } from "lucide-react";
 
@@ -27,6 +28,13 @@ const ITEMS: SettingItem[] = [
     label: "用户管理",
     description: "管理工作台账号、角色权限与登录凭据",
     icon: Users,
+    allowedRoles: ["admin"],
+  },
+  {
+    href: "/settings/remote-agents",
+    label: "远程 Agents",
+    description: "注册外部 A2A Agent，发现 Agent Card、测试连通性与刷新缓存",
+    icon: Network,
     allowedRoles: ["admin"],
   },
 ];

@@ -10,11 +10,12 @@ import {
   useDeleteProject,
   useArchiveProject,
   useUnarchiveProject,
-  useProjectRoots,
   type ProjectInfo,
+  type CreateProjectInput,
 } from "@tide/core";
+import { useQueryClient } from "@tanstack/react-query";
 
-type DialogMode = "new" | "register";
+type DialogMode = "new" | "clone";
 
 function formatTime(iso: string | null) {
   if (!iso) return "—";
@@ -57,6 +58,7 @@ export default function ProjectsPage() {
 function ProjectsPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const queryClient = useQueryClient();
   const [showArchived, setShowArchived] = useState(false);
   const { data, isLoading, isError } = useProjects({ show_archived: showArchived });
   const createMutation = useCreateProject();
@@ -94,6 +96,20 @@ function ProjectsPageContent() {
     [projects]
   );
 
+  // 定时刷新：如果有项目处于 initializing 状态，每 5 秒自动刷新项目列表
+  const hasInitializing = useMemo(
+    () => projects.some((p) => p.init_status === "initializing"),
+    [projects]
+  );
+
+  useEffect(() => {
+    if (!hasInitializing) return;
+    const timer = setInterval(() => {
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [hasInitializing, queryClient]);
+
   return (
     <main className="mx-auto max-w-7xl px-2 py-2 space-y-8">
       {/* Header */}
@@ -110,7 +126,7 @@ function ProjectsPageContent() {
             <Button variant="outline" onClick={() => setShowArchived((v) => !v)}>
               {showArchived ? "隐藏归档" : "显示归档"}
             </Button>
-            <Button variant="outline" onClick={() => setDialog("register")}>
+            <Button variant="outline" onClick={() => setDialog("clone")}>
               ＋ 添加已有
             </Button>
             <Button onClick={() => setDialog("new")}>＋ 新建项目</Button>
@@ -127,7 +143,7 @@ function ProjectsPageContent() {
           加载失败
         </div>
       ) : projects.length === 0 ? (
-        <EmptyState onAdd={() => setDialog("register")} onCreate={() => setDialog("new")} />
+        <EmptyState onAdd={() => setDialog("clone")} onCreate={() => setDialog("new")} />
       ) : (
         <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {projects.map((project, idx) => (
@@ -144,7 +160,7 @@ function ProjectsPageContent() {
               }
               onRemove={async () => {
                 if (!project.registered) return;
-                if (!confirm(`从已知项目列表中移除 “${project.name}” ？\n（不会删除文件）`)) {
+                if (!confirm(`从已知项目列表中移除 "${project.name}" ？\n（不会删除文件）`)) {
                   return;
                 }
                 setPendingRemoveId(project.id);
@@ -201,10 +217,17 @@ function ProjectCardItem({
   onRemove: () => void;
   onToggleArchive: () => void;
 }) {
+  const isInitializing = project.init_status === "initializing";
+  const isError = project.init_status === "error";
+
   return (
     <Card
       className={
-        project.archived
+        isError
+          ? "group relative bg-card rounded-xl shadow-card border-destructive/50 transition-smooth hover:shadow-card-hover"
+          : isInitializing
+          ? "group relative bg-card rounded-xl shadow-card opacity-75 transition-smooth hover:shadow-card-hover"
+          : project.archived
           ? "group relative bg-card rounded-xl shadow-card opacity-70 transition-smooth hover:opacity-100 hover:shadow-card-hover"
           : "group relative bg-card rounded-xl shadow-card transition-smooth hover:shadow-card-hover"
       }
@@ -222,7 +245,13 @@ function ProjectCardItem({
                 {project.name}
               </h3>
             </div>
-            {project.archived ? (
+            {isInitializing ? (
+              <Badge variant="secondary" className="animate-pulse">
+                初始化中
+              </Badge>
+            ) : isError ? (
+              <Badge variant="destructive">错误</Badge>
+            ) : project.archived ? (
               <Badge variant="secondary">已归档</Badge>
             ) : (
               <Badge variant={project.status === "active" ? "default" : "secondary"}>
@@ -231,9 +260,29 @@ function ProjectCardItem({
             )}
           </div>
 
-          <p className="mb-4 truncate rounded-md bg-muted px-2 py-1 font-mono text-[11px] text-muted-foreground">
-            {project.cwd}
-          </p>
+          {/* 初始化中 - 显示进度指示 */}
+          {isInitializing && (
+            <div className="mb-4 flex items-center gap-2 rounded-md bg-muted px-3 py-2">
+              <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
+              <span className="text-xs text-muted-foreground">正在初始化...</span>
+            </div>
+          )}
+
+          {/* 错误状态 - 显示错误信息 */}
+          {isError && (
+            <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2">
+              <span className="text-xs text-destructive">
+                {project.init_error || "初始化失败"}
+              </span>
+            </div>
+          )}
+
+          {/* 正常状态 - 显示路径 */}
+          {!isInitializing && !isError && (
+            <p className="mb-4 truncate rounded-md bg-muted px-2 py-1 font-mono text-[11px] text-muted-foreground">
+              {project.cwd}
+            </p>
+          )}
 
           <div className="grid grid-cols-4 gap-2 border-t border-border/50 pt-3 text-center">
             <Stat label="TASKS" value={project.task_count} />
@@ -341,70 +390,52 @@ function ProjectDialog({
 }: {
   mode: DialogMode;
   onClose: () => void;
-  onSubmit: (input: {
-    cwd: string;
-    name?: string;
-    tags?: string[];
-    create_dir?: boolean;
-  }) => Promise<void>;
+  onSubmit: (input: CreateProjectInput) => Promise<void>;
   isPending: boolean;
 }) {
-  const { data: rootsData, isLoading: rootsLoading } = useProjectRoots();
-  const roots = rootsData?.roots ?? [];
-  const [root, setRoot] = useState<string>("");
-  const [relPath, setRelPath] = useState("");
   const [name, setName] = useState("");
+  const [repoUrl, setRepoUrl] = useState("");
+  const [branch, setBranch] = useState("");
   const [tagsRaw, setTagsRaw] = useState("");
   const [error, setError] = useState<string | null>(null);
-
-  // 首次拿到根目录后选中默认值
-  useEffect(() => {
-    if (!root && roots.length > 0) {
-      setRoot(rootsData?.default ?? roots[0]);
-    }
-  }, [root, roots, rootsData?.default]);
 
   const title = mode === "new" ? "新建项目" : "添加已有项目";
   const subtitle =
     mode === "new"
-      ? "在项目根目录下创建一个新目录并注册（不会执行 git init）"
-      : "把已有的目录注册到工作台";
-
-  /** 拼接根目录与相对路径，去除多余斜杠。 */
-  const fullCwd = useMemo(() => {
-    const r = (root || "").replace(/\/+$/, "");
-    const p = (relPath || "").trim().replace(/^\/+/, "").replace(/\/+$/, "");
-    if (!r) return p;
-    return p ? `${r}/${p}` : r;
-  }, [root, relPath]);
+      ? "创建一个新的空项目目录并注册到工作台"
+      : "从 Git 仓库克隆代码并注册到工作台";
 
   const submit = async () => {
     setError(null);
-    const trimmed = relPath.trim().replace(/^\/+/, "").replace(/\/+$/, "");
-    if (!trimmed) {
-      setError("请填写项目路径");
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      setError("请填写项目名称");
       return;
     }
-    if (!root) {
-      setError("未取到可用根目录");
+    if (mode === "clone" && !repoUrl.trim()) {
+      setError("请填写 Git 仓库 URL");
       return;
     }
     try {
-      await onSubmit({
-        cwd: fullCwd,
-        name: name.trim() || undefined,
+      const input: CreateProjectInput = {
+        name: trimmedName,
+        mode,
         tags: tagsRaw
           .split(",")
           .map((s) => s.trim())
           .filter(Boolean),
-        create_dir: mode === "new",
-      });
+      };
+      if (mode === "clone") {
+        input.repo_url = repoUrl.trim();
+        if (branch.trim()) {
+          input.branch = branch.trim();
+        }
+      }
+      await onSubmit(input);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
   };
-
-  const multipleRoots = roots.length > 1;
 
   return (
     <div
@@ -417,7 +448,7 @@ function ProjectDialog({
       >
         <div className="flex items-center justify-between border-b border-border/50 px-5 py-3">
           <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            {mode === "new" ? "NEW · PROJECT" : "REGISTER · PROJECT"}
+            {mode === "new" ? "NEW · PROJECT" : "CLONE · PROJECT"}
           </span>
           <button
             onClick={onClose}
@@ -432,58 +463,37 @@ function ProjectDialog({
             <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
           </div>
 
-          <Field label="项目路径" required>
-            {rootsLoading ? (
-              <div className="text-xs text-muted-foreground">加载根目录中…</div>
-            ) : (
-              <div className="flex items-stretch gap-0 rounded-lg border border-border/50 focus-within:ring-2 focus-within:ring-ring overflow-hidden">
-                {multipleRoots ? (
-                  <select
-                    value={root}
-                    onChange={(e) => setRoot(e.target.value)}
-                    className="shrink-0 max-w-[55%] truncate bg-muted px-2 py-2 font-mono text-xs text-muted-foreground border-r border-border/50 focus:outline-none"
-                  >
-                    {roots.map((r) => (
-                      <option key={r} value={r}>
-                        {r}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <span
-                    className="shrink-0 max-w-[55%] truncate bg-muted px-2 py-2 font-mono text-xs text-muted-foreground border-r border-border/50 flex items-center"
-                    title={root}
-                  >
-                    {root || "—"}
-                  </span>
-                )}
-                <span className="shrink-0 select-none bg-muted px-1 py-2 font-mono text-xs text-muted-foreground">
-                  /
-                </span>
-                <input
-                  autoFocus
-                  placeholder="my-project"
-                  value={relPath}
-                  onChange={(e) => setRelPath(e.target.value)}
-                  className="flex-1 min-w-0 bg-transparent px-2 py-2 font-mono text-sm focus:outline-none"
-                />
-              </div>
-            )}
-            {fullCwd && (
-              <p className="mt-1.5 truncate font-mono text-[11px] text-muted-foreground">
-                → {fullCwd}
-              </p>
-            )}
-          </Field>
-
-          <Field label="项目名（可选）">
+          <Field label="项目名称" required>
             <Input
-              placeholder="默认使用目录名"
+              autoFocus
+              placeholder="my-project"
               value={name}
               onChange={(e) => setName(e.target.value)}
               className="rounded-lg border-border/50 focus:ring-2 focus:ring-ring"
             />
           </Field>
+
+          {mode === "clone" && (
+            <>
+              <Field label="Git 仓库 URL" required>
+                <Input
+                  placeholder="https://github.com/user/repo.git"
+                  value={repoUrl}
+                  onChange={(e) => setRepoUrl(e.target.value)}
+                  className="rounded-lg border-border/50 focus:ring-2 focus:ring-ring font-mono text-sm"
+                />
+              </Field>
+
+              <Field label="分支（可选）">
+                <Input
+                  placeholder="默认使用仓库默认分支"
+                  value={branch}
+                  onChange={(e) => setBranch(e.target.value)}
+                  className="rounded-lg border-border/50 focus:ring-2 focus:ring-ring font-mono text-sm"
+                />
+              </Field>
+            </>
+          )}
 
           <Field label="标签（可选，逗号分隔）">
             <Input
@@ -505,7 +515,7 @@ function ProjectDialog({
               取消
             </Button>
             <Button disabled={isPending} onClick={submit}>
-              {isPending ? "保存中…" : mode === "new" ? "创建" : "添加"}
+              {isPending ? "保存中…" : mode === "new" ? "创建" : "克隆"}
             </Button>
           </div>
         </div>

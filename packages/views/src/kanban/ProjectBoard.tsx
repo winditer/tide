@@ -99,7 +99,7 @@ export function ProjectBoard() {
             {columns.map((column) => (
               <div
                 key={column.id}
-                className="flex w-72 shrink-0 flex-col rounded-xl border border-border/60 bg-muted/30 p-3 transition-smooth"
+                className="flex flex-1 min-w-[220px] flex-col rounded-xl border border-border/60 bg-muted/30 p-3 transition-smooth"
               >
                 {/* Column header */}
                 <div className="mb-3 flex items-center justify-between px-1">

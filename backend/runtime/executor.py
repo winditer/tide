@@ -10,7 +10,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import AsyncGenerator, Optional
 
-from backend.runtime.adapters import AGENT_ADAPTERS, approved_permission_mode, should_create_approval
+from backend.runtime.a2a_client import A2AAgentConfig
+from backend.runtime.adapters import (
+    AGENT_ADAPTERS,
+    A2AAdapter,
+    approved_permission_mode,
+    should_create_approval,
+)
 from backend.runtime.config import APPROVED_CODEX_APPROVAL_POLICY, APPROVED_CODEX_SANDBOX_MODE
 from backend.runtime.task_runtime import CodexTaskRuntime
 
@@ -32,6 +38,42 @@ class AgentExecutor:
 
     def __init__(self) -> None:
         self._processes: dict[str, asyncio.subprocess.Process] = {}
+
+    async def _load_remote_agent_config(self, agent_id: str):
+        """从数据库加载远程 Agent 配置。
+
+        agent_id 形式为 ``a2a:<id>``或者直接传入 remote_agents.id。
+        返回 :class:`A2AAgentConfig`；若未找到或不活跃则返回 None。
+        """
+        from backend.db.engine import async_session_factory
+        from sqlalchemy import text
+
+        lookup_id = agent_id[len("a2a:"):] if agent_id.startswith("a2a:") else agent_id
+
+        async with async_session_factory() as session:
+            result = await session.execute(
+                text("SELECT * FROM remote_agents WHERE id = :id AND status = 'active'"),
+                {"id": lookup_id},
+            )
+            row = result.mappings().first()
+            if not row:
+                return None
+
+            return A2AAgentConfig(
+                agent_id=row["id"],
+                endpoint_url=row["endpoint_url"],
+                auth_type=row["auth_type"] or "none",
+                auth_credentials=row["auth_credentials"] or "",
+                auth_header_name=row["auth_header_name"] or "",
+                capabilities={
+                    "streaming": bool(row["capabilities_streaming"]),
+                    "pushNotifications": bool(row["capabilities_push_notifications"]),
+                },
+                timeout_ms=row["timeout_ms"] or 300000,
+                max_retries=row["max_retries"] or 2,
+                approval_required=bool(row["approval_required"]),
+                approval_policy=row["approval_policy"] or "on-request",
+            )
 
     @staticmethod
     def _is_resume_error(output: str) -> bool:
@@ -77,7 +119,22 @@ class AgentExecutor:
         3. 逐行读 stdout，由适配器 parse_events 解析；
         4. 进程结束后产出 completed/failed 事件。
         5. 若 resume 失败（thread 不存在），自动降级为新建会话重试。
+        6. 若 agent_id 以 ``a2a:`` 为前缀，路由到 :class:`A2AAdapter` 远程执行。
         """
+        # ── A2A 远程 Agent 路由 ──
+        if agent_id and agent_id.startswith("a2a:"):
+            async for ev in self._run_remote_a2a(
+                task_id=task_id,
+                agent_id=agent_id,
+                prompt=prompt,
+                cwd=cwd,
+                model=model,
+                conversation_id=conversation_id,
+                session_id=session_id,
+            ):
+                yield ev
+            return
+
         adapter = AGENT_ADAPTERS.get(agent_id) or AGENT_ADAPTERS["codex"]
 
         runtime = CodexTaskRuntime(
@@ -134,6 +191,10 @@ class AgentExecutor:
             session_id = ""
             output_parts: list[str] = []
             approval_requested = False
+            # 当带 resume 启动时，先缓冲流式输出。若 resume 失败需要降级为新建会话，
+            # 这些 error 输出会被丢弃，不进入聊天历史；resume 成功或非 resume 错误则正常 flush。
+            buffer_output = bool(used_resume)
+            buffered_events: list[TaskEvent] = []
 
             assert proc.stdout is not None
             while True:
@@ -170,28 +231,52 @@ class AgentExecutor:
                     elif event_type == "complete":
                         if content:
                             output_parts.append(content)
-                        yield TaskEvent(type="output", content=content, session_id=session_id)
+                        ev = TaskEvent(type="output", content=content, session_id=session_id)
+                        if buffer_output:
+                            buffered_events.append(ev)
+                        else:
+                            yield ev
                     elif event_type == "message":
                         if content:
                             output_parts.append(content)
-                        yield TaskEvent(type="output", content=content, session_id=session_id)
+                        ev = TaskEvent(type="output", content=content, session_id=session_id)
+                        if buffer_output:
+                            buffered_events.append(ev)
+                        else:
+                            yield ev
                     elif event_type == "tool_output":
                         if content:
                             output_parts.append(content)
-                        yield TaskEvent(type="tool_output", content=content, session_id=session_id)
+                        ev = TaskEvent(type="tool_output", content=content, session_id=session_id)
+                        if buffer_output:
+                            buffered_events.append(ev)
+                        else:
+                            yield ev
                     elif event_type == "progress":
-                        yield TaskEvent(type="progress", content=content, session_id=session_id)
+                        ev = TaskEvent(type="progress", content=content, session_id=session_id)
+                        if buffer_output:
+                            buffered_events.append(ev)
+                        else:
+                            yield ev
                     elif event_type == "approval_request":
                         yield TaskEvent(type="approval_request", content=content, session_id=session_id)
                     else:
                         if content:
                             output_parts.append(content)
-                            yield TaskEvent(type="output", content=content, session_id=session_id)
+                            ev = TaskEvent(type="output", content=content, session_id=session_id)
+                            if buffer_output:
+                                buffered_events.append(ev)
+                            else:
+                                yield ev
                 if approval_requested:
                     break
 
             return_code = await proc.wait()
             if approval_requested:
+                # 进入审批流程时 flush 缓冲事件，保留上下文。
+                for ev in buffered_events:
+                    yield ev
+                buffered_events = []
                 return
 
             final_output = "\n".join(p for p in output_parts[-5:] if p) if output_parts else ""
@@ -203,11 +288,9 @@ class AgentExecutor:
                     "falling back to new session. error: %s",
                     task_id, final_output[:200],
                 )
-                yield TaskEvent(
-                    type="progress",
-                    content="Resume 失败，正在降级为新建会话...",
-                    session_id=session_id,
-                )
+                # 静默降级：丢弃 resume 阶段缓冲的 error 输出，避免污染聊天历史。
+                # 仅记录到日志，不再向前端推送 "Resume 失败..." 通知。
+                buffered_events = []
                 # 清除 session_id 使 adapter 构建不带 resume 的命令
                 runtime.session_id = ""
                 runtime.conversation_id = ""
@@ -295,6 +378,12 @@ class AgentExecutor:
 
                 final_output = "\n".join(p for p in output_parts[-5:] if p) if output_parts else ""
             # --- End resume fallback ---
+            else:
+                # 未触发 resume 降级（resume 成功或非 resume 错误）：
+                # 将初始阶段缓冲的事件按顺序 flush 给前端。
+                for ev in buffered_events:
+                    yield ev
+                buffered_events = []
 
             if return_code == 0:
                 yield TaskEvent(
@@ -327,6 +416,142 @@ class AgentExecutor:
             )
         finally:
             self._processes.pop(task_id, None)
+
+    async def _run_remote_a2a(
+        self,
+        task_id: str,
+        agent_id: str,
+        prompt: str,
+        cwd: str,
+        model: str = "",
+        conversation_id: str = "",
+        session_id: str = "",
+    ) -> AsyncGenerator[TaskEvent, None]:
+        """远程 A2A Agent 执行分支，将 :class:`A2AAdapter` 产出的 dict 事件
+        映射为 :class:`TaskEvent`。不使用本地子进程，也不参与 resume 降级。
+        """
+        config = await self._load_remote_agent_config(agent_id)
+        if not config:
+            yield TaskEvent(
+                type="failed",
+                content=f"Remote agent '{agent_id}' not found or inactive",
+            )
+            return
+
+        runtime = CodexTaskRuntime(
+            task_id=task_id,
+            chat_id="",
+            cwd=Path(cwd),
+            prompt=prompt,
+            agent_id=agent_id,
+            model=model,
+            conversation_id=conversation_id,
+            session_id=session_id,
+        )
+
+        logger.info(
+            "[executor] task=%s agent=%s a2a endpoint=%s",
+            task_id,
+            agent_id,
+            config.endpoint_url,
+        )
+        yield TaskEvent(
+            type="started",
+            metadata={"agent_id": agent_id, "endpoint_url": config.endpoint_url},
+        )
+
+        adapter = A2AAdapter()
+        output_parts: list[str] = []
+        approval_requested = False
+        completed = False
+        failure_msg: Optional[str] = None
+        last_status = ""
+        sid = session_id or ""
+
+        try:
+            async for event in adapter.execute(runtime, config):
+                if not isinstance(event, dict):
+                    continue
+                etype = event.get("type")
+                if etype == "output_chunk":
+                    text = str(event.get("content") or "")
+                    if text:
+                        output_parts.append(text)
+                        yield TaskEvent(type="output", content=text, session_id=sid)
+                elif etype == "status_changed":
+                    last_status = str(event.get("status") or "")
+                    if last_status:
+                        yield TaskEvent(
+                            type="progress",
+                            content=last_status,
+                            session_id=sid,
+                        )
+                elif etype == "approval_request":
+                    if not config.approval_required:
+                        # 未启用远程审批：将其作为中间进度传递，不中断执行
+                        msg = str(event.get("message") or "")
+                        yield TaskEvent(
+                            type="progress",
+                            content=msg or "input_required",
+                            session_id=sid,
+                        )
+                        continue
+                    approval_requested = True
+                    msg = str(event.get("message") or "")
+                    yield TaskEvent(
+                        type="approval_request",
+                        content=msg,
+                        session_id=sid,
+                    )
+                    break
+                elif etype == "completed":
+                    result_text = str(event.get("result") or "")
+                    if result_text:
+                        output_parts.append(result_text)
+                    completed = True
+                elif etype == "failed":
+                    failure_msg = str(event.get("error") or "")
+                    break
+                else:
+                    # unknown / 未识别事件静默丢弃
+                    continue
+        except asyncio.CancelledError:
+            yield TaskEvent(type="cancelled", content="Task was cancelled")
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("[executor] task=%s a2a execution error", task_id)
+            yield TaskEvent(
+                type="failed",
+                content=f"A2A execution error: {type(exc).__name__}: {exc}",
+                session_id=sid,
+            )
+            return
+
+        if approval_requested:
+            return
+
+        final_output = "\n".join(p for p in output_parts if p)
+        if failure_msg is not None:
+            yield TaskEvent(
+                type="failed",
+                content=failure_msg or "Remote A2A agent failed",
+                session_id=sid,
+            )
+            return
+
+        if completed or last_status == "completed":
+            yield TaskEvent(
+                type="completed",
+                content=final_output,
+                session_id=sid,
+                metadata={"agent_id": agent_id},
+            )
+        else:
+            yield TaskEvent(
+                type="failed",
+                content=final_output or f"Remote A2A agent ended in state '{last_status}'",
+                session_id=sid,
+            )
 
     async def cancel_task(self, task_id: str) -> bool:
         """取消正在执行的任务，返回是否真的发出了取消信号。"""

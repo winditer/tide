@@ -22,6 +22,8 @@ interface WorkItemBoardProps {
   versionMap?: Record<string, string>;
   /** 泳道分组方式，默认 none */
   groupBy?: WorkItemGroupBy;
+  /** 自动刷新间隔（毫秒），0 表示关闭自动刷新，未传则使用 hook 默认值 */
+  refetchInterval?: number;
 }
 
 const CATEGORY_COLORS: Record<string, { ring: string; dot: string; tint: string }> = {
@@ -82,8 +84,13 @@ export function WorkItemBoard({
   onCardClick,
   versionMap,
   groupBy = "none",
+  refetchInterval,
 }: WorkItemBoardProps) {
-  const { data, isLoading, isError } = useWorkItemBoard(projectId, versionId);
+  const { data, isLoading, isError } = useWorkItemBoard(
+    projectId,
+    versionId,
+    refetchInterval,
+  );
   const moveMutation = useMoveWorkItem();
   const queryClient = useQueryClient();
 
@@ -283,7 +290,7 @@ export function WorkItemBoard({
                 return (
                   <div
                     key={`${lane.key}-${column.id}`}
-                    className={`flex w-64 shrink-0 flex-col rounded-xl border ${palette.ring} ${palette.tint} p-3`}
+                    className={`flex flex-1 min-w-[220px] flex-col rounded-xl border ${palette.ring} ${palette.tint} p-3`}
                   >
                     <div className="mb-2 flex items-center justify-between px-1">
                       <h3 className="flex items-center gap-2 text-xs font-semibold tracking-tight text-foreground">
@@ -341,7 +348,7 @@ export function WorkItemBoard({
           return (
             <div
               key={column.id}
-              className={`flex w-72 shrink-0 flex-col rounded-xl border ${palette.ring} ${palette.tint} p-3 transition-smooth`}
+              className={`flex flex-1 min-w-[220px] flex-col rounded-xl border ${palette.ring} ${palette.tint} p-3 transition-smooth`}
             >
               {/* Column header */}
               <div className="mb-3 flex items-center justify-between px-1">

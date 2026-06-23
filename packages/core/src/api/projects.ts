@@ -61,11 +61,11 @@ export interface ProjectTasksResponse {
 }
 
 export interface CreateProjectInput {
-  cwd: string;
-  name?: string;
+  name: string;
+  mode: "new" | "clone";
+  repo_url?: string;
+  branch?: string;
   tags?: string[];
-  /** 为 true 时，路径不存在会被后端 mkdir -p 创建（新建项目场景）。 */
-  create_dir?: boolean;
 }
 
 export interface ProjectRootsResponse {

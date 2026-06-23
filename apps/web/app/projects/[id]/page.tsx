@@ -17,6 +17,7 @@ import {
   toast,
 } from "@tide/ui";
 import {
+  apiClient,
   useAdminUsers,
   useAddProjectMember,
   useAuth,
@@ -643,6 +644,9 @@ function SettingsPane({
         </div>
       </div>
 
+      {/* Git Repository Config */}
+      <GitConfigCard projectId={projectId} />
+
       {registered && (
         <div className="bg-card rounded-xl shadow-card border border-destructive/30 p-6 flex items-center justify-between">
           <div>
@@ -663,6 +667,248 @@ function SettingsPane({
     </section>
   );
 }
+
+// ── Git Config Card ───────────────────────────────────────────────────────
+
+interface GitConfigForm {
+  repo_url: string;
+  default_branch: string;
+  credential_type: string;
+  auto_push: boolean;
+  ssh_key_path: string;
+  access_token: string;
+}
+
+const DEFAULT_GIT_CONFIG: GitConfigForm = {
+  repo_url: "",
+  default_branch: "main",
+  credential_type: "ssh_agent",
+  auto_push: true,
+  ssh_key_path: "",
+  access_token: "",
+};
+
+const CREDENTIAL_OPTIONS = [
+  { value: "ssh_agent", label: "SSH Agent（默认）" },
+  { value: "ssh_key", label: "SSH 私钥文件" },
+  { value: "token", label: "HTTPS Access Token" },
+];
+
+function GitConfigCard({ projectId }: { projectId: string }) {
+  const [form, setForm] = useState<GitConfigForm>(DEFAULT_GIT_CONFIG);
+  const [initial, setInitial] = useState<GitConfigForm>(DEFAULT_GIT_CONFIG);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setLoadError(null);
+    apiClient
+      .get<Partial<GitConfigForm>>(
+        `/api/projects/${encodeURIComponent(projectId)}/git-config`,
+      )
+      .then((data) => {
+        if (cancelled) return;
+        const merged: GitConfigForm = {
+          repo_url: data?.repo_url ?? "",
+          default_branch: data?.default_branch ?? "main",
+          credential_type: data?.credential_type ?? "ssh_agent",
+          auto_push: data?.auto_push ?? true,
+          ssh_key_path: data?.ssh_key_path ?? "",
+          access_token: data?.access_token ?? "",
+        };
+        setForm(merged);
+        setInitial(merged);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setLoadError(getApiErrorMessage(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  const dirty = useMemo(
+    () =>
+      form.repo_url !== initial.repo_url ||
+      form.default_branch !== initial.default_branch ||
+      form.credential_type !== initial.credential_type ||
+      form.ssh_key_path !== initial.ssh_key_path ||
+      form.access_token !== initial.access_token,
+    [form, initial],
+  );
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const payload: Record<string, unknown> = {
+        repo_url: form.repo_url.trim(),
+        default_branch: form.default_branch.trim() || "main",
+        credential_type: form.credential_type,
+        auto_push: initial.auto_push,
+      };
+      if (form.credential_type === "ssh_key") {
+        payload.ssh_key_path = form.ssh_key_path.trim() || null;
+      } else if (form.credential_type === "token") {
+        payload.access_token = form.access_token.trim() || null;
+      }
+      await apiClient.put(
+        `/api/projects/${encodeURIComponent(projectId)}/git-config`,
+        payload,
+      );
+      const next: GitConfigForm = {
+        ...form,
+        repo_url: (payload.repo_url as string) ?? "",
+        default_branch: (payload.default_branch as string) ?? "main",
+        // 未选中的认证方式的敏感字段由后端清零，这里也同步置空以避免表单脏状态
+        ssh_key_path:
+          form.credential_type === "ssh_key" ? form.ssh_key_path.trim() : "",
+        access_token:
+          form.credential_type === "token" ? form.access_token.trim() : "",
+      };
+      setForm(next);
+      setInitial(next);
+      toast({ title: "已保存 Git 仓库配置" });
+    } catch (err) {
+      toast({
+        title: "保存失败",
+        description: getApiErrorMessage(err),
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="bg-card rounded-xl shadow-card p-6 space-y-4">
+      <div>
+        <h2 className="text-base font-medium">Git 仓库配置</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          配置项目主仓库信息，工作流节点（如 git_merge）可复用该配置。
+        </p>
+      </div>
+
+      {loading ? (
+        <div className="py-6 text-center text-sm text-muted-foreground">加载中…</div>
+      ) : loadError ? (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          加载失败：{loadError}
+        </div>
+      ) : (
+        <>
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium text-foreground">
+              仓库地址
+            </span>
+            <Input
+              value={form.repo_url}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, repo_url: e.target.value }))
+              }
+              placeholder="git@github.com:org/repo.git"
+              className="rounded-lg border-border/50 font-mono text-xs"
+            />
+          </label>
+
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium text-foreground">
+              默认分支
+            </span>
+            <Input
+              value={form.default_branch}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, default_branch: e.target.value }))
+              }
+              placeholder="main"
+              className="rounded-lg border-border/50 font-mono text-xs"
+            />
+          </label>
+
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium text-foreground">
+              认证方式
+            </span>
+            <Select
+              value={form.credential_type}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, credential_type: e.target.value }))
+              }
+              options={CREDENTIAL_OPTIONS}
+              className="rounded-lg border-border/50"
+            />
+            <span className="mt-1 block text-[11px] text-muted-foreground">
+              {form.credential_type === "ssh_agent" &&
+                "使用宿主上已加载的 ssh-agent，无需额外配置。"}
+              {form.credential_type === "ssh_key" &&
+                "使用指定私钥文件进行 SSH 认证。请确保容器内可访问该路径。"}
+              {form.credential_type === "token" &&
+                "使用 HTTPS Personal Access Token 鉴权（GitHub/GitLab/Gitea）。"}
+            </span>
+          </label>
+
+          {form.credential_type === "ssh_key" && (
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-medium text-foreground">
+                私钥路径
+              </span>
+              <Input
+                value={form.ssh_key_path}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, ssh_key_path: e.target.value }))
+                }
+                placeholder="/root/.ssh/id_rsa"
+                className="rounded-lg border-border/50 font-mono text-xs"
+              />
+            </label>
+          )}
+
+          {form.credential_type === "token" && (
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-medium text-foreground">
+                Access Token
+              </span>
+              <Input
+                type="password"
+                value={form.access_token}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, access_token: e.target.value }))
+                }
+                placeholder="ghp_xxxxxxxxxxxxxxxx"
+                className="rounded-lg border-border/50 font-mono text-xs"
+                autoComplete="new-password"
+              />
+              <span className="mt-1 block text-[11px] text-amber-600/80">
+                令牌以明文形式存储于项目设置 metadata 中，请将权限最小化。
+              </span>
+            </label>
+          )}
+
+          <div className="flex items-center justify-end gap-3 pt-2">
+            <Button
+              variant="outline"
+              disabled={!dirty || saving}
+              onClick={() => setForm(initial)}
+            >
+              重置
+            </Button>
+            <Button onClick={handleSave} disabled={!dirty || saving}>
+              {saving ? "保存中…" : "保存"}
+            </Button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── Members Tab ───────────────────────────────────────────────────────────
 
 // ── Members Tab ───────────────────────────────────────────────────────────
 

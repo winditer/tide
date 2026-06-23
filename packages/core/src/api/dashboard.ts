@@ -27,12 +27,36 @@ export interface RecentTasksResponse {
   tasks: RecentTask[];
 }
 
+export interface AgentSkill {
+  id?: string;
+  name?: string;
+  description?: string;
+  tags?: string[];
+  examples?: string[];
+  [key: string]: unknown;
+}
+
 export interface AgentInfo {
   id: string;
   name: string;
-  available: boolean;
-  running_tasks: number;
-  queued_tasks: number;
+  /** 'local' 表示本地 CLI Agent；'remote' 表示通过 A2A 协议接入的远程 Agent。 */
+  type?: "local" | "remote";
+  /** 仅本地 Agent 提供：CLI 是否可用 */
+  available?: boolean;
+  running_tasks?: number;
+  queued_tasks?: number;
+  /** 远程 Agent：注册描述 */
+  description?: string | null;
+  /** 远程 Agent：连通状态（active / inactive 等） */
+  status?: string;
+  /** 远程 Agent：声明的 skills 列表 */
+  skills?: AgentSkill[];
+  /** 远程 Agent：能力声明 */
+  capabilities?: {
+    streaming?: boolean;
+    pushNotifications?: boolean;
+    [key: string]: unknown;
+  };
 }
 
 export interface AgentsResponse {
@@ -47,6 +71,10 @@ export interface ProjectInfo {
   running_tasks: number;
   last_active: string | null;
   status: "active" | "idle";
+  /** 项目初始化状态：ready=正常, initializing=正在克隆/初始化, error=出错 */
+  init_status?: "ready" | "initializing" | "error";
+  /** 当 init_status 为 error 时返回的错误信息 */
+  init_error?: string | null;
   session_count?: number;
   /**
    * 项目维度的 Chats 数量。列表接口 ``GET /api/projects`` 为避免性能问题不计算，

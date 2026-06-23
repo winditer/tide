@@ -92,6 +92,7 @@ export type {
   RecentTasksResponse,
   AgentInfo,
   AgentsResponse,
+  AgentSkill,
   ProjectInfo,
   ProjectsResponse,
   SessionInfo,

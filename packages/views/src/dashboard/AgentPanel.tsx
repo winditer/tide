@@ -52,17 +52,17 @@ export function AgentPanel() {
                 </span>
               </div>
               <div className="flex shrink-0 items-center gap-1.5 text-xs">
-                {agent.running_tasks > 0 && (
+                {(agent.running_tasks ?? 0) > 0 && (
                   <span className="rounded bg-indigo-50 px-1.5 py-0.5 font-medium text-indigo-700">
                     {agent.running_tasks} 运行
                   </span>
                 )}
-                {agent.queued_tasks > 0 && (
+                {(agent.queued_tasks ?? 0) > 0 && (
                   <span className="rounded bg-amber-50 px-1.5 py-0.5 font-medium text-amber-700">
                     {agent.queued_tasks} 排队
                   </span>
                 )}
-                {agent.running_tasks === 0 && agent.queued_tasks === 0 && (
+                {(agent.running_tasks ?? 0) === 0 && (agent.queued_tasks ?? 0) === 0 && (
                   <span className="text-gray-400">空闲</span>
                 )}
               </div>

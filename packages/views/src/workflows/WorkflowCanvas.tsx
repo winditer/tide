@@ -78,6 +78,7 @@ function defaultDataFor(type: WorkflowNodeType): Record<string, any> {
         mergeStrategy: "merge",
         deleteSource: false,
         onConflict: "fail",
+        autoPush: false,
       };
     default:
       return { label: DEFAULT_LABELS[type] };

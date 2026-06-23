@@ -2,7 +2,7 @@
 
 import { useEffect, useState, Suspense } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { Button } from "@tide/ui";
+import { Button, toast } from "@tide/ui";
 import {
   useWorkflow,
   useUpdateWorkflow,
@@ -67,6 +67,19 @@ function WorkflowEditorPageInner() {
           if (data?.definition) {
             setDraft(data.definition);
           }
+          toast({
+            title: "✓ 已保存",
+            description: data?.version
+              ? `工作流已保存 · v${data.version}`
+              : "工作流已保存",
+          });
+        },
+        onError: (err) => {
+          toast({
+            title: "保存失败",
+            description: String(err instanceof Error ? err.message : err),
+            variant: "destructive",
+          });
         },
       }
     );

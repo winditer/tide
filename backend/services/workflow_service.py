@@ -147,9 +147,13 @@ class WorkflowService:
             sets.append("description = :description")
             params["description"] = description
         if definition_json is not None:
+            # 仅在 definition 实际改变时才递增版本号，避免无变化保存导致版本无条件递增。
+            new_def = json.dumps(definition_json)
+            current_def_obj = existing.get("definition") or {"nodes": [], "edges": []}
             sets.append("definition = :definition")
-            sets.append("version = version + 1")
-            params["definition"] = json.dumps(definition_json)
+            params["definition"] = new_def
+            if current_def_obj != definition_json:
+                sets.append("version = version + 1")
         if enabled is not None:
             sets.append("enabled = :enabled")
             params["enabled"] = int(enabled)

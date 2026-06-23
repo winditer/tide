@@ -17,7 +17,6 @@ import {
   useRejectApproval,
   parseApprovalDetail,
   useAddArtifact,
-  useRemoveArtifact,
   useAuth,
   type WorkItem,
   type WorkItemUpdate,
@@ -414,7 +413,6 @@ function WorkItemArtifactsSection({ item }: WorkItemArtifactsSectionProps) {
   const { user } = useAuth();
   const isViewer = user?.role === "viewer";
   const addMutation = useAddArtifact();
-  const removeMutation = useRemoveArtifact();
   const [showForm, setShowForm] = useState(false);
   const [label, setLabel] = useState("");
   const [url, setUrl] = useState("");
@@ -450,10 +448,6 @@ function WorkItemArtifactsSection({ item }: WorkItemArtifactsSectionProps) {
     setUrl("");
     setStage("");
     setShowForm(false);
-  };
-
-  const handleRemove = (artifactId: string) => {
-    removeMutation.mutate({ workItemId: item.id, artifactId });
   };
 
   return (
@@ -526,15 +520,6 @@ function WorkItemArtifactsSection({ item }: WorkItemArtifactsSectionProps) {
                     >
                       {artifact.label}
                     </a>
-                    {!isViewer && (
-                      <button
-                        onClick={() => handleRemove(artifact.id)}
-                        className="hidden text-xs text-muted-foreground hover:text-destructive group-hover:inline-block"
-                        title="删除"
-                      >
-                        ✕
-                      </button>
-                    )}
                   </div>
                 ))}
               </div>

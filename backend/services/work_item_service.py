@@ -17,12 +17,14 @@ WorkItemService — 工作项 CRUD + 流转引擎。
 import asyncio
 import json
 import logging
+import os
 import re
 import uuid
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
+from urllib.parse import quote
 
 from sqlalchemy import text
 
@@ -48,7 +50,7 @@ def _now_iso() -> str:
 
 
 # 可见节点类型：这些节点是工作项可以停留的阶段
-VISIBLE_NODE_TYPES = {"stage", "agent", "approval", "delay"}
+VISIBLE_NODE_TYPES = {"stage", "agent", "approval", "delay", "git_merge", "parallel_join"}
 # 看板列节点类型：在 VISIBLE_NODE_TYPES 基础上额外包含 end，
 # 让已完成（completed_at != NULL）的工作项也能展示在看板上。
 BOARD_COLUMN_NODE_TYPES = VISIBLE_NODE_TYPES | {"end"}
@@ -280,30 +282,24 @@ class WorkItemService:
         return _safe_json_loads(row._mapping["definition"], {"nodes": [], "edges": []})
 
     async def _get_project_path(self, project_id: str) -> Optional[str]:
-        """通过 project_id 查询项目路径 (workspaces 表的 path 字段)。"""
-        try:
-            async with async_session_factory() as session:
-                result = await session.execute(
-                    text("SELECT path FROM workspaces WHERE id = :id"),
-                    {"id": project_id},
-                )
-                row = result.fetchone()
-        except Exception:
-            row = None
-        if row:
-            path = row._mapping.get("path")
-            if path and Path(path).is_dir():
-                return str(path)
-        # 兼容：project_id 可能是 base64 编码的路径
+        """从 project_id 解码出项目路径。
+
+        Tide 中 project_id = base64.urlsafe_b64encode(cwd).rstrip('='),
+        因此直接补齐 padding 后 base64 解码即可得到项目绝对路径。
+        """
+        if not project_id:
+            return None
         try:
             import base64
-            s = project_id or ""
-            pad = "=" * (-len(s) % 4)
-            decoded = base64.urlsafe_b64decode((s + pad).encode()).decode()
-            if decoded and Path(decoded).is_dir():
-                return decoded
-        except Exception:
-            pass
+            padded = project_id + "=" * (-len(project_id) % 4)
+            path = base64.urlsafe_b64decode(padded).decode()
+            if path and os.path.isabs(path):
+                return path
+        except Exception as e:
+            logger.warning(
+                "Failed to decode project_id to path: %s, error: %s",
+                project_id, e,
+            )
         return None
 
     # ── CRUD ─────────────────────────────────────────────
@@ -762,6 +758,11 @@ class WorkItemService:
             prompt_template = data.get("promptTemplate") or data.get("prompt") or ""
             node_cwd = data.get("cwd") or ""
             project_cwd = await self._get_project_path(item["project_id"])
+            if not project_cwd:
+                logger.warning(
+                    "Could not determine project path for project_id=%s, falling back to cwd",
+                    item["project_id"],
+                )
             cwd = node_cwd or project_cwd or str(Path.cwd())
 
             # 工作项级 worktree 隔离
@@ -771,9 +772,11 @@ class WorkItemService:
 
             if use_worktree:
                 from backend.runtime.git_utils import prepare_work_item_worktree
+                # 以 project_cwd 为基准创建 worktree，避免 node_cwd 指向非项目目录
+                base_path = project_cwd or cwd
                 wt_path, wt_branch, _ = await prepare_work_item_worktree(
                     work_item_id=item["id"],
-                    project_path=Path(cwd),
+                    project_path=Path(base_path),
                 )
                 if wt_path:
                     # worktree 创建成功，使用 worktree 路径
@@ -784,6 +787,21 @@ class WorkItemService:
                         "[work_item] worktree created for item=%s branch=%s path=%s",
                         item["id"], branch_name, worktree_path_str
                     )
+                else:
+                    # worktree 创建失败：保持 cwd 为 project_cwd（或原始 cwd），不退化为相对路径
+                    logger.warning(
+                        "[work_item] worktree creation failed for item=%s, keep cwd=%s",
+                        item["id"], cwd,
+                    )
+
+            # 最终兜底：确保 cwd 是绝对路径，绝不传入空串/相对路径
+            if not cwd or not os.path.isabs(cwd):
+                fallback = project_cwd or str(Path.cwd())
+                logger.warning(
+                    "[work_item] cwd invalid (%r), fallback to project_cwd=%s",
+                    cwd, fallback,
+                )
+                cwd = fallback
 
             # 渲染 prompt
             prompt = self._render_prompt_template(prompt_template, item)
@@ -906,67 +924,200 @@ class WorkItemService:
                 item["id"][:8], exc,
             )
 
+    async def _build_workflow_context(self, item: dict, definition: dict) -> dict:
+        """从工作项 transitions 历史 + 工作项基本字段构建条件评估 context。
+
+        与 workflow_engine 的 run.context 兼容的字段路径：
+        - context.<node_id>.output  ← 之前节点的输出（agent 节点的文本输出 / approval 节点的
+          "approved"|"rejected" 字面量）。
+        - context.title/description/priority/assignee/tags ← 工作项基本字段。
+
+        注意：工作项流转引擎独立于 workflow_engine 的运行实例（无 run_id），
+        故此处通过扫描 work_item_transitions 历史来重建 context。
+        """
+        context: dict = {
+            "title": item.get("title", ""),
+            "description": item.get("description", ""),
+            "priority": item.get("priority", 0),
+            "assignee": item.get("assignee", ""),
+            "tags": item.get("tags") or [],
+        }
+        try:
+            transitions = await self.get_transitions(item["id"])
+        except Exception:
+            transitions = []
+
+        node_map = {n["id"]: n for n in definition.get("nodes", [])}
+        for tr in transitions:
+            from_id = tr.get("from_node_id")
+            if not from_id:
+                continue
+            from_node = node_map.get(from_id)
+            ntype = (from_node.get("type") if from_node else "") or ""
+            trigger = (tr.get("trigger_type") or "").lower()
+            out_raw = tr.get("output") or ""
+
+            node_ctx = context.get(from_id) if isinstance(context.get(from_id), dict) else {}
+            if ntype == "approval":
+                if trigger == "approval_approved":
+                    node_ctx["output"] = "approved"
+                elif trigger == "approval_rejected":
+                    node_ctx["output"] = "rejected"
+                node_ctx["log"] = out_raw
+            else:
+                # agent / git_merge / 其他节点：直接使用 transition.output
+                node_ctx["output"] = out_raw
+            context[from_id] = node_ctx
+        return context
+
     async def _handle_condition_node(self, item: dict, node: dict, definition: dict):
         """
-        Condition 节点：评估条件并递归跳转到下一节点。
+        Condition 节点：从工作流历史 context 评估条件并跳转到下一节点。
+
+        支持两种配置：
+        - 扁平字段：data.field / data.operator / data.value（与 workflow_engine 一致），
+          匹配 → sourceHandle=yes 边，不匹配 → sourceHandle=no 边。
+        - conditions 数组：每条 {field, operator, value, targetEdge?, sourceHandle?}。
+
+        Fallback：仅在显式标记为 default/no/否/else 的边中选择，绝不盲目选第一条出边，
+        避免审批拒绝被错误推进到 yes 分支。
         """
         try:
             data = node.get("data", {})
-            conditions = data.get("conditions") or []
             edges = definition.get("edges", [])
             nodes = definition.get("nodes", [])
             node_map = {n["id"]: n for n in nodes}
+            outgoing = [e for e in edges if e.get("source") == node["id"]]
 
-            # 构建 context 供条件评估
-            context = {
-                "title": item.get("title", ""),
-                "description": item.get("description", ""),
-                "priority": item.get("priority", 0),
-                "assignee": item.get("assignee", ""),
-                "tags": item.get("tags") or [],
-            }
+            if not outgoing:
+                logger.warning(
+                    "[Condition] node=%s has no outgoing edges, work item %s stays.",
+                    node.get("id"), item["id"][:8],
+                )
+                return
 
-            # 评估条件
-            target_edge_id = None
-            for cond in conditions:
-                field = cond.get("field", "")
-                op = cond.get("operator", "eq")
-                expected = cond.get("value")
-                actual = context.get(field)
-                if self._compare(actual, op, expected):
-                    target_edge_id = cond.get("targetEdge")
-                    break
-
-            # 确定目标边
+            context = await self._build_workflow_context(item, definition)
             chosen_edge = None
-            if target_edge_id:
-                chosen_edge = next((e for e in edges if e.get("id") == target_edge_id), None)
 
-            if not chosen_edge:
-                outgoing = [e for e in edges if e.get("source") == node["id"]]
+            # 扁平字段格式（field/operator/value）
+            field = data.get("field") or ""
+            if field:
+                op = data.get("operator", "eq")
+                expected = data.get("value")
+                actual = self._resolve_context_path(field, context)
+                matched = self._compare_values(actual, op, expected)
+                logger.info(
+                    "[Condition] node=%s field=%s actual=%r expected=%r op=%s matched=%s",
+                    node.get("id"), field, actual, expected, op, matched,
+                )
+                handle = "yes" if matched else "no"
                 chosen_edge = next(
-                    (e for e in outgoing if e.get("data", {}).get("isDefault")
-                     or e.get("label") in ("default", "否", "else")),
+                    (e for e in outgoing if e.get("sourceHandle") == handle), None
+                )
+
+            # conditions 数组格式
+            if not chosen_edge:
+                for cond in data.get("conditions") or []:
+                    cond_field = cond.get("field", "")
+                    cond_op = cond.get("operator", "eq")
+                    cond_val = cond.get("value")
+                    actual = self._resolve_context_path(cond_field, context)
+                    if self._compare_values(actual, cond_op, cond_val):
+                        target_edge_id = cond.get("targetEdge")
+                        if target_edge_id:
+                            chosen_edge = next(
+                                (e for e in edges if e.get("id") == target_edge_id), None
+                            )
+                        if not chosen_edge:
+                            target_handle = cond.get("targetHandle") or cond.get("sourceHandle")
+                            if target_handle:
+                                chosen_edge = next(
+                                    (e for e in outgoing if e.get("sourceHandle") == target_handle),
+                                    None,
+                                )
+                        break
+
+            # Fallback：仅选择显式 default/no 边，不再盲选 outgoing[0]
+            if not chosen_edge:
+                chosen_edge = next(
+                    (
+                        e for e in outgoing
+                        if (e.get("data") or {}).get("isDefault")
+                        or (e.get("label") or "").strip().lower()
+                        in ("default", "no", "否", "else")
+                    ),
                     None,
                 )
-                if not chosen_edge and outgoing:
-                    chosen_edge = outgoing[0]
+            if not chosen_edge:
+                chosen_edge = next(
+                    (e for e in outgoing if e.get("sourceHandle") == "no"), None
+                )
 
-            if chosen_edge:
-                target_node = node_map.get(chosen_edge["target"])
-                if target_node:
-                    await self.transition_work_item(
-                        item["id"],
-                        target_node["id"],
-                        operator="system",
-                        trigger_type="condition",
-                    )
+            if not chosen_edge:
+                logger.error(
+                    "[Condition] node=%s could not determine edge for work item %s; "
+                    "no default/no fallback edge available, work item stays.",
+                    node.get("id"), item["id"][:8],
+                )
+                return
+
+            target_node = node_map.get(chosen_edge.get("target"))
+            if target_node:
+                await self.transition_work_item(
+                    item["id"],
+                    target_node["id"],
+                    operator="system",
+                    trigger_type="condition",
+                )
 
         except Exception as exc:
             logger.exception(
                 "Failed to handle condition node for work item %s: %s",
                 item["id"][:8], exc,
             )
+
+    @staticmethod
+    def _resolve_context_path(path: str, context: dict):
+        """解析形如 'context.approval_1.output' 的路径，返回叶子值或 None。"""
+        if not path:
+            return None
+        if path.startswith("context."):
+            path = path[len("context."):]
+        obj = context
+        for part in path.split("."):
+            if isinstance(obj, dict):
+                obj = obj.get(part)
+            else:
+                return None
+            if obj is None:
+                return None
+        return obj
+
+    @staticmethod
+    def _compare_values(actual, op: str, expected) -> bool:
+        """宽松比较：字符串 strip+lower 等值；支持 eq/ne/contains/gt/lt 等别名。"""
+        if actual is None:
+            return False
+        actual_str = str(actual).strip().lower()
+        expected_str = str(expected).strip().lower() if expected is not None else ""
+        op = (op or "eq").lower()
+        if op in ("eq", "==", "equals"):
+            return actual_str == expected_str
+        if op in ("ne", "neq", "!=", "not_equals"):
+            return actual_str != expected_str
+        if op == "contains":
+            return expected_str in actual_str
+        if op in ("gt", ">"):
+            try:
+                return float(actual) > float(expected)
+            except (TypeError, ValueError):
+                return False
+        if op in ("lt", "<"):
+            try:
+                return float(actual) < float(expected)
+            except (TypeError, ValueError):
+                return False
+        return actual_str == expected_str
 
     async def _handle_delay_node(self, item: dict, node: dict, definition: dict):
         """
@@ -1061,14 +1212,39 @@ class WorkItemService:
                 "[work_item] git_merge success: item=%s source=%s target=%s",
                 item["id"], source_branch, target_branch
             )
-            # 4. 清理 worktree
+            # 4. 合并成功后，检查是否需要 auto push
+            auto_push = data.get("autoPush", False)
+            if auto_push:
+                git_config = await self.get_project_git_config(item["project_id"])
+                repo_url = git_config.get("repo_url", "")
+                if repo_url:
+                    from backend.runtime.git_utils import git_ensure_remote, git_push
+                    remote_ok = await git_ensure_remote(repo_root, repo_url)
+                    if remote_ok:
+                        push_ok, push_output = await git_push(
+                            repo_root, target_branch, git_config=git_config
+                        )
+                        if not push_ok:
+                            logger.warning(
+                                "[work_item] auto push failed for %s: %s",
+                                target_branch, push_output,
+                            )
+                        else:
+                            logger.info(
+                                "[work_item] auto push success: branch=%s", target_branch,
+                            )
+                    else:
+                        logger.warning(
+                            "[work_item] failed to ensure remote for %s", repo_url,
+                        )
+            # 5. 清理 worktree
             if worktree_path:
                 await cleanup_work_item_worktree(
                     worktree_path=worktree_path,
                     branch_name="" if delete_source else source_branch,
                     repo_root=repo_root,
                 )
-            # 5. 自动推进到下游节点
+            # 6. 自动推进到下游节点
             await self._advance_past_node(item, node)
         else:
             # 冲突处理
@@ -1112,6 +1288,460 @@ class WorkItemService:
             )
 
     # ── 回调 ─────────────────────────────────────────────
+
+    async def _get_project_repo_url(self, project_id: Optional[str]) -> Optional[str]:
+        """获取项目的 Git 远程仓库 URL（用于构造 commit/PR 链接）。"""
+        if not project_id:
+            return None
+        try:
+            git_config = await self.get_project_git_config(project_id)
+        except Exception as exc:
+            logger.warning(
+                "Failed to load git config for project %s: %s", project_id, exc,
+            )
+            return None
+        if not isinstance(git_config, dict):
+            return None
+        url = (
+            git_config.get("repo_url")
+            or git_config.get("remote_url")
+            or git_config.get("url")
+            or ""
+        )
+        return url or None
+
+    @staticmethod
+    def _infer_url_label(url: str) -> str:
+        """从 URL 推断一个可读的 label。"""
+        try:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(url)
+            path = (parsed.path or "").rstrip("/")
+            if not path or path == "":
+                return parsed.netloc or url
+            last_segment = path.split("/")[-1]
+            if "." in last_segment:
+                return last_segment
+            parts = [p for p in path.split("/") if p]
+            if len(parts) >= 2:
+                return "/".join(parts[-2:])
+            return last_segment or parsed.netloc or url
+        except Exception:
+            return url
+
+    @staticmethod
+    def _build_repo_base_url(repo_url: Optional[str]) -> str:
+        """归一化仓库 URL，去掉 .git 后缀并把 git@host:path 转为 https。
+
+        返回空串表示无可用 URL。
+        """
+        if not repo_url:
+            return ""
+        clean = repo_url.strip().rstrip("/")
+        if clean.endswith(".git"):
+            clean = clean[:-4]
+        if clean.startswith("git@") and ":" in clean:
+            try:
+                host_and_path = clean[len("git@"):]
+                host, path = host_and_path.split(":", 1)
+                clean = f"https://{host}/{path}"
+            except ValueError:
+                pass
+        return clean
+
+    @classmethod
+    def _build_commit_url(cls, repo_url: Optional[str], commit_hash: str) -> str:
+        """基于仓库 URL 构造 commit 链接，兼容 GitHub/GitLab/Gitee 等常见格式。
+
+        无 repo_url 时返回空字符串（前端可降级展示 commit 短哈希）。
+        """
+        if not commit_hash:
+            return ""
+        clean = cls._build_repo_base_url(repo_url)
+        if not clean:
+            return ""
+        return f"{clean}/commit/{commit_hash}"
+
+    @classmethod
+    def _build_file_url(cls, repo_url: Optional[str], commit_hash: str, file_path: str) -> str:
+        """基于仓库 URL 构造单文件链接，兼容 GitHub/GitLab/Gitee。
+
+        无 repo_url 时返回空字符串（前端可降级仅展示文件名）。
+        """
+        if not commit_hash or not file_path:
+            return ""
+        clean = cls._build_repo_base_url(repo_url)
+        if not clean:
+            return ""
+        # GitLab 使用 /-/blob/，GitHub/Gitee 使用 /blob/
+        if "gitlab" in clean.lower():
+            return f"{clean}/-/blob/{commit_hash}/{file_path}"
+        return f"{clean}/blob/{commit_hash}/{file_path}"
+
+    @staticmethod
+    async def _get_commit_changed_files(
+        worktree_path: str, commit_hash: str
+    ) -> List[str]:
+        """获取指定 commit 涉及的文件路径列表（相对仓库根）。
+
+        失败时返回空列表，不抛异常。
+        """
+        if not worktree_path or not commit_hash:
+            return []
+        try:
+            import subprocess
+
+            result = subprocess.run(
+                [
+                    "git",
+                    "diff-tree",
+                    "--no-commit-id",
+                    "--name-only",
+                    "-r",
+                    commit_hash,
+                ],
+                cwd=str(worktree_path),
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode != 0:
+                return []
+            return [
+                line.strip()
+                for line in (result.stdout or "").splitlines()
+                if line.strip()
+            ]
+        except Exception as exc:
+            logger.warning("Failed to get changed files for %s: %s", commit_hash[:7], exc)
+            return []
+
+    async def _extract_and_save_artifacts(
+        self,
+        work_item_id: str,
+        task_id: str,
+        output,
+        *,
+        commit_hash: Optional[str] = None,
+        branch_name: Optional[str] = None,
+        project_id: Optional[str] = None,
+        changed_files: Optional[List[str]] = None,
+    ) -> None:
+        """从任务完成信息中提取产物并追加到 work_item.metadata.artifacts。
+
+        产物来源（按优先级）：
+        1. Commit 中变更的文件链接（最重要 —— 用户最关心生成了什么文档）。
+        2. 从 Agent 文本输出中解析出的创建文件路径（兜底，覆盖未自动 commit 的情况）。
+        3. Git Commit：基于项目 git 远程仓库构造 commit 链接（作为总体变更汇总入口）。
+        4. Agent 文本输出中嵌入的 http(s) URL（最多 3 个，排除 localhost）。
+        5. A2A 结构化 artifacts（output 是 JSON 且含 artifacts 数组时）。
+
+        说明：不再生成内部 Task Detail 链接（用户明确不需要）。
+
+        容错设计：任何异常只记录日志，不中断主流程。
+        """
+        artifacts: list = []
+
+        # 提前获取 repo_url 与 project_path，供文件链接与 commit 链接复用
+        repo_url: Optional[str] = None
+        project_path: Optional[str] = None
+        if project_id:
+            try:
+                repo_url = await self._get_project_repo_url(project_id)
+            except Exception:
+                repo_url = None
+            try:
+                project_path = await self._get_project_path(project_id)
+            except Exception:
+                project_path = None
+
+        def _build_local_file_url(rel_path: str) -> str:
+            """无远程仓库时返回空字符串，由保存阶段统一替换为后端 API 路径，
+            使浏览器可以直接打开文件内容。
+            """
+            return ""
+
+        # 1. 变更文件产物（最优先）
+        if changed_files and commit_hash:
+            for file_path in list(changed_files)[:10]:
+                if not file_path:
+                    continue
+                file_url = self._build_file_url(repo_url, commit_hash, file_path)
+                if not file_url:
+                    file_url = _build_local_file_url(file_path)
+                file_name = file_path.rsplit("/", 1)[-1] or file_path
+                artifacts.append({
+                    "id": str(uuid.uuid4()),
+                    "type": "file",
+                    "label": file_name,
+                    "stage": "code",
+                    "url": file_url,
+                    "file_path": file_path,
+                    "commit_hash": commit_hash,
+                    "created_at": _now_iso(),
+                    "task_id": task_id,
+                })
+
+        # 2. 从 Agent 文本输出中提取生成的文件路径（兜底）
+        if output and isinstance(output, str):
+            file_patterns = [
+                r"File created successfully at:\s*(.+?)(?:\n|$)",
+                r"Created file:\s*(.+?)(?:\n|$)",
+                r"写入文件[:：]\s*(.+?)(?:\n|$)",
+            ]
+            extracted_files: list = []
+            for pattern in file_patterns:
+                try:
+                    matches = re.findall(pattern, output)
+                except re.error:
+                    matches = []
+                for m in matches:
+                    val = (m or "").strip().strip("`'\"")
+                    if val:
+                        extracted_files.append(val)
+
+            if extracted_files:
+                for raw_path in extracted_files[:10]:
+                    relative_path = raw_path
+                    if project_path and raw_path.startswith(project_path):
+                        relative_path = raw_path[len(project_path):].lstrip("/")
+
+                    file_url = ""
+                    if repo_url and commit_hash:
+                        file_url = self._build_file_url(
+                            repo_url, commit_hash, relative_path
+                        )
+                    if not file_url:
+                        file_url = _build_local_file_url(relative_path)
+
+                    file_name = relative_path.rsplit("/", 1)[-1] or relative_path
+                    artifacts.append({
+                        "id": str(uuid.uuid4()),
+                        "type": "file",
+                        "label": file_name,
+                        "stage": "code",
+                        "url": file_url,
+                        "file_path": relative_path,
+                        "commit_hash": commit_hash or "",
+                        "created_at": _now_iso(),
+                        "task_id": task_id,
+                    })
+
+        # 3. Git Commit 产物
+        if commit_hash:
+            commit_url = self._build_commit_url(repo_url, commit_hash)
+            label = f"Commit {commit_hash[:7]}"
+            if branch_name:
+                label = f"{label} ({branch_name})"
+            artifacts.append({
+                "id": str(uuid.uuid4()),
+                "type": "commit",
+                "label": label,
+                "stage": "code",
+                "url": commit_url,
+                "commit_hash": commit_hash,
+                "branch": branch_name or "",
+                "created_at": _now_iso(),
+                "task_id": task_id,
+            })
+
+        # 4. 从 Agent 文本输出中提取 http(s) URL
+        if output and isinstance(output, str):
+            try:
+                urls = re.findall(r"https?://(?!localhost)[^\s<>\"')\]]+", output)
+            except re.error:
+                urls = []
+            seen: set = set()
+            for raw_url in urls:
+                if len(seen) >= 3:
+                    break
+                clean_url = raw_url.rstrip(".,;:!?")
+                if not clean_url or clean_url in seen:
+                    continue
+                seen.add(clean_url)
+                artifacts.append({
+                    "id": str(uuid.uuid4()),
+                    "type": "url",
+                    "label": self._infer_url_label(clean_url),
+                    "stage": "output",
+                    "url": clean_url,
+                    "created_at": _now_iso(),
+                    "task_id": task_id,
+                })
+
+        # 5. 结构化 A2A artifacts（output 为 JSON 时）
+        if output and isinstance(output, str):
+            try:
+                output_data = json.loads(output)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                output_data = None
+            if isinstance(output_data, dict) and isinstance(output_data.get("artifacts"), list):
+                for art in output_data["artifacts"]:
+                    if not isinstance(art, dict):
+                        continue
+                    art_url = art.get("url", "") or ""
+                    art_text = art.get("text") or art.get("content") or ""
+                    if not art_url and not art_text:
+                        continue
+                    art_label = art.get("name") or art.get("title") or "Document"
+                    artifacts.append({
+                        "id": art.get("id") or art.get("artifactId") or str(uuid.uuid4()),
+                        "type": art.get("type", "document"),
+                        "label": art_label,
+                        "stage": "output",
+                        "url": art_url,
+                        "content": art_text[:2000] if isinstance(art_text, str) else "",
+                        "created_at": _now_iso(),
+                        "task_id": task_id,
+                    })
+
+        # 产物去重：同名文件只保留首次出现的记录（来自 changed_files 优先于 output 提取）
+        if artifacts:
+            seen_files: set = set()
+            deduped: list = []
+            for art in artifacts:
+                if art.get("type") == "file":
+                    key = art.get("file_path") or art.get("label") or ""
+                    if key in seen_files:
+                        continue
+                    seen_files.add(key)
+                    # 同时用 label（文件名）兜底去重，避免相对路径/绝对路径差异导致的重复
+                    name_key = f"__name__:{art.get('label', '')}"
+                    if name_key in seen_files:
+                        continue
+                    seen_files.add(name_key)
+                deduped.append(art)
+            artifacts = deduped
+
+        if not artifacts:
+            return
+
+        # 追加到 work_item.metadata.artifacts
+        try:
+            async with async_session_factory() as session:
+                row_result = await session.execute(
+                    text("SELECT metadata FROM work_items WHERE id = :id"),
+                    {"id": work_item_id},
+                )
+                row = row_result.fetchone()
+                if not row:
+                    return
+                metadata_raw = dict(row._mapping).get("metadata")
+                metadata = _safe_json_loads(metadata_raw, {}) or {}
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                existing = metadata.get("artifacts") or []
+                if not isinstance(existing, list):
+                    existing = []
+
+                # 全局去重：
+                # 1) 幂等性保护：若同一 task_id 的产物已存在，整批跳过
+                # 2) 否则按 type 分别比对：file 用 file_path/label、commit 用 commit_hash、url 用 url
+                existing_task_ids = {
+                    e.get("task_id")
+                    for e in existing
+                    if isinstance(e, dict) and e.get("task_id")
+                }
+                if task_id and task_id in existing_task_ids:
+                    return
+
+                existing_file_keys: set = set()
+                existing_commit_keys: set = set()
+                existing_url_keys: set = set()
+                for e in existing:
+                    if not isinstance(e, dict):
+                        continue
+                    e_type = e.get("type")
+                    if e_type == "file":
+                        fp = e.get("file_path") or ""
+                        lb = e.get("label") or ""
+                        if fp:
+                            existing_file_keys.add(f"path:{fp}")
+                        if lb:
+                            existing_file_keys.add(f"name:{lb}")
+                    elif e_type == "commit":
+                        ch = e.get("commit_hash") or ""
+                        if ch:
+                            existing_commit_keys.add(ch)
+                    elif e_type == "url":
+                        u = e.get("url") or ""
+                        if u:
+                            existing_url_keys.add(u)
+
+                filtered_new: list = []
+                for art in artifacts:
+                    a_type = art.get("type")
+                    if a_type == "file":
+                        fp = art.get("file_path") or ""
+                        lb = art.get("label") or ""
+                        if (fp and f"path:{fp}" in existing_file_keys) or (
+                            lb and f"name:{lb}" in existing_file_keys
+                        ):
+                            continue
+                        if fp:
+                            existing_file_keys.add(f"path:{fp}")
+                        if lb:
+                            existing_file_keys.add(f"name:{lb}")
+                    elif a_type == "commit":
+                        ch = art.get("commit_hash") or ""
+                        if ch and ch in existing_commit_keys:
+                            continue
+                        if ch:
+                            existing_commit_keys.add(ch)
+                    elif a_type == "url":
+                        u = art.get("url") or ""
+                        if u and u in existing_url_keys:
+                            continue
+                        if u:
+                            existing_url_keys.add(u)
+                    filtered_new.append(art)
+
+                if not filtered_new:
+                    return
+
+                # 统一代入产物在线查看 URL：凡是 file:// 或空 URL 且有 file_path
+                # 的产物，都指向前端 /docs/view 页面，由其调用后端
+                # /api/work-items/{item_id}/artifacts/{art_id}/content 拉取
+                # Markdown 文本并渲染。title 使用产物 label 经 URL 编码。
+                for art in filtered_new:
+                    try:
+                        url_val = art.get("url") or ""
+                        file_path_val = art.get("file_path") or ""
+                        art_id = art.get("id") or ""
+                        if file_path_val and art_id and (
+                            not url_val or url_val.startswith("file://")
+                        ):
+                            content_path = (
+                                f"/api/work-items/{work_item_id}"
+                                f"/artifacts/{art_id}/content"
+                            )
+                            label = art.get("label") or os.path.basename(file_path_val)
+                            art["url"] = (
+                                f"/docs/view?url={quote(content_path, safe='')}"
+                                f"&title={quote(str(label), safe='')}"
+                            )
+                    except Exception:
+                        continue
+
+                existing.extend(filtered_new)
+                metadata["artifacts"] = existing
+
+                await session.execute(
+                    text("UPDATE work_items SET metadata = :meta WHERE id = :id"),
+                    {"id": work_item_id, "meta": json.dumps(metadata, ensure_ascii=False)},
+                )
+                await session.commit()
+        except Exception as exc:
+            logger.warning(
+                "Failed to save artifacts for work_item %s: %s", work_item_id, exc,
+            )
+            return
+
+        logger.info(
+            "[work_item] saved %d artifact(s) for item=%s task=%s",
+            len(artifacts), work_item_id[:8], task_id[:8],
+        )
 
     async def on_work_item_task_completed(self, task_id: str, result: str):
         """
@@ -1166,7 +1796,11 @@ class WorkItemService:
         item_id = mapping["work_item_id"]
         current_node_id = mapping["to_node_id"]
 
-        # Agent 完成后在 worktree 中 commit 改动（如果有）
+        # Agent 完成后在 worktree 中 commit 改动（如果有），并捕获 commit_hash 供产物提取使用
+        commit_hash: Optional[str] = None
+        worktree_path: str = ""
+        branch_name_val: str = ""
+        changed_files: List[str] = []
         async with async_session_factory() as session:
             task_row_result = await session.execute(
                 text("SELECT worktree_path, branch_name FROM tasks WHERE id = :id"),
@@ -1183,13 +1817,48 @@ class WorkItemService:
                 if wt.exists():
                     try:
                         if await has_git_changes(wt):
-                            await commit_changes(wt, f"tide: work item {item_id} - agent completed")
-                            logger.info("[work_item] auto-committed changes in worktree: %s", worktree_path)
+                            commit_hash = await commit_changes(
+                                wt, f"tide: work item {item_id} - agent completed"
+                            )
+                            logger.info(
+                                "[work_item] auto-committed changes in worktree: %s (commit=%s)",
+                                worktree_path, (commit_hash or "")[:7],
+                            )
                     except Exception as exc:
                         logger.warning("[work_item] auto-commit failed: %s", exc)
+                    # 获取此 commit 变更的文件列表，供产物提取使用
+                    if commit_hash:
+                        try:
+                            changed_files = await self._get_commit_changed_files(
+                                worktree_path, commit_hash
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "[work_item] failed to enumerate changed files: %s", exc,
+                            )
 
-        # 加载工作项
+        # 提前加载工作项，以便提取产物时获取 project_id。同时后续需要检查节点一致性。
         item = await self.get_work_item(item_id)
+
+        # 提取产物并保存到 work_item.metadata.artifacts（容错，失败不影响主流程）
+        if result:
+            try:
+                await self._extract_and_save_artifacts(
+                    item_id,
+                    task_id,
+                    result,
+                    commit_hash=commit_hash,
+                    branch_name=branch_name_val or None,
+                    project_id=(item or {}).get("project_id"),
+                    changed_files=changed_files,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[work_item] artifact extraction failed for item=%s task=%s: %s",
+                    item_id[:8], task_id[:8], exc,
+                )
+
+        # 如果工作项不存在，提前返回
         if not item:
             logger.info("Work item %s not found, abort auto-advance.", (item_id or "")[:8])
             return
@@ -1468,6 +2137,45 @@ class WorkItemService:
             )
             await session.commit()
             return result.rowcount > 0
+
+    async def update_project_metadata(
+        self, project_id: str, metadata: dict
+    ) -> None:
+        """UPSERT project_settings.metadata 字段。
+
+        - 仅写入 metadata + updated_at；workflow_id / default_assignee 等其他字段不受影响。
+        """
+        now = _now_iso()
+        meta_json = json.dumps(metadata or {}, ensure_ascii=False)
+        async with async_session_factory() as session:
+            await session.execute(
+                text("""
+                    INSERT INTO project_settings (project_id, metadata, updated_at)
+                    VALUES (:project_id, :metadata, :updated_at)
+                    ON CONFLICT(project_id) DO UPDATE SET
+                        metadata = :metadata,
+                        updated_at = :updated_at
+                """),
+                {
+                    "project_id": project_id,
+                    "metadata": meta_json,
+                    "updated_at": now,
+                },
+            )
+            await session.commit()
+
+    async def get_project_git_config(self, project_id: str) -> dict:
+        """快捷获取项目的 Git 仓库配置；未配置返回空 dict。"""
+        settings = await self.get_project_settings(project_id)
+        if not settings:
+            return {}
+        metadata = settings.get("metadata") or {}
+        if isinstance(metadata, str):
+            metadata = _safe_json_loads(metadata, {})
+        if not isinstance(metadata, dict):
+            return {}
+        cfg = metadata.get("git_config") or {}
+        return cfg if isinstance(cfg, dict) else {}
 
     # ── 看板数据 ─────────────────────────────────────────
 

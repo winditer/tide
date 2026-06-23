@@ -139,9 +139,12 @@ class WorkflowEngine:
 
         # 5. 缓存运行上下文
         self._runs[run_id] = {
+            "id": run_id,
             "workflow_id": workflow_id,
             "workspace_id": wf["workspace_id"],
+            "status": "running",
             "definition": {"nodes": nodes, "edges": edges},
+            "context": context,
         }
 
         await ws_hub.broadcast(
@@ -378,6 +381,38 @@ class WorkflowEngine:
 
         # 5. 处理结果
         if success:
+            # 合并成功后，检查是否需要 auto push
+            auto_push = data.get("autoPush", False)
+            if auto_push:
+                project_id = (
+                    context.get("project_id", "")
+                    or context.get("start", {}).get("input", {}).get("project_id", "")
+                )
+                if project_id:
+                    from backend.services.work_item_service import work_item_service
+                    git_config = await work_item_service.get_project_git_config(project_id)
+                    repo_url = git_config.get("repo_url", "")
+                    if repo_url:
+                        from backend.runtime.git_utils import git_ensure_remote, git_push
+                        remote_ok = await git_ensure_remote(repo_root, repo_url)
+                        if remote_ok:
+                            push_ok, push_output = await git_push(
+                                repo_root, target_branch, git_config=git_config
+                            )
+                            if not push_ok:
+                                logger.warning(
+                                    "[workflow] auto push failed for %s: %s",
+                                    target_branch, push_output,
+                                )
+                            else:
+                                logger.info(
+                                    "[workflow] auto push success: branch=%s", target_branch,
+                                )
+                        else:
+                            logger.warning(
+                                "[workflow] failed to ensure remote for %s", repo_url,
+                            )
+
             result = json.dumps({
                 "merged": True,
                 "source": source_branch,
@@ -422,7 +457,13 @@ class WorkflowEngine:
                 await self._handle_node_failure(run_id, node, error_detail)
 
     async def _execute_agent_node(self, run_id: str, node: dict, context: dict):
-        """Agent 节点：创建 task 记录 + 真实 Agent CLI 执行 + 完成回调。"""
+        """Agent 节点：创建 task 记录 + 真实 Agent CLI 执行 + 完成回调。
+
+        当 ``agentId`` 以 ``a2a:`` 开头时，路由到远程 A2A Agent，跳过本地 CLI
+        的可用性检查与 full_auto/沙箱配置；上游节点输出会以上下文块的形式自动
+        附加到 prompt（仅当模板未显式引用上游节点时），以便远程 Agent 通过
+        A2AAdapter 的 ``_build_context_parts`` 拿到关联上下文。
+        """
         node_id = node["id"]
         data = node.get("data", {})
         agent_id = data.get("agentId") or data.get("agent_id") or "codex"
@@ -430,6 +471,17 @@ class WorkflowEngine:
         prompt_template = data.get("promptTemplate") or data.get("prompt") or ""
         prompt = self._render_template(prompt_template, context)
         cwd = data.get("cwd") or str(Path.cwd())
+
+        # 远程 A2A Agent：若 prompt 模板未引用上游节点，自动附加上游输出
+        if agent_id.startswith("a2a:"):
+            upstream_outputs = self._collect_upstream_outputs(run_id, node_id, context)
+            referenced = any(uid in (prompt_template or "") for uid, _ in upstream_outputs)
+            if upstream_outputs and not referenced:
+                ctx_block = "\n\n".join(
+                    f"### 来自上游节点 `{uid}` 的输出\n{out}"
+                    for uid, out in upstream_outputs
+                )
+                prompt = f"{prompt}\n\n## 上游节点上下文\n{ctx_block}".strip()
 
         run_info = self._runs.get(run_id) or {}
         workspace_id = run_info.get("workspace_id") or self._get_workspace_id(run_id)
@@ -495,28 +547,32 @@ class WorkflowEngine:
     ):
         """真实 Agent CLI 执行（替代模拟）。
 
-        - 通过 AgentExecutor 流式执行 Agent CLI；
-        - 若 CLI 不可用，标记任务失败而非伪造成功；
+        - 本地 Agent：检查适配器与 CLI binary 是否可用；full_auto 执行；
+        - 远程 A2A Agent（``a2a:`` 前缀）：跳过本地 CLI 检查与 full_auto/沙箱配置，
+          由 ``executor.run_task`` 内部路由到远程执行；
         - 完成后更新 tasks 表并通知 DAG 引擎推进。
         """
-        # 检查 Agent CLI 是否可用，缺少则显式失败
-        adapter = AGENT_ADAPTERS.get(agent_id)
-        if adapter is None:
-            msg = (
-                f"Unsupported agent_id: {agent_id!r}. "
-                f"Available agents: {', '.join(sorted(AGENT_ADAPTERS))}"
-            )
-            await self._finalize_task(task_id, "failed", msg)
-            await self.on_task_failed(task_id, msg)
-            return
-        if not adapter.bin_name or shutil.which(adapter.bin_name) is None:
-            msg = (
-                f"Agent CLI '{adapter.bin_name}' not found in PATH. "
-                "Install it or use a different agent."
-            )
-            await self._finalize_task(task_id, "failed", msg)
-            await self.on_task_failed(task_id, msg)
-            return
+        is_remote = agent_id.startswith("a2a:")
+
+        # 本地 Agent：检查 Agent CLI 是否可用，缺少则显式失败
+        if not is_remote:
+            adapter = AGENT_ADAPTERS.get(agent_id)
+            if adapter is None:
+                msg = (
+                    f"Unsupported agent_id: {agent_id!r}. "
+                    f"Available agents: {', '.join(sorted(AGENT_ADAPTERS))}"
+                )
+                await self._finalize_task(task_id, "failed", msg)
+                await self.on_task_failed(task_id, msg)
+                return
+            if not adapter.bin_name or shutil.which(adapter.bin_name) is None:
+                msg = (
+                    f"Agent CLI '{adapter.bin_name}' not found in PATH. "
+                    "Install it or use a different agent."
+                )
+                await self._finalize_task(task_id, "failed", msg)
+                await self.on_task_failed(task_id, msg)
+                return
 
         output_parts: list[str] = []
         final_status = "completed"
@@ -527,7 +583,7 @@ class WorkflowEngine:
                 prompt=prompt,
                 cwd=cwd,
                 model=model,
-                full_auto=True,
+                full_auto=not is_remote,
             ):
                 if event.type in ("output", "tool_output", "progress"):
                     if event.content:
@@ -589,25 +645,68 @@ class WorkflowEngine:
     ) -> Optional[str]:
         """评估条件，沿匹配的 edge 触发下游。"""
         node_id = node["id"]
-        conditions = node.get("data", {}).get("conditions") or []
-        edges = self._runs.get(run_id, {}).get("definition", {}).get("edges", [])
-        nodes = self._runs.get(run_id, {}).get("definition", {}).get("nodes", [])
-
-        target_edge_id = await self._evaluate_condition(conditions, context)
+        data = node.get("data", {}) or {}
+        conditions = data.get("conditions") or []
+        run_info = await self._ensure_run_loaded(run_id) or {}
+        edges = run_info.get("definition", {}).get("edges", [])
+        nodes = run_info.get("definition", {}).get("nodes", [])
+        outgoing = [e for e in edges if e.get("source") == node_id]
 
         chosen_edge = None
-        if target_edge_id:
-            chosen_edge = next((e for e in edges if e.get("id") == target_edge_id), None)
 
-        # 如果没有匹配，使用 default 边（label == 'default' 或 isDefault）
+        if conditions:
+            # 多条件数组模式：根据 conditions[i].targetEdge 匹配出边
+            target_edge_id = await self._evaluate_condition(conditions, context)
+            if target_edge_id:
+                chosen_edge = next(
+                    (e for e in edges if e.get("id") == target_edge_id), None
+                )
+        else:
+            # 单条件扁平字段模式（前端 PropertyPanel 保存格式）：
+            # data: { field, operator, value }
+            field = data.get("field", "")
+            if field:
+                op = data.get("operator", "eq")
+                expected = data.get("value")
+                actual = self._resolve_path(field, context)
+                matched = self._compare(actual, op, expected)
+                # 条件 TRUE → sourceHandle == 'yes'；FALSE → sourceHandle == 'no'
+                handle = "yes" if matched else "no"
+                logger.info(
+                    "[Condition] node=%s field=%s op=%s actual=%r expected=%r matched=%s handle=%s",
+                    node_id, field, op, actual, expected, matched, handle,
+                )
+                chosen_edge = next(
+                    (e for e in outgoing if e.get("sourceHandle") == handle),
+                    None,
+                )
+
+        # 如果没有匹配，使用 default 边（label == 'default' / 'no' / '否' / 'else' 或 isDefault，或 sourceHandle == 'no'）
         if not chosen_edge:
-            outgoing = [e for e in edges if e.get("source") == node_id]
             chosen_edge = next(
-                (e for e in outgoing if e.get("data", {}).get("isDefault") or e.get("label") in ("default", "否", "else")),
+                (
+                    e for e in outgoing
+                    if e.get("data", {}).get("isDefault")
+                    or (e.get("label") or "").lower() in ("default", "no", "否", "else")
+                ),
                 None,
             )
-            if not chosen_edge and outgoing:
-                chosen_edge = outgoing[0]
+            if not chosen_edge:
+                chosen_edge = next(
+                    (e for e in outgoing if e.get("sourceHandle") == "no"),
+                    None,
+                )
+            if not chosen_edge:
+                # 没有匹配且没有 default 边：标记节点失败，按 onFailure 策略处理
+                logger.warning(
+                    "Condition node %s: no condition matched and no default edge found",
+                    node_id,
+                )
+                await self._update_node_status(
+                    run_id, node_id, "failed", error="No condition matched"
+                )
+                await self._handle_node_failure(run_id, node, "No condition matched")
+                return "no-match"
 
         if not chosen_edge:
             return "no-edge-matched"
@@ -622,7 +721,7 @@ class WorkflowEngine:
     async def _execute_next_nodes(
         self, run_id: str, completed_node_id: str, context: dict
     ):
-        run_info = self._runs.get(run_id)
+        run_info = await self._ensure_run_loaded(run_id)
         if not run_info:
             return
         edges = run_info["definition"]["edges"]
@@ -651,6 +750,11 @@ class WorkflowEngine:
             return
         run_id, node_id = link
 
+        # 服务重启后内存缓存可能 miss，从 DB 重建
+        if not await self._ensure_run_loaded(run_id):
+            logger.error("on_task_completed: run %s not found in cache or DB", run_id)
+            return
+
         await self._update_node_status(run_id, node_id, "completed", output=result)
         await ws_hub.broadcast(
             "workflows",
@@ -672,8 +776,8 @@ class WorkflowEngine:
         run_id, node_id = link
         await self._update_node_status(run_id, node_id, "failed", error=error)
 
-        # 查询节点配置，应用 onFailure 策略
-        run_info = self._runs.get(run_id) or {}
+        # 查询节点配置，应用 onFailure 策略（从 DB 恢复以应对服务重启）
+        run_info = await self._ensure_run_loaded(run_id) or {}
         nodes = run_info.get("definition", {}).get("nodes", [])
         node = next((n for n in nodes if n["id"] == node_id), None)
         await self._handle_node_failure(run_id, node, error)
@@ -681,6 +785,12 @@ class WorkflowEngine:
     async def on_approval_resolved(
         self, run_id: str, node_id: str, approved: bool, reason: str = ""
     ):
+        # 服务重启后内存缓存可能 miss，从 DB 重建
+        run_info = await self._ensure_run_loaded(run_id)
+        if not run_info:
+            logger.error("on_approval_resolved: run %s not found in cache or DB", run_id)
+            return
+
         if approved:
             await self._update_node_status(
                 run_id, node_id, "completed", output="approved"
@@ -691,13 +801,28 @@ class WorkflowEngine:
             await self._execute_next_nodes(run_id, node_id, context)
             return
 
+        # 拒绝时：审批节点视为正常完成（拒绝是业务正常流），
+        # 写入 output="rejected" 到 context，让下游 Condition 节点可以判断走向。
         await self._update_node_status(
-            run_id, node_id, "failed", error=reason or "rejected"
+            run_id, node_id, "completed", output="rejected"
         )
-        run_info = self._runs.get(run_id) or {}
+        context = await self._update_run_context(
+            run_id, node_id, {"output": "rejected", "reason": reason}
+        )
+        logger.info(
+            "[Approval] run=%s node=%s rejected, context after update: %s",
+            run_id, node_id, context.get(node_id),
+        )
         nodes = run_info.get("definition", {}).get("nodes", [])
         node = next((n for n in nodes if n["id"] == node_id), None)
-        await self._handle_node_failure(run_id, node, reason or "rejected")
+        # 审批节点的 onFailure 默认 "continue"：拒绝后继续执行下游分支
+        on_failure = (
+            node.get("data", {}).get("onFailure", "continue") if node else "abort"
+        )
+        if on_failure == "continue":
+            await self._execute_next_nodes(run_id, node_id, context)
+        else:
+            await self._fail_run(run_id, reason or "rejected")
 
     async def on_merge_resolved(
         self, run_id: str, node_id: str, resolved: bool, message: str = ""
@@ -710,6 +835,11 @@ class WorkflowEngine:
             resolved: 是否已解决（True=合并完成，False=放弃合并）
             message: 可选的备注信息
         """
+        # 服务重启后内存缓存可能 miss，从 DB 重建
+        if not await self._ensure_run_loaded(run_id):
+            logger.error("on_merge_resolved: run %s not found in cache or DB", run_id)
+            return
+
         if resolved:
             result = json.dumps({
                 "merged": True,
@@ -730,6 +860,68 @@ class WorkflowEngine:
                 await self._handle_node_failure(run_id, node, error)
 
     # ── helpers: persistence ─────────────────────────────
+
+    async def _ensure_run_loaded(self, run_id: str) -> Optional[dict]:
+        """确保 run 在内存缓存中。缓存 miss 时从 DB 重建。
+
+        服务重启后，``self._runs`` 是空的；当外部回调（审批、任务完成、合并解决等）
+        到达时，需要从 ``workflow_runs`` + ``workflows`` 表恢复运行上下文，
+        否则所有等待中的工作流都会断裂。
+
+        Returns:
+            缓存中的 run_data（包含 id/workflow_id/workspace_id/status/definition/context）；
+            run 不存在时返回 None。即使状态为 completed/failed 也会返回，由调用方判断。
+        """
+        cached = self._runs.get(run_id)
+        if cached:
+            return cached
+
+        async with async_session_factory() as session:
+            run_row = (
+                await session.execute(
+                    text(
+                        """
+                        SELECT id, workflow_id, workspace_id, status, context
+                        FROM workflow_runs WHERE id = :id
+                        """
+                    ),
+                    {"id": run_id},
+                )
+            ).fetchone()
+            if not run_row:
+                return None
+            run_m = dict(run_row._mapping)
+
+            wf_row = (
+                await session.execute(
+                    text("SELECT definition FROM workflows WHERE id = :id"),
+                    {"id": run_m["workflow_id"]},
+                )
+            ).fetchone()
+
+        if not wf_row:
+            logger.error(
+                "_ensure_run_loaded: workflow %s referenced by run %s not found",
+                run_m["workflow_id"], run_id,
+            )
+            return None
+
+        definition = _safe_json_loads(
+            dict(wf_row._mapping).get("definition"), {"nodes": [], "edges": []}
+        )
+        context = _safe_json_loads(run_m.get("context"), {})
+
+        run_data = {
+            "id": run_m["id"],
+            "workflow_id": run_m["workflow_id"],
+            "workspace_id": run_m["workspace_id"],
+            "status": run_m["status"],
+            "definition": definition,
+            "context": context,
+        }
+        self._runs[run_id] = run_data
+        logger.info("_ensure_run_loaded: restored run %s from DB (status=%s)", run_id, run_m["status"])
+        return run_data
 
     async def _update_node_status(
         self,
@@ -771,7 +963,12 @@ class WorkflowEngine:
     async def _update_run_context(
         self, run_id: str, node_id: str, node_data: dict
     ) -> dict:
-        """合并节点输出到 context["<node_id>"]，并持久化。返回最新 context。"""
+        """合并节点输出到 context["<node_id>"]，并持久化。返回最新 context。
+
+        关键：写入 DB 后必须同步更新 ``self._runs[run_id]["context"]`` 内存缓存，
+        否则后续从缓存读取 context 的代码路径（如 ``_handle_node_failure``、
+        ``_collect_upstream_outputs``）会拿到旧值，导致条件分支等场景误判。
+        """
         async with async_session_factory() as session:
             row = (
                 await session.execute(
@@ -788,6 +985,10 @@ class WorkflowEngine:
                 {"id": run_id, "ctx": json.dumps(ctx)},
             )
             await session.commit()
+
+        # 同步更新内存缓存，保证 self._runs[run_id]["context"] 与 DB 一致
+        if run_id in self._runs:
+            self._runs[run_id]["context"] = ctx
         return ctx
 
     async def _complete_run(self, run_id: str):
@@ -846,7 +1047,7 @@ class WorkflowEngine:
             on_failure = node.get("data", {}).get("onFailure", "abort")
 
         if on_failure == "continue":
-            run_info = self._runs.get(run_id) or {}
+            run_info = await self._ensure_run_loaded(run_id) or {}
             await self._execute_next_nodes(run_id, node["id"] if node else "", run_info.get("context", {}))
             return
 
@@ -874,7 +1075,7 @@ class WorkflowEngine:
         self, run_id: str, node_id: str
     ) -> bool:
         """检查 parallel_join 的所有上游节点是否全部 completed。"""
-        run_info = self._runs.get(run_id) or {}
+        run_info = await self._ensure_run_loaded(run_id) or {}
         edges = run_info.get("definition", {}).get("edges", [])
         upstream_ids = [e["source"] for e in edges if e.get("target") == node_id]
         if not upstream_ids:
@@ -900,6 +1101,32 @@ class WorkflowEngine:
 
     def _get_workspace_id(self, run_id: str) -> str:
         return (self._runs.get(run_id) or {}).get("workspace_id") or "default"
+
+    def _collect_upstream_outputs(
+        self, run_id: str, node_id: str, context: dict
+    ) -> list[tuple[str, str]]:
+        """返回当前节点的上游节点输出列表，形式为 [(node_id, output_text), ...]。
+
+        仅返回上游在 ``context`` 中已设置 ``output`` 且为非空的节点。
+        用于远程 A2A Agent 调用前自动注入上下文。
+        """
+        run_info = self._runs.get(run_id) or {}
+        edges = run_info.get("definition", {}).get("edges", [])
+        upstream_ids = [e["source"] for e in edges if e.get("target") == node_id]
+        outputs: list[tuple[str, str]] = []
+        for uid in upstream_ids:
+            node_ctx = context.get(uid) if isinstance(context, dict) else None
+            if not isinstance(node_ctx, dict):
+                continue
+            out = node_ctx.get("output")
+            if out is None or out == "":
+                continue
+            if isinstance(out, (dict, list)):
+                out_text = json.dumps(out, ensure_ascii=False)
+            else:
+                out_text = str(out)
+            outputs.append((uid, out_text))
+        return outputs
 
     # ── DAG validation ───────────────────────────────────
 

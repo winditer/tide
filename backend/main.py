@@ -36,6 +36,7 @@ from backend.api.approvals import router as approvals_router
 from backend.api.auth import router as auth_router
 from backend.api.admin import router as admin_router
 from backend.api.project_members import router as project_members_router
+from backend.api.remote_agents import router as remote_agents_router
 from backend.services.auth_service import auth_service
 
 logger = logging.getLogger("tide.main")
@@ -114,6 +115,7 @@ app.include_router(approvals_router)
 app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(project_members_router)
+app.include_router(remote_agents_router)
 
 
 @app.get("/health")

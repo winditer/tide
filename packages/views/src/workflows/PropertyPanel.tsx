@@ -1,7 +1,15 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Button, Input, Select } from "@tide/ui";
-import { useProjectMembers, type WorkflowNode, type WorkflowNodeType } from "@tide/core";
+import {
+  useProjectMembers,
+  getAgents,
+  type AgentInfo,
+  type AgentSkill,
+  type WorkflowNode,
+  type WorkflowNodeType,
+} from "@tide/core";
 import { STAGE_CATEGORY_OPTIONS } from "./node-tones";
 
 const TYPE_LABEL: Record<WorkflowNodeType, string> = {
@@ -41,11 +49,15 @@ const OPERATOR_OPTIONS = [
   { label: "不包含 (⊅)", value: "not_contains" },
 ];
 
-const AGENT_OPTIONS = [
+const LOCAL_AGENT_OPTIONS = [
   { label: "Codex", value: "codex" },
   { label: "Claude Code", value: "claude" },
   { label: "Qoder", value: "qoder" },
 ];
+
+function isRemoteAgentId(id: string | undefined | null): boolean {
+  return typeof id === "string" && id.startsWith("a2a:");
+}
 
 interface PropertyPanelProps {
   node: WorkflowNode | null;
@@ -65,6 +77,27 @@ export function PropertyPanel({
 }: PropertyPanelProps) {
   const { data: membersData } = useProjectMembers(projectId);
   const members = membersData?.members ?? [];
+
+  // 远程 Agent 列表：组件挂载时拉取一次，失败时降级为空数组仅显示本地 Agent。
+  const [remoteAgents, setRemoteAgents] = useState<AgentInfo[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    getAgents()
+      .then((res) => {
+        if (cancelled) return;
+        const remotes = (res?.agents ?? []).filter(
+          (a) => a.type === "remote" || isRemoteAgentId(a.id),
+        );
+        setRemoteAgents(remotes);
+      })
+      .catch(() => {
+        // 降级：保持空列表，仅展示本地 Agent
+        if (!cancelled) setRemoteAgents([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   if (!node) {
     return (
       <div className="flex h-full w-[300px] flex-col border-l border-border/50 bg-card">
@@ -121,75 +154,97 @@ export function PropertyPanel({
             />
           </FormGroup>
 
-          {t === "agent" && (
-            <>
-              <FormGroup label="模型">
-                <Input
-                  value={String(data.model ?? "")}
-                  disabled={readOnly}
-                  onChange={(e) => update({ model: e.target.value })}
-                  placeholder="留空使用默认模型"
-                  className="rounded-lg"
-                />
-              </FormGroup>
-              <FormGroup label="Agent">
-                <Select
-                  options={AGENT_OPTIONS}
-                  value={String(data.agent_id ?? "codex")}
-                  disabled={readOnly}
-                  onChange={(e) => update({ agent_id: e.target.value })}
-                />
-              </FormGroup>
-              <FormGroup label="Prompt">
-                <textarea
-                  disabled={readOnly}
-                  className="flex min-h-[120px] w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-[12px] leading-relaxed text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-                  value={String(data.prompt ?? "")}
-                  onChange={(e) => update({ prompt: e.target.value })}
-                  placeholder="如留空则默认使用 prev_output"
-                />
-                <div className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
-                  可用变量：<span className="text-emerald-600">{"{prev_output}"}</span> 上一节点输出 · <span className="text-emerald-600">{"{item.title}"}</span> 工作项标题 · <span className="text-emerald-600">{"{item.description}"}</span> 描述
-                </div>
-              </FormGroup>
-              <FormGroup label="工作目录 (cwd)">
-                <Input
-                  value={String(data.cwd ?? "")}
-                  disabled={readOnly}
-                  onChange={(e) => update({ cwd: e.target.value })}
-                  placeholder="留空则使用项目根路径"
-                  className="rounded-lg font-mono text-xs"
-                />
-              </FormGroup>
-              <FormGroup label="高级选项">
-                <label
-                  className={`flex items-start gap-2.5 rounded-lg border border-input bg-background px-3 py-2.5 transition-colors ${
-                    readOnly
-                      ? "cursor-not-allowed opacity-60"
-                      : "cursor-pointer hover:bg-muted/40"
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    className="mt-0.5 h-3.5 w-3.5 accent-primary"
-                    checked={data.useWorktree !== false}
+          {t === "agent" && (() => {
+            const currentAgentId = String(data.agent_id ?? data.agentId ?? "codex");
+            const isRemote = isRemoteAgentId(currentAgentId);
+            const selectedRemote = isRemote
+              ? remoteAgents.find((a) => a.id === currentAgentId)
+              : undefined;
+            return (
+              <>
+                {!isRemote && (
+                  <FormGroup label="模型">
+                    <Input
+                      value={String(data.model ?? "")}
+                      disabled={readOnly}
+                      onChange={(e) => update({ model: e.target.value })}
+                      placeholder="留空使用默认模型"
+                      className="rounded-lg"
+                    />
+                  </FormGroup>
+                )}
+                <FormGroup label="Agent">
+                  <AgentSelect
+                    value={currentAgentId}
                     disabled={readOnly}
-                    onChange={(e) =>
-                      update({ useWorktree: e.target.checked })
+                    remoteAgents={remoteAgents}
+                    onChange={(next) =>
+                      update({
+                        agent_id: next,
+                        // 同步写入 camelCase 别名，保证与后端/其他调用点兼容
+                        agentId: next,
+                      })
                     }
                   />
-                  <div className="min-w-0 flex-1">
-                    <div className="text-[12px] font-medium text-foreground">
-                      启用工作区隔离
-                    </div>
-                    <div className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
-                      Agent 将在独立的 Git Worktree 中执行，避免多工作项并行冲突
-                    </div>
+                </FormGroup>
+                {isRemote && (
+                  <FormGroup label="Skills">
+                    <RemoteAgentSkills agent={selectedRemote} />
+                  </FormGroup>
+                )}
+                <FormGroup label="Prompt">
+                  <textarea
+                    disabled={readOnly}
+                    className="flex min-h-[120px] w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-[12px] leading-relaxed text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+                    value={String(data.prompt ?? "")}
+                    onChange={(e) => update({ prompt: e.target.value })}
+                    placeholder="如留空则默认使用 prev_output"
+                  />
+                  <div className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+                    可用变量：<span className="text-emerald-600">{"{prev_output}"}</span> 上一节点输出 · <span className="text-emerald-600">{"{item.title}"}</span> 工作项标题 · <span className="text-emerald-600">{"{item.description}"}</span> 描述
                   </div>
-                </label>
-              </FormGroup>
-            </>
-          )}
+                </FormGroup>
+                {!isRemote && (
+                  <FormGroup label="工作目录 (cwd)">
+                    <Input
+                      value={String(data.cwd ?? "")}
+                      disabled={readOnly}
+                      onChange={(e) => update({ cwd: e.target.value })}
+                      placeholder="留空则使用项目根路径"
+                      className="rounded-lg font-mono text-xs"
+                    />
+                  </FormGroup>
+                )}
+                <FormGroup label="高级选项">
+                  <label
+                    className={`flex items-start gap-2.5 rounded-lg border border-input bg-background px-3 py-2.5 transition-colors ${
+                      readOnly
+                        ? "cursor-not-allowed opacity-60"
+                        : "cursor-pointer hover:bg-muted/40"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 h-3.5 w-3.5 accent-primary"
+                      checked={data.useWorktree !== false}
+                      disabled={readOnly}
+                      onChange={(e) =>
+                        update({ useWorktree: e.target.checked })
+                      }
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[12px] font-medium text-foreground">
+                        启用工作区隔离
+                      </div>
+                      <div className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
+                        Agent 将在独立的 Git Worktree 中执行，避免多工作项并行冲突
+                      </div>
+                    </div>
+                  </label>
+                </FormGroup>
+              </>
+            );
+          })()}
 
           {t === "approval" && (
             <FormGroup label="审批人">
@@ -344,6 +399,21 @@ export function PropertyPanel({
                     <div className="text-[12px] font-medium text-foreground">合并后删除源分支</div>
                   </div>
                 </label>
+                <label className={`mt-2 flex items-start gap-2.5 rounded-lg border border-input bg-background px-3 py-2.5 transition-colors ${readOnly ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:bg-muted/40"}`}>
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 h-3.5 w-3.5 accent-primary"
+                    checked={data.autoPush === true}
+                    disabled={readOnly}
+                    onChange={(e) => update({ autoPush: e.target.checked })}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[12px] font-medium text-foreground">合并后自动推送</div>
+                    <div className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
+                      合并成功后自动 push 到远程仓库（需在项目设置中配置仓库地址）
+                    </div>
+                  </div>
+                </label>
               </FormGroup>
             </>
           )}
@@ -448,6 +518,127 @@ interface ApproverPickerProps {
   value: string[];
   disabled?: boolean;
   onChange: (next: string[]) => void;
+}
+
+interface AgentSelectProps {
+  value: string;
+  disabled?: boolean;
+  remoteAgents: AgentInfo[];
+  onChange: (next: string) => void;
+}
+
+/** Agent 选择器：分组展示本地 / 远程 Agent，远程项携带状态色点。 */
+function AgentSelect({
+  value,
+  disabled,
+  remoteAgents,
+  onChange,
+}: AgentSelectProps) {
+  // 如果当前 value 是 a2a:* 但在远程列表中未找到（列表未加载完成或该 Agent 已下架），
+  // 依然作为占位项加入，避免 native select 选中项丢失。
+  const knownRemoteIds = new Set(remoteAgents.map((a) => a.id));
+  const ghostRemote =
+    isRemoteAgentId(value) && !knownRemoteIds.has(value) ? value : null;
+
+  return (
+    <select
+      value={value}
+      disabled={disabled}
+      onChange={(e) => onChange(e.target.value)}
+      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+    >
+      <optgroup label="本地 Agent">
+        {LOCAL_AGENT_OPTIONS.map((opt) => (
+          <option key={opt.value} value={opt.value}>
+            {opt.label}
+          </option>
+        ))}
+      </optgroup>
+      {(remoteAgents.length > 0 || ghostRemote) && (
+        <optgroup label="远程 Agent">
+          {remoteAgents.map((agent) => {
+            const active = (agent.status ?? "").toLowerCase() === "active";
+            // native <option> 不能渲染颜色节点，使用 ● 字符作为状态前缀
+            const dot = active ? "\u{1F7E2}" : "\u26AA";
+            const label = `${dot} ${agent.name || agent.id}`;
+            return (
+              <option key={agent.id} value={agent.id}>
+                {label}
+              </option>
+            );
+          })}
+          {ghostRemote && (
+            <option key={ghostRemote} value={ghostRemote}>
+              {`\u26AA ${ghostRemote}`}
+            </option>
+          )}
+        </optgroup>
+      )}
+    </select>
+  );
+}
+
+/** 远程 Agent skills 只读展示区：帮助用户了解该 Agent 可以完成什么并编写 prompt。 */
+function RemoteAgentSkills({ agent }: { agent: AgentInfo | undefined }) {
+  if (!agent) {
+    return (
+      <div className="rounded-lg border border-border/50 bg-muted/30 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+        未找到该远程 Agent。请确认其是否仍在注册表中且状态为 active。
+      </div>
+    );
+  }
+  const skills: AgentSkill[] = Array.isArray(agent.skills) ? agent.skills : [];
+  if (skills.length === 0) {
+    return (
+      <div className="rounded-lg border border-border/50 bg-muted/30 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+        该 Agent 未声明 skills。可直接在 Prompt 中描述任务。
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-1.5 rounded-lg border border-border/50 bg-muted/20 px-3 py-2.5">
+      {agent.description && (
+        <div className="text-[10px] leading-relaxed text-muted-foreground">
+          {agent.description}
+        </div>
+      )}
+      <ul className="space-y-1.5">
+        {skills.map((skill, idx) => {
+          const name = skill.name || skill.id || `skill-${idx + 1}`;
+          return (
+            <li
+              key={skill.id ?? `${name}-${idx}`}
+              className="rounded-md bg-background/60 px-2 py-1.5"
+            >
+              <div className="text-[11px] font-medium text-foreground">
+                {name}
+              </div>
+              {skill.description && (
+                <div className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
+                  {skill.description}
+                </div>
+              )}
+              {Array.isArray(skill.tags) && skill.tags.length > 0 && (
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {skill.tags.map((tag) => (
+                    <span
+                      key={tag}
+                      className="rounded border border-border/50 bg-background px-1 py-[1px] text-[9px] text-muted-foreground"
+                    >
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      <div className="pt-1 text-[10px] leading-relaxed text-muted-foreground">
+        提示：在 Prompt 中明确描述需要调用的能力，可提高远程 Agent 完成任务的准确率。
+      </div>
+    </div>
+  );
 }
 
 function ApproverPicker({

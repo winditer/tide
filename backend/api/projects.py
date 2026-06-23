@@ -13,24 +13,28 @@ URL-safe 的 Base64 编码确保路径中的 ``/`` 不会破坏路由匹配；�
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import json
+import logging
 import os
 import re
 import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import text
 
-from backend.core.dependencies import get_optional_user
+from backend.core.dependencies import get_current_user, get_optional_user
 from backend.db.engine import async_session_factory
 from backend.models.schemas import ProjectSettingsResponse, ProjectSettingsUpdate
+from backend.runtime.config import ensure_user_dir, project_dir
+from backend.runtime.git_utils import git_clone
 from backend.services import project_discovery
 from backend.services.archive_service import archive_store, resolve_show_archived
 from backend.services.session_discovery import (
@@ -39,6 +43,8 @@ from backend.services.session_discovery import (
     discover_sessions,
 )
 from backend.services.work_item_service import work_item_service
+
+logger = logging.getLogger("tide.api.projects")
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -61,11 +67,11 @@ _REGISTRY_LOCK = threading.Lock()
 
 
 class ProjectCreate(BaseModel):
-    cwd: str
-    name: Optional[str] = None
+    name: str  # 项目名（必填，作为目录名）
+    mode: Literal["new", "clone"] = "new"
+    repo_url: Optional[str] = None  # clone 模式必填
+    branch: Optional[str] = None  # 可选指定分支
     tags: Optional[list[str]] = None
-    # mode == "new" 时为 True：路径不存在时自动 mkdir -p 创建。
-    create_dir: Optional[bool] = False
 
 
 def _parse_project_roots() -> list[str]:
@@ -121,6 +127,90 @@ def _save_registry(items: list[dict]) -> None:
 
 def _registry_index() -> dict[str, dict]:
     return {item["cwd"]: item for item in _load_registry()}
+
+
+# ---------- 项目名校验 ----------
+
+_PROJECT_NAME_PATTERN = re.compile(r"^[\w\u4e00-\u9fff][\w\u4e00-\u9fff\-\.]*$")
+
+
+def _validate_project_name(name: str) -> str:
+    """校验项目名称安全性，返回清理后的名称。"""
+    name = (name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="项目名称不能为空")
+    if ".." in name or "/" in name or "\\" in name:
+        raise HTTPException(status_code=400, detail="项目名称不能包含 .. / \\")
+    if not _PROJECT_NAME_PATTERN.match(name):
+        raise HTTPException(
+            status_code=400,
+            detail="项目名称只能包含字母、数字、中文、-、_、.",
+        )
+    return name
+
+
+def _update_project_status(
+    project_id: str, status: str, error: Optional[str] = None
+) -> None:
+    """更新注册表中项目的状态字段。"""
+    cwd = _decode_id(project_id)
+    with _REGISTRY_LOCK:
+        items = _load_registry()
+        for it in items:
+            if it.get("cwd") == cwd:
+                it["status"] = status
+                it["error"] = error
+                break
+        _save_registry(items)
+
+
+async def _async_clone_project(
+    project_id: str,
+    repo_url: str,
+    target_dir: Path,
+    branch: Optional[str],
+) -> None:
+    """后台异步克隆仓库；完成后更新注册表 status。
+
+    从 ``project_settings.metadata.git_config`` 读取认证配置传给 git_clone，
+    使得 ssh_key / token 模式下创建项目时也能正确鉴权。
+    """
+    git_config: Optional[dict] = None
+    try:
+        git_config = await work_item_service.get_project_git_config(project_id)
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "[projects] load git_config for clone failed: project_id=%s", project_id
+        )
+
+    try:
+        success, msg = await git_clone(
+            repo_url, str(target_dir), branch, git_config=git_config
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(
+            "[projects] async clone crashed: project_id=%s repo=%s",
+            project_id,
+            repo_url,
+        )
+        _update_project_status(project_id, "error", error=f"{type(exc).__name__}: {exc}")
+        return
+
+    if success:
+        _update_project_status(project_id, "ready")
+        logger.info(
+            "[projects] async clone done: project_id=%s target=%s",
+            project_id,
+            target_dir,
+        )
+    else:
+        _update_project_status(project_id, "error", error=msg[:1000] if msg else "clone failed")
+        logger.warning(
+            "[projects] async clone failed: project_id=%s repo=%s msg=%s",
+            project_id,
+            repo_url,
+            msg,
+        )
 
 
 # ---------- ID 编解码 ----------
@@ -233,7 +323,11 @@ def _project_payload(
         (db_stat or {}).get("last_active"),
     )
     agents = list((discovered or {}).get("agents") or [])
-    status = "active" if running > 0 else "idle"
+    runtime_status = "active" if running > 0 else "idle"
+    # 注册表中的生命周期状态：ready / initializing / error
+    # 老数据没有该字段时默认 ready，保持向后兼容。
+    lifecycle_status = (registered or {}).get("status") or "ready"
+    lifecycle_error = (registered or {}).get("error")
 
     # session_count: 由调用方通过 discover_sessions 获取真实数量
     # 如果未提供，回退到 discovered 中的文件扫描计数
@@ -270,7 +364,9 @@ def _project_payload(
         "task_count": task_count,
         "running_tasks": running,
         "last_active": last_active,
-        "status": status,
+        "status": lifecycle_status,
+        "runtime_status": runtime_status,
+        "error": lifecycle_error,
         "agents": agents,
         "session_count": session_count,
         # ``chat_count`` 仅在项目详情接口中精确计算（按会话内容引用匹配）；
@@ -278,6 +374,7 @@ def _project_payload(
         # 调用方传 ``None`` 时这里直接返回 ``None``，前端展示 "—"。
         "chat_count": None if chat_count is None else int(chat_count),
         "registered": bool(registered),
+        "creator_id": (registered or {}).get("creator_id"),
         "tags": (registered or {}).get("tags") or [],
         "archived": bool(archived),
     }
@@ -374,83 +471,154 @@ async def get_project_roots(current_user=Depends(get_optional_user)):
 @router.post("")
 async def create_project(
     body: ProjectCreate,
-    current_user=Depends(get_optional_user),
+    current_user=Depends(get_current_user),
 ):
-    """注册项目（告诉系统关注某个目录，不会执行 git init）。
+    """创建项目（用户目录隔离 + 可选异步 clone）。
 
-    参数 ``create_dir=True`` 时，若路径不存在会自动 mkdir -p；默认 False 要求路径已存在。
+    路径隔离规则：``{TIDE_DATA_DIR}/users/{user_id}/{name}``。
+    - mode == "new"：mkdir + git init，状态直接为 ``ready``；
+    - mode == "clone"：先将条目写入注册表（status=initializing），
+      后台任务完成后更新为 ``ready`` / ``error``。
     """
     _ensure_not_viewer(current_user)
-    raw_cwd = (body.cwd or "").strip()
-    if not raw_cwd:
-        raise HTTPException(status_code=400, detail="cwd is required")
-    path = Path(raw_cwd).expanduser()
-    if not path.exists():
-        if body.create_dir:
-            try:
-                path.mkdir(parents=True, exist_ok=True)
-            except OSError as exc:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Failed to create directory {raw_cwd}: {exc}",
-                ) from exc
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Path does not exist: {raw_cwd}",
-            )
-    elif not path.is_dir():
-        raise HTTPException(
-            status_code=400, detail=f"Path is not a directory: {raw_cwd}"
-        )
-    cwd = str(path.resolve())
-    name = (body.name or path.name or cwd).strip()
+    if not current_user or not current_user.get("id"):
+        raise HTTPException(status_code=401, detail="未登录用户无法创建项目")
 
+    # 1. 校验名称
+    name = _validate_project_name(body.name)
+
+    # 2. 计算路径并检查冲突
+    user_id = current_user["id"]
+    target = project_dir(user_id, name)
+    if target.exists():
+        raise HTTPException(status_code=409, detail=f"项目目录已存在: {name}")
+
+    # 3. 确保用户根目录存在
+    try:
+        ensure_user_dir(user_id)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"无法创建用户目录（请检查 TIDE_DATA_DIR 配置）: {exc}",
+        ) from exc
+
+    # 4. 根据 mode 处理
+    cwd = str(target)
+    if body.mode == "new":
+        try:
+            target.mkdir(parents=True, exist_ok=False)
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"创建项目目录失败: {exc}",
+            ) from exc
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            "init",
+            cwd=cwd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.communicate()
+        if proc.returncode != 0:
+            logger.warning(
+                "[projects] git init returned non-zero: cwd=%s code=%s",
+                cwd,
+                proc.returncode,
+            )
+        status = "ready"
+    else:  # clone
+        if not body.repo_url:
+            raise HTTPException(
+                status_code=400, detail="clone 模式必须提供 repo_url"
+            )
+        status = "initializing"
+
+    # 5. 写入注册表
+    now_iso = datetime.utcnow().isoformat(timespec="seconds") + "Z"
     with _REGISTRY_LOCK:
         items = _load_registry()
         existing = next((it for it in items if it.get("cwd") == cwd), None)
         if existing:
-            existing["name"] = name or existing.get("name") or path.name
-            if body.tags is not None:
-                existing["tags"] = list(body.tags)
+            existing["name"] = name
+            existing["tags"] = list(body.tags or existing.get("tags") or [])
+            existing["creator_id"] = user_id
+            existing["status"] = status
+            existing["error"] = None
         else:
             items.append(
                 {
                     "cwd": cwd,
                     "name": name,
                     "tags": list(body.tags or []),
-                    "added_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                    "creator_id": user_id,
+                    "status": status,
+                    "error": None,
+                    "added_at": now_iso,
                 }
             )
         _save_registry(items)
 
     project_discovery.clear_cache()
-
     project_id = _encode_id(cwd)
 
-    # 创建者自动成为项目 admin，以便后续项目级权限过滤生效
-    if current_user:
-        member_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
-        async with async_session_factory() as session:
-            await session.execute(
-                text(
-                    """
-                    INSERT OR IGNORE INTO project_members
-                        (id, project_id, user_id, role, created_at)
-                    VALUES (:id, :project_id, :user_id, :role, :created_at)
-                    """
-                ),
-                {
-                    "id": member_id,
-                    "project_id": project_id,
-                    "user_id": current_user["id"],
-                    "role": "admin",
-                    "created_at": now,
-                },
-            )
-            await session.commit()
+    # 6. 创建者自动成为项目 admin
+    member_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    async with async_session_factory() as session:
+        await session.execute(
+            text(
+                """
+                INSERT OR IGNORE INTO project_members
+                    (id, project_id, user_id, role, created_at)
+                VALUES (:id, :project_id, :user_id, :role, :created_at)
+                """
+            ),
+            {
+                "id": member_id,
+                "project_id": project_id,
+                "user_id": user_id,
+                "role": "admin",
+                "created_at": now,
+            },
+        )
+        await session.commit()
 
+    # 7. clone 模式：写入 git_config、启动后台克隆
+    if body.mode == "clone":
+        git_config = {
+            "repo_url": body.repo_url,
+            "default_branch": body.branch or "main",
+            "credential_type": "ssh_agent",
+            "auto_push": True,
+        }
+        try:
+            settings = await work_item_service.get_project_settings(project_id)
+            metadata = (settings or {}).get("metadata") or {}
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata) if metadata else {}
+                except json.JSONDecodeError:
+                    metadata = {}
+            if not isinstance(metadata, dict):
+                metadata = {}
+            metadata["git_config"] = git_config
+            await work_item_service.update_project_metadata(project_id, metadata)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "[projects] persist git_config failed: project_id=%s", project_id
+            )
+
+        asyncio.create_task(
+            _async_clone_project(
+                project_id=project_id,
+                repo_url=body.repo_url,
+                target_dir=target,
+                branch=body.branch,
+            )
+        )
+
+    # 8. 返回创建后的项目数据
     discovered_list = project_discovery.discover_projects()
     discovered = next((p for p in discovered_list if p.get("cwd") == cwd), None)
     db_map = await _aggregate_db_stats("default")
@@ -678,3 +846,54 @@ async def remove_project_workflow(
     if not removed:
         raise HTTPException(status_code=404, detail="Project workflow not bound")
     return {"ok": True, "project_id": project_id}
+
+
+# ---------- 项目 Git 仓库配置 ----------
+
+
+class GitConfigUpdate(BaseModel):
+    repo_url: str = ""
+    default_branch: str = "main"
+    # ssh_agent | ssh_key | token
+    credential_type: Literal["ssh_agent", "ssh_key", "token"] = "ssh_agent"
+    auto_push: bool = True
+    ssh_key_path: Optional[str] = None  # ssh_key 模式时的私钥路径
+    access_token: Optional[str] = None  # token 模式时的 Personal Access Token
+
+
+@router.put("/{project_id}/git-config")
+async def set_project_git_config(
+    project_id: str,
+    body: GitConfigUpdate,
+    current_user=Depends(get_optional_user),
+):
+    """设置项目的 Git 仓库配置。写入 ``project_settings.metadata.git_config``。"""
+    _ensure_not_viewer(current_user)
+    settings = await work_item_service.get_project_settings(project_id)
+    metadata = (settings or {}).get("metadata") or {}
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata) if metadata else {}
+        except json.JSONDecodeError:
+            metadata = {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    git_config = body.dict()
+    # 清理无关字段：对应认证方式以外的敏感字段一律置空，避免误用旧值
+    cred_type = git_config.get("credential_type", "ssh_agent")
+    if cred_type != "ssh_key":
+        git_config["ssh_key_path"] = None
+    if cred_type != "token":
+        git_config["access_token"] = None
+    metadata["git_config"] = git_config
+    await work_item_service.update_project_metadata(project_id, metadata)
+    return {"ok": True, "git_config": git_config}
+
+
+@router.get("/{project_id}/git-config")
+async def get_project_git_config(
+    project_id: str,
+    current_user=Depends(get_optional_user),
+):
+    """获取项目的 Git 仓库配置。未配置时返回空对象。"""
+    return await work_item_service.get_project_git_config(project_id)

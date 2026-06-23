@@ -130,6 +130,7 @@ TIDE_ADMIN_USERNAME = os.environ.get("TIDE_ADMIN_USERNAME", "admin")
 TIDE_ADMIN_PASSWORD = os.environ.get("TIDE_ADMIN_PASSWORD", "")
 LARK_APP_REDIRECT_URI = os.environ.get("LARK_APP_REDIRECT_URI", "")
 TIDE_PASSWORD_MIN_LENGTH = int(os.environ.get("TIDE_PASSWORD_MIN_LENGTH", "8"))
+TIDE_DATA_DIR: str = os.getenv("TIDE_DATA_DIR", str(Path.home() / ".tide" / "data"))
 # =================================================
 
 
@@ -152,3 +153,20 @@ def parse_csv_set(value: str) -> set[str]:
         for item in re.split(r"[,;\s]+", str(value or ""))
         if item.strip()
     }
+
+
+def user_projects_root(user_id: str) -> Path:
+    """返回用户的项目根目录 {TIDE_DATA_DIR}/users/{user_id}"""
+    return Path(TIDE_DATA_DIR) / "users" / user_id
+
+
+def project_dir(user_id: str, project_name: str) -> Path:
+    """返回项目目录 {TIDE_DATA_DIR}/users/{user_id}/{project_name}"""
+    return Path(TIDE_DATA_DIR) / "users" / user_id / project_name
+
+
+def ensure_user_dir(user_id: str) -> Path:
+    """确保用户根目录存在，返回路径"""
+    root = user_projects_root(user_id)
+    root.mkdir(parents=True, exist_ok=True)
+    return root

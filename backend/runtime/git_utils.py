@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import shutil
 from pathlib import Path
@@ -26,12 +27,59 @@ from pathlib import Path
 logger = logging.getLogger("tide.git_utils")
 
 
+async def _build_git_env(git_config: dict | None) -> dict:
+    """根据项目的 git_config 构造 git 子进程环境变量。
+
+    支持三种认证方式：
+
+    - ``ssh_agent``（默认）：不注入额外变量，依赖宿主上的 ssh-agent。
+    - ``ssh_key``：通过 ``GIT_SSH_COMMAND`` 指定私钥路径。
+    - ``token``：通过 ``GIT_CONFIG_COUNT`` 注入临时
+      ``credential.helper`` 返回 HTTPS 访问令牌。
+
+    函数本身不涉及 IO，使用 ``async`` 仅为与调用点接口保持一致。
+    """
+    env = os.environ.copy()
+    if not git_config:
+        return env
+
+    cred_type = (git_config.get("credential_type") or "ssh_agent").strip()
+
+    if cred_type == "ssh_key":
+        key_path = (git_config.get("ssh_key_path") or "~/.ssh/id_rsa").strip()
+        # Docker 中 ~ 不会自动展开，这里仅做最大努力 expand
+        expanded = str(Path(key_path).expanduser())
+        env["GIT_SSH_COMMAND"] = (
+            f"ssh -i {expanded} -o StrictHostKeyChecking=no "
+            "-o IdentitiesOnly=yes"
+        )
+
+    elif cred_type == "token":
+        token = (git_config.get("access_token") or "").strip()
+        if token:
+            # 使用 GIT_CONFIG_COUNT 注入临时 credential.helper，
+            # 避免修改全局 .gitconfig。
+            # helper 同时返回 username/password，兼容 GitHub / GitLab / Gitea。
+            helper = (
+                "!f() { echo username=x-access-token; "
+                f"echo password={token}; }}; f"
+            )
+            env["GIT_CONFIG_COUNT"] = "1"
+            env["GIT_CONFIG_KEY_0"] = "credential.helper"
+            env["GIT_CONFIG_VALUE_0"] = helper
+            env["GIT_ASKPASS"] = "/bin/echo"
+            env["GIT_TERMINAL_PROMPT"] = "0"
+
+    # ssh_agent 模式下不需额外环境变量，直接返回
+    return env
+
 # ── 内部辅助 ────────────────────────────────────────────────────────────────
 
 async def _run_git(
     args: list[str],
     cwd: Path | str | None,
     timeout: int,
+    env: dict | None = None,
 ) -> tuple[int, str]:
     """统一执行 ``git`` 子进程并返回 (returncode, stdout+stderr)。"""
     cwd_str = str(cwd) if cwd is not None else None
@@ -40,6 +88,7 @@ async def _run_git(
             "git",
             *args,
             cwd=cwd_str,
+            env=env,
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
@@ -749,3 +798,122 @@ async def cleanup_work_item_worktree(
             )
         else:
             logger.info("[git_utils] work_item branch deleted: %s", branch_name)
+
+
+# ── Remote 操作 ──────────────────────────────────────────────────────────
+
+async def git_push(
+    repo_root: Path,
+    branch: str,
+    remote: str = "origin",
+    git_config: dict | None = None,
+) -> tuple[bool, str]:
+    """推送分支到远程。返回 ``(success, output)``。
+
+    可选参数 ``git_config`` 按项目认证配置注入环境变量。
+    """
+    env = await _build_git_env(git_config)
+    code, output = await _run_git(
+        ["-C", str(repo_root), "push", remote, branch],
+        cwd=None,
+        timeout=60,
+        env=env,
+    )
+    return code == 0, output
+
+
+async def git_fetch(
+    repo_root: Path,
+    remote: str = "origin",
+    git_config: dict | None = None,
+) -> tuple[bool, str]:
+    """从远程拉取更新。返回 ``(success, output)``。
+
+    可选参数 ``git_config`` 按项目认证配置注入环境变量。
+    """
+    env = await _build_git_env(git_config)
+    code, output = await _run_git(
+        ["-C", str(repo_root), "fetch", remote],
+        cwd=None,
+        timeout=60,
+        env=env,
+    )
+    return code == 0, output
+
+
+async def git_remote_url(
+    repo_root: Path, remote: str = "origin"
+) -> str | None:
+    """获取 remote URL；不存在或失败返回 ``None``。"""
+    code, output = await git_command(
+        repo_root, ["remote", "get-url", remote], timeout=5
+    )
+    if code != 0 or not output:
+        return None
+    return output.strip()
+
+
+async def git_ensure_remote(
+    repo_root: Path, url: str, remote: str = "origin"
+) -> bool:
+    """确保 remote 存在且 URL 正确。
+
+    - 不存在 → ``git remote add``
+    - 已存在但 URL 不同 → ``git remote set-url``
+    - 已存在且 URL 一致 → 直接返回成功
+
+    Returns:
+        操作是否成功。
+    """
+    current_url = await git_remote_url(repo_root, remote)
+    if current_url == url:
+        return True
+    if current_url is None:
+        code, _ = await git_command(
+            repo_root, ["remote", "add", remote, url], timeout=5
+        )
+    else:
+        code, _ = await git_command(
+            repo_root, ["remote", "set-url", remote, url], timeout=5
+        )
+    return code == 0
+
+
+# ── Clone ─────────────────────────────────────────────────────────────────
+
+async def git_clone(
+    repo_url: str,
+    target_dir: str | Path,
+    branch: str | None = None,
+    git_config: dict | None = None,
+) -> tuple[bool, str]:
+    """
+    克隆远程仓库到目标目录。
+
+    Args:
+        repo_url: 远程仓库 URL
+        target_dir: 本地目标目录（不应已存在）
+        branch: 可选指定分支，None 则使用默认分支
+        git_config: 可选项目 Git 配置，用于构造认证环境变量
+
+    Returns:
+        (success, output_or_error_message)
+    """
+    cmd = ["git", "clone"]
+    if branch:
+        cmd += ["--branch", branch]
+    cmd += [repo_url, str(target_dir)]
+
+    env = await _build_git_env(git_config)
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        env=env,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    output = (stdout or b"").decode() + (stderr or b"").decode()
+
+    if proc.returncode == 0:
+        return True, output.strip()
+    return False, output.strip()

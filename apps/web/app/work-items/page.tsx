@@ -21,6 +21,14 @@ import { LayoutGrid, List, Search } from "lucide-react";
 
 const LAST_PROJECT_STORAGE_KEY = "tide:work-items:last-project-id";
 const VIEW_MODE_STORAGE_KEY = "tide:work-items:view-mode";
+const REFRESH_INTERVAL_STORAGE_KEY = "tide:work-items:refresh-interval";
+
+const REFRESH_INTERVAL_OPTIONS = [
+  { value: 0, label: "手动刷新" },
+  { value: 30_000, label: "30 秒" },
+  { value: 60_000, label: "1 分钟" },
+  { value: 300_000, label: "5 分钟" },
+];
 
 /** 取 last_active 最新的项目 id；为空时退化为列表第一个。 */
 function pickMostRecentProjectId(projects: ProjectInfo[]): string {
@@ -60,6 +68,19 @@ export default function WorkItemsPage() {
       if (saved === "list") return "list";
     } catch {}
     return "board";
+  });
+
+  // 看板自动刷新间隔（毫秒），0 = 手动刷新
+  const [refreshInterval, setRefreshInterval] = useState<number>(() => {
+    if (typeof window === "undefined") return 60_000;
+    try {
+      const saved = window.localStorage.getItem(REFRESH_INTERVAL_STORAGE_KEY);
+      if (saved !== null) {
+        const v = Number(saved);
+        if (!Number.isNaN(v) && v >= 0) return v;
+      }
+    } catch {}
+    return 60_000;
   });
 
   // 筛选状态
@@ -169,6 +190,16 @@ export default function WorkItemsPage() {
     } catch {}
   }, [viewMode]);
 
+  // 持久化刷新间隔
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        REFRESH_INTERVAL_STORAGE_KEY,
+        String(refreshInterval),
+      );
+    } catch {}
+  }, [refreshInterval]);
+
   const projectOptions = [
     { value: "", label: "选择项目…" },
     ...projects.map((p) => ({ value: p.id, label: p.name })),
@@ -256,8 +287,22 @@ export default function WorkItemsPage() {
             )}
           </div>
 
-          {/* 视图切换 */}
-          <div className="flex items-center gap-1 rounded-lg border border-border/60 bg-muted/30 p-1">
+          {/* 视图切换 + 刷新间隔 */}
+          <div className="flex items-center gap-2">
+            {viewMode === "board" && (
+              <Select
+                value={String(refreshInterval)}
+                onChange={(e) => setRefreshInterval(Number(e.target.value))}
+                options={REFRESH_INTERVAL_OPTIONS.map((o) => ({
+                  value: String(o.value),
+                  label: o.label,
+                }))}
+                className="w-28"
+                aria-label="自动刷新间隔"
+                title="看板自动刷新间隔"
+              />
+            )}
+            <div className="flex items-center gap-1 rounded-lg border border-border/60 bg-muted/30 p-1">
             <button
               onClick={() => setViewMode("board")}
               className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
@@ -280,6 +325,7 @@ export default function WorkItemsPage() {
               <List className="h-3.5 w-3.5" />
               列表
             </button>
+            </div>
           </div>
         </div>
       )}
@@ -303,6 +349,7 @@ export default function WorkItemsPage() {
           onCardClick={handleCardClick}
           versionMap={versionMap}
           groupBy={groupBy}
+          refetchInterval={refreshInterval}
         />
       ) : (
         <WorkItemListView

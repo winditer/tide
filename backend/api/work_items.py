@@ -5,9 +5,11 @@
 
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from backend.core.dependencies import (
@@ -333,3 +335,76 @@ async def remove_artifact(
     update_body = WorkItemUpdate(metadata=metadata)
     await work_item_service.update_work_item(item_id, update_body)
     return {"artifacts": new_artifacts}
+
+
+# 产物文件扩展名 → Content-Type 映射
+TEXT_CONTENT_TYPES = {
+    ".md": "text/markdown; charset=utf-8",
+    ".markdown": "text/markdown; charset=utf-8",
+    ".txt": "text/plain; charset=utf-8",
+    ".log": "text/plain; charset=utf-8",
+}
+
+
+@router.get("/{item_id}/artifacts/{artifact_id}/content")
+async def get_artifact_content(
+    item_id: str,
+    artifact_id: str,
+    current_user=Depends(get_optional_user),
+):
+    """获取产物文件内容，用于在线查看。
+
+    根据 artifact 中的 file_path（相对路径）与所属项目的绝对路径拼接出真实路径，
+    然后返回文件内容。为防止目录遍历攻击，拼接后的绝对路径必须仍在项目
+    根目录下。
+    """
+    item = await work_item_service.get_work_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Work item not found")
+
+    artifacts = _get_artifacts(item)
+    target = next(
+        (a for a in artifacts if isinstance(a, dict) and a.get("id") == artifact_id),
+        None,
+    )
+    if not target:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+
+    file_path = (target.get("file_path") or "").strip()
+    if not file_path:
+        raise HTTPException(status_code=400, detail="Artifact has no file_path")
+
+    project_id = item.get("project_id") or ""
+    project_path = await work_item_service._get_project_path(project_id)
+    if not project_path:
+        raise HTTPException(status_code=404, detail="Project path not found")
+
+    try:
+        project_root = Path(project_path).resolve()
+        target_path = (project_root / file_path.lstrip("/")).resolve()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid file path")
+
+    # 安全校验：resolve 后的路径必须仍位于项目根目录下
+    try:
+        target_path.relative_to(project_root)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Path traversal forbidden")
+
+    if not target_path.exists() or not target_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    suffix = target_path.suffix.lower()
+    content_type = TEXT_CONTENT_TYPES.get(suffix)
+    if content_type:
+        try:
+            text = target_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            text = target_path.read_text(encoding="utf-8", errors="replace")
+        return PlainTextResponse(content=text, media_type=content_type)
+
+    return FileResponse(
+        path=str(target_path),
+        media_type="application/octet-stream",
+        filename=target_path.name,
+    )

@@ -6,14 +6,16 @@ Agent 适配器：AgentAdapter 基类及 Codex / Claude / Qoder 三个子类。
 目前以 stub 形式标记，待后续模块提取完成后替换为正式导入。
 """
 
+import asyncio
 import json
 import logging
 import os
 import re
 import shlex
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, AsyncGenerator, Optional
 
+from backend.runtime.a2a_client import A2AClient, A2AAgentConfig, A2ATask
 from backend.runtime.config import (
     APPROVED_CLAUDE_PERMISSION_MODE,
     APPROVED_CODEX_APPROVAL_POLICY,
@@ -756,3 +758,301 @@ AGENT_ADAPTERS: dict[str, AgentAdapter] = {
     "qoder": QoderAdapter(),
 }
 _ADAPTER_REGISTRY.update(AGENT_ADAPTERS)
+
+
+# ── A2A 远程 Agent 适配器 ──
+
+# A2A 轮询配置
+_A2A_POLL_INTERVAL_SECONDS = 1.0
+_A2A_TERMINAL_STATES = {"completed", "failed", "canceled", "rejected"}
+_A2A_INTERACTIVE_STATES = {"input_required", "auth_required"}
+
+
+class A2AAdapter:
+    """远程 A2A Agent 适配器 - 将 A2A 协议映射为 Tide 内部事件流。
+
+    与 CLI 类适配器不同，A2A 通过 HTTP 协议与远程 Agent 通信。
+    因此该类不继承 AgentAdapter（无 build_command / parse_events 概念），
+    而是提供 ``execute`` 异步生成器，由上层 executor 走单独的执行路径。
+    """
+
+    id = "a2a"
+    label = "A2A Remote Agent"
+
+    async def execute(
+        self,
+        runtime: CodexTaskRuntime,
+        config: A2AAgentConfig,
+    ) -> AsyncGenerator[dict, None]:
+        """通过 HTTP 执行远程 Agent，产出内部事件流。
+
+        Args:
+            runtime: CodexTaskRuntime 实例，包含 prompt、conversation_id 等。
+            config:  A2AAgentConfig 远程 Agent 配置。
+
+        Yields:
+            dict: 内部事件 dict（``status_changed`` / ``output_chunk`` /
+            ``approval_request`` / ``completed`` / ``failed`` / ``unknown``）。
+        """
+
+        prompt = str(getattr(runtime, "prompt", "") or "")
+        context_id = str(getattr(runtime, "conversation_id", "") or "") or None
+        task_id = str(getattr(runtime, "session_id", "") or "") or None
+        context_parts = self._build_context_parts(runtime)
+
+        capabilities = config.capabilities or {}
+        supports_streaming = bool(capabilities.get("streaming"))
+
+        logger.info(
+            "[A2AAdapter] execute agent_id=%s streaming=%s task_id=%s context_id=%s",
+            config.agent_id,
+            supports_streaming,
+            task_id,
+            context_id,
+        )
+
+        client = A2AClient(config)
+        try:
+            if supports_streaming:
+                async for raw_event in client.send_streaming_message(
+                    prompt,
+                    task_id=task_id,
+                    context_id=context_id,
+                    context_parts=context_parts,
+                ):
+                    mapped = self._map_to_internal_event(raw_event)
+                    if mapped:
+                        yield mapped
+                return
+
+            # ── 非流式：同步发送 + 轮询 ──
+            try:
+                task = await client.send_message(
+                    prompt,
+                    task_id=task_id,
+                    context_id=context_id,
+                    context_parts=context_parts,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "[A2AAdapter] send_message failed agent_id=%s",
+                    config.agent_id,
+                )
+                yield {"type": "failed", "error": str(exc)}
+                return
+
+            yield self._map_task_to_event(task, task.state)
+            last_state = task.state
+            current_task: A2ATask = task
+
+            while last_state not in _A2A_TERMINAL_STATES and last_state not in _A2A_INTERACTIVE_STATES:
+                await asyncio.sleep(_A2A_POLL_INTERVAL_SECONDS)
+                if getattr(runtime, "cancel_requested", False) or getattr(runtime, "stop_requested", False):
+                    logger.info(
+                        "[A2AAdapter] cancel requested, stopping poll agent_id=%s task_id=%s",
+                        config.agent_id,
+                        current_task.id,
+                    )
+                    try:
+                        await client.cancel_task(current_task.id)
+                    except Exception:  # noqa: BLE001
+                        logger.exception(
+                            "[A2AAdapter] cancel_task failed agent_id=%s task_id=%s",
+                            config.agent_id,
+                            current_task.id,
+                        )
+                    yield {"type": "failed", "error": "canceled by user"}
+                    return
+
+                try:
+                    current_task = await client.get_task(current_task.id)
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception(
+                        "[A2AAdapter] get_task failed agent_id=%s task_id=%s",
+                        config.agent_id,
+                        current_task.id,
+                    )
+                    yield {"type": "failed", "error": str(exc)}
+                    return
+
+                if current_task.state != last_state:
+                    yield self._map_task_to_event(current_task, current_task.state)
+                    last_state = current_task.state
+
+            # 终态后产出 artifact 文本片段
+            if last_state == "completed":
+                for artifact in current_task.artifacts or []:
+                    if not isinstance(artifact, dict):
+                        continue
+                    text = self._extract_artifact_text(artifact)
+                    if text:
+                        yield {
+                            "type": "output_chunk",
+                            "content": text,
+                            "artifact_id": artifact.get("artifactId") or artifact.get("id") or "",
+                            "is_final": True,
+                        }
+        finally:
+            await client.close()
+
+    # ------------------------------------------------------------------ map
+
+    def _map_to_internal_event(self, a2a_event: dict) -> dict:
+        """将 A2A 流式事件映射为 Tide 内部事件格式。"""
+
+        if not isinstance(a2a_event, dict):
+            return {"type": "unknown", "raw": a2a_event}
+
+        event_type = a2a_event.get("type")
+
+        if event_type == "task":
+            status = a2a_event.get("status") or {}
+            state = (
+                (status.get("state") if isinstance(status, dict) else None)
+                or a2a_event.get("state")
+                or "submitted"
+            )
+            return {"type": "status_changed", "status": str(state)}
+
+        if event_type == "statusUpdate":
+            status = a2a_event.get("status") or {}
+            state = (
+                (status.get("state") if isinstance(status, dict) else None)
+                or a2a_event.get("state")
+                or ""
+            )
+            state = str(state)
+
+            if state == "input_required":
+                message_obj = (
+                    (status.get("message") if isinstance(status, dict) else None)
+                    or a2a_event.get("message")
+                    or {}
+                )
+                return {
+                    "type": "approval_request",
+                    "message": self._extract_text(message_obj) if isinstance(message_obj, dict) else str(message_obj),
+                }
+            if state == "completed":
+                return {"type": "completed", "result": ""}
+            if state == "failed":
+                error = a2a_event.get("error")
+                if not error and isinstance(status, dict):
+                    msg = status.get("message")
+                    error = self._extract_text(msg) if isinstance(msg, dict) else (msg or "")
+                return {"type": "failed", "error": str(error or "")}
+            return {"type": "status_changed", "status": state}
+
+        if event_type == "artifactUpdate":
+            artifact = a2a_event.get("artifact") or {}
+            if not isinstance(artifact, dict):
+                artifact = {}
+            return {
+                "type": "output_chunk",
+                "content": self._extract_artifact_text(artifact),
+                "artifact_id": artifact.get("artifactId") or artifact.get("id") or "",
+                "is_final": bool(
+                    a2a_event.get("lastChunk")
+                    or a2a_event.get("is_final")
+                    or a2a_event.get("final")
+                ),
+            }
+
+        if event_type == "message":
+            return {
+                "type": "output_chunk",
+                "content": self._extract_text(a2a_event),
+            }
+
+        return {"type": "unknown", "raw": a2a_event}
+
+    def _map_task_to_event(self, task: A2ATask, state: str) -> dict:
+        """将轮询获得的 A2ATask 对象映射为事件 dict。"""
+
+        state = str(state or task.state or "")
+        if state == "completed":
+            text_chunks: list[str] = []
+            for artifact in task.artifacts or []:
+                if not isinstance(artifact, dict):
+                    continue
+                text = self._extract_artifact_text(artifact)
+                if text:
+                    text_chunks.append(text)
+            return {"type": "completed", "result": "\n".join(text_chunks)}
+        if state == "failed":
+            error = (task.metadata or {}).get("error") if isinstance(task.metadata, dict) else ""
+            return {"type": "failed", "error": str(error or "")}
+        if state == "input_required":
+            return {"type": "approval_request", "message": ""}
+        return {"type": "status_changed", "status": state}
+
+    # -------------------------------------------------------- context parts
+
+    def _build_context_parts(self, runtime: CodexTaskRuntime) -> list:
+        """构建传递给远程 Agent 的上下文 Parts。"""
+
+        parts: list[dict[str, Any]] = []
+
+        prev_output = getattr(runtime, "prev_output", None)
+        workflow_context = getattr(runtime, "workflow_context", None)
+        if prev_output:
+            parts.append({
+                "kind": "data",
+                "data": prev_output if isinstance(prev_output, (dict, list)) else {"text": str(prev_output)},
+            })
+        if workflow_context:
+            parts.append({
+                "kind": "data",
+                "data": workflow_context if isinstance(workflow_context, (dict, list)) else {"text": str(workflow_context)},
+            })
+
+        cwd = getattr(runtime, "cwd", None)
+        if cwd:
+            parts.append({"kind": "text", "text": f"cwd: {cwd}"})
+
+        return parts
+
+    # -------------------------------------------------------------- helpers
+
+    def _extract_text(self, message: dict) -> str:
+        """从 A2A Message 对象中提取文本内容。"""
+
+        if not isinstance(message, dict):
+            return ""
+        parts = message.get("parts") or []
+        if not isinstance(parts, list):
+            return ""
+        chunks: list[str] = []
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            text = part.get("text")
+            if text:
+                chunks.append(str(text))
+        return "\n".join(chunks).strip()
+
+    def _extract_artifact_text(self, artifact: dict) -> str:
+        """从 Artifact 中提取文本/数据内容。"""
+
+        if not isinstance(artifact, dict):
+            return ""
+        parts = artifact.get("parts") or []
+        if not isinstance(parts, list):
+            return ""
+        chunks: list[str] = []
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            kind = part.get("kind") or part.get("type") or ""
+            if kind == "text" or part.get("text"):
+                text = part.get("text")
+                if text:
+                    chunks.append(str(text))
+                    continue
+            if kind == "data" or part.get("data") is not None:
+                data = part.get("data")
+                try:
+                    chunks.append(json.dumps(data, ensure_ascii=False))
+                except (TypeError, ValueError):
+                    chunks.append(str(data))
+        return "\n".join(chunks).strip()

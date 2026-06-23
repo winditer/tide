@@ -314,3 +314,43 @@ CREATE INDEX IF NOT EXISTS idx_user_sessions_active ON user_sessions(is_active, 
 CREATE INDEX IF NOT EXISTS idx_project_members_user ON project_members(user_id);
 CREATE INDEX IF NOT EXISTS idx_project_members_project ON project_members(project_id);
 CREATE INDEX IF NOT EXISTS idx_users_lark_open_id ON users(lark_open_id);
+
+-- ============================================================
+-- A2A Remote Agent Support
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS remote_agents (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    agent_card_url TEXT NOT NULL,
+    agent_card_json TEXT,
+    endpoint_url TEXT NOT NULL,
+    protocol_binding TEXT DEFAULT 'JSONRPC',
+    protocol_version TEXT DEFAULT '1.0',
+    auth_type TEXT DEFAULT 'bearer',
+    auth_credentials TEXT,
+    auth_header_name TEXT,
+    capabilities_streaming BOOLEAN DEFAULT FALSE,
+    capabilities_push_notifications BOOLEAN DEFAULT FALSE,
+    skills_json TEXT,
+    approval_required BOOLEAN DEFAULT TRUE,
+    approval_policy TEXT DEFAULT 'on-request',
+    timeout_ms INTEGER DEFAULT 300000,
+    max_retries INTEGER DEFAULT 2,
+    status TEXT DEFAULT 'active',
+    last_health_check TIMESTAMP,
+    last_error TEXT,
+    workspace_id TEXT,
+    created_by TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS a2a_task_mapping (
+    local_task_id TEXT PRIMARY KEY,
+    remote_task_id TEXT NOT NULL,
+    remote_context_id TEXT,
+    agent_id TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
