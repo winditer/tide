@@ -19,9 +19,13 @@ import {
  * The frontend mirrors the backend's `TIDE_REQUIRE_AUTH` via the
  * `NEXT_PUBLIC_TIDE_REQUIRE_AUTH` env var (set to "1" to enforce login).
  * When falsy, anonymous browsing is allowed and login is purely opt-in.
+ *
+ * NOTE: `NEXT_PUBLIC_*` env vars are inlined at build time by the bundler,
+ * so there is no runtime dependency on the `process` global existing in the
+ * browser. Avoid guarding with `typeof process === "undefined"` — that
+ * short-circuits the function before reaching the (already-inlined) literal.
  */
 export function isAuthRequired(): boolean {
-  if (typeof process === "undefined") return false;
   return process.env.NEXT_PUBLIC_TIDE_REQUIRE_AUTH === "1";
 }
 
