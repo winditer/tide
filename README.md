@@ -49,6 +49,11 @@ Tide 由两个一体化部分组成：
 - **定时调度** — Cron / Interval / Date 触发，支持 Agent / Plan / Status / 自定义命令。
 - **工作流引擎** — 多 Agent 编排，节点支持 Agent / Approval / Condition / Parallel / Delay 等。
 - **多 Agent 适配** — Codex CLI、Claude Code CLI、Qoder CLI（含 Quest 模式）。
+- **项目组** — 多仓库聚合、成员管理、跨仓库 Plan 自动生成、聚合视图。
+- **工作项 AI 分解** — 输入长文本需求 / PRD / 链接 / 附件，LLM 自动拆解为多个合适粒度的工作项，人工校对后批量创建。
+- **浮动聊天产物展示** — 聊天窗口自动汇总会话中生成的文件/链接产物，支持在线查看（JSON / 代码 / 图片预览）与「在新标签页打开」。
+- **知识图谱** — 自动生成仓库级代码知识图谱（模块依赖 / API 接口 / 数据库 Schema / 业务概念），Python 项目静态分析，非 Python 项目通过 Agent（Codex/Claude/Qoder）驱动分析。
+- **ECC 企业能力中心** — Skills 技能库 / Rules 规则引擎 / Hooks 事件驱动 / Security 安全审查 / Cost Tracking 成本追踪。
 
 ## 快速开始
 
@@ -296,6 +301,20 @@ Plan 任务通过 `/plan` 前缀触发，系统会自动将任务拆分为多个
 
 > SQLite 数据库文件位于 `tide.db`（首次启动自动初始化）。
 
+### LLM（知识图谱 / 工作项 AI 分解）
+
+工作项 AI 分解与知识图谱 Agent 驱动路径复用同一组 `KNOWLEDGE_LLM_*` 环境变量，同时兼容 OpenAI Chat Completions 与 Anthropic Messages 两种协议。未配置时工作项 AI 分解接口返回 503，其他功能不受影响。
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `KNOWLEDGE_LLM_PROVIDER` | `openai` | 协议类型：`openai`（OpenAI 兼容）或 `anthropic`。 |
+| `KNOWLEDGE_LLM_BASE_URL` | `https://api.openai.com/v1` | LLM 服务 Base URL；Anthropic 默认 `https://api.anthropic.com`。 |
+| `KNOWLEDGE_LLM_API_KEY` | 空 | LLM API Key，必填。 |
+| `KNOWLEDGE_LLM_MODEL` | `gpt-4o-mini` | 默认模型名（可填入任意服务商支持的型号）。 |
+| `KNOWLEDGE_LLM_TIMEOUT` | `120` | 单次 LLM 请求超时（秒）。 |
+
+> 工作项 AI 分解附件仅支持 .md/.txt/.docx/.pdf，单文件 10MB；附件仅临时解析载入 prompt，不落盘。
+
 ---
 
 ## 项目结构
@@ -337,6 +356,346 @@ tide/
 | 工作流 | `/workflows` | 多 Agent 协作流程可视化编辑器（React Flow） |
 | 项目 | `/projects` | 项目列表与详情 |
 | 会话 | `/sessions` | Agent session resume |
+| 项目组 | `/projects/groups/[id]` | 项目组详情（对话/任务/版本/成员/设置五 Tab） |
+| 知识图谱 | 项目/项目组设置 Tab | 仓库 `.knowledge/` 图谱文件浏览、Markdown 编辑、ZIP 导出、触发 Agent 生成 |
+| 技能库 | `/settings/skills` | ECC Skills 管理（创建/编辑/删除/Markdown 预览） |
+| 规则 | `/settings/rules` | ECC Rules 管理（global/language/project 三层） |
+| 事件钩子 | `/settings/hooks` | ECC Hooks 管理（事件/条件/动作配置） |
+| 安全审查 | `/settings/security` | 安全规则 + 扫描发现双 Tab |
+
+---
+
+## ECC 企业能力中心（Enterprise Capability Center）
+
+ECC 为 Tide 提供五大企业级治理能力，全部通过 Web 工作台 Settings 页面管理，并与工作流引擎自动集成：
+
+| 能力 | 说明 | 管理入口 |
+|------|------|----------|
+| **Skills 技能库** | 可复用的 Agent 知识片段，注入到 prompt 中增强 Agent 能力 | Settings → Skills |
+| **Rules 规则引擎** | 强制约束规则，按 global/language/project 三层分级自动匹配注入 | Settings → Rules |
+| **Hooks 事件驱动** | 任务/工作流事件触发自动化动作（脚本/Webhook/通知/技能调用） | Settings → Hooks |
+| **Security 安全审查** | 正则模式扫描 Agent 输出，检测密钥泄露/代码质量/合规问题 | Settings → Security |
+| **Cost Tracking 成本追踪** | 按 agent/model/project 维度统计 Token 用量与费用 | Dashboard 首页 |
+
+### 快速开始
+
+#### 创建第一个 Skill
+
+1. 访问 Web 工作台 → Settings → Skills。
+2. 点击「创建」，填写：
+   - **Name**：技能名称（如「React 最佳实践」）
+   - **Slug**：唯一标识（如 `react-best-practices`）
+   - **Category**：分类标签
+   - **Content**：Markdown 格式的技能内容
+3. 在工作流 Agent 节点的 PropertyPanel 中勾选该技能，运行时将自动注入。
+
+#### 创建第一个 Rule
+
+1. 访问 Settings → Rules，点击「创建」。
+2. 选择 scope：
+   - `global` — 对所有任务生效
+   - `language` — 仅对特定语言项目生效（如 `typescript`，系统根据工作目录自动检测）
+   - `project` — 仅对指定项目生效
+3. 编写规则内容（Markdown），保存后自动对匹配的任务生效。
+
+#### 创建第一个 Hook
+
+1. 访问 Settings → Hooks，点击「创建」。
+2. 选择触发事件（如 `task.status_changed`）。
+3. 设置条件（可选，JSON 格式，如 `{"new_status": "completed"}`）。
+4. 选择动作类型并配置：
+   - `script` — 执行脚本命令
+   - `webhook` — 发送 HTTP 回调
+   - `notification` — 发送通知
+   - `skill` — 调用技能（如 `security-scan`）
+
+### 工作流集成
+
+Rules 和 Skills 在 Agent 执行时自动注入：
+
+```
+用户提交任务 / 工作流节点执行
+       │
+       ▼
+┌─────────────────────────────────┐
+│ 1. 规则匹配 (adapters.py)          │
+│    global → language → project   │
+│    → 注入 prompt 顶部 (强制约束)  │
+├─────────────────────────────────┤
+│ 2. 技能加载 (workflow_engine.py)   │
+│    选中的 Skills Markdown        │
+│    → 追加到 system prompt       │
+├─────────────────────────────────┤
+│ 3. 执行 Agent CLI                │
+├─────────────────────────────────┤
+│ 4. Hook 触发 (hook_engine.py)    │
+│    task.status_changed 事件      │
+│    → 异步执行动作 (如 security) │
+└─────────────────────────────────┘
+```
+
+### 安全审查配置
+
+安全扫描可通过两种方式触发：
+
+1. **手动扫描**：Settings → Security → 点击「扫描」按钮，或调用 `POST /api/security/scan`。
+2. **自动扫描**：创建一个 Hook，事件设置为 `task.status_changed`，动作类型选 `skill`，动作配置填 `{"skill": "security-scan"}`。
+
+安全规则管理在 Settings → Security → Rules Tab，支持自定义正则模式、严重级别（critical/high/medium/low）和类别标签。扫描发现在 Findings Tab 中查看和处理。
+
+### 成本查看
+
+Dashboard 首页的成本概览卡片展示：
+
+- **时间范围**：今日 / 本周 / 本月
+- **维度切换**：按 Agent / Model / Project 分组
+- **定价模型**：内置 claude-sonnet/opus/haiku、gpt-4o 系列、o3 系列、codex-mini
+
+成本数据源自任务执行时记录的 `token_input` / `token_output` 字段，由 `cost_service` 按模型定价实时计算。
+
+Token 采集支持双路径：
+- **精确路径**：Claude CLI 任务结束时自动报告精确 token 用量及费用。
+- **估算路径**：Codex / Qoder CLI 当前不报告 token，系统自动使用 `tiktoken`（cl100k_base）对 prompt 和输出文本进行估算，不含 CLI 内部系统 prompt 和工具定义。
+
+### 批量导入
+
+```bash
+# 导入技能库（从外部目录批量导入 Markdown 技能文件）
+python3 -m backend.scripts.import_ecc_skills /path/to/skills/dir --workspace default
+
+# 导入预置安全规则（18 个规则覆盖 secret_detection/code_quality/compliance）
+python3 -m backend.scripts.import_security_rules --workspace default
+```
+
+> 注意：`import_ecc_skills` 的 `<skills_dir>` 必须是实际存在的目录路径，不支持占位符。
+
+---
+
+## 项目组（Project Groups）
+
+项目组是 Tide 的多仓库协作核心功能。通过将多个关联项目聚合为一组，实现统一的成员管理、跨仓库任务编排、数据聚合查看。
+
+### 核心能力
+
+| 能力 | 说明 |
+|------|------|
+| **项目组 CRUD** | 创建/列表/详情/更新/删除，按 workspace 隔离 |
+| **成员项目管理** | 添加/移除项目，支持 primary（主项目）和 member 角色 |
+| **用户成员管理** | 添加/修改/移除用户，支持 owner/member/viewer 角色 |
+| **成员自动同步** | 添加用户或项目时，自动同步到关联项目的 project_members（幂等） |
+| **权限过滤** | 非 admin 用户只能看到自己有 membership 的项目组 |
+| **聚合视图** | 自动汇聚组内所有项目的对话、任务、版本数据 |
+| **跨仓库 Plan** | Plan 绑定项目组，子任务自动分发到成员项目 |
+| **工作流绑定** | 项目组可绑定工作流，触发跨仓库编排 |
+
+### 快速开始
+
+#### 1. 创建项目组
+
+```bash
+curl -X POST http://localhost:8000/api/project-groups \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "我的全栈项目",
+    "description": "前后端多仓库协作",
+    "workspace_id": "default"
+  }'
+```
+
+响应示例：
+
+```json
+{
+  "id": "a1b2c3d4-...",
+  "workspace_id": "default",
+  "name": "我的全栈项目",
+  "description": "前后端多仓库协作",
+  "created_by": "admin",
+  "created_at": "2026-06-20T10:00:00Z",
+  "members": []
+}
+```
+
+#### 2. 添加成员项目
+
+```bash
+# 添加主项目（primary）
+curl -X POST http://localhost:8000/api/project-groups/{group_id}/members \
+  -H "Content-Type: application/json" \
+  -d '{"project_id": "proj-backend-001", "role": "primary"}'
+
+# 添加成员项目
+curl -X POST http://localhost:8000/api/project-groups/{group_id}/members \
+  -H "Content-Type: application/json" \
+  -d '{"project_id": "proj-frontend-001", "role": "member"}'
+```
+
+#### 3. 添加用户成员
+
+```bash
+curl -X POST http://localhost:8000/api/project-groups/{group_id}/users \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": "user-uuid-001", "role": "member"}'
+```
+
+添加后，该用户会自动同步到组内所有成员项目的 `project_members` 表（幂等操作，已存在则跳过）。
+
+#### 4. 查看聚合数据
+
+```bash
+# 获取组内所有项目的对话
+curl http://localhost:8000/api/project-groups/{group_id}/conversations?limit=20
+
+# 获取组内所有项目的任务
+curl http://localhost:8000/api/project-groups/{group_id}/tasks?status=running
+
+# 获取组内所有项目的版本
+curl http://localhost:8000/api/project-groups/{group_id}/versions
+```
+
+#### 5. 创建跨仓库 Plan
+
+```bash
+curl -X POST http://localhost:8000/api/plans \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "跨仓库重构",
+    "group_id": "a1b2c3d4-...",
+    "tasks": [
+      {"prompt": "重构后端 API", "project_id": "proj-backend-001"},
+      {"prompt": "更新前端调用", "project_id": "proj-frontend-001"}
+    ]
+  }'
+```
+
+未指定 `cwd` 的子任务自动使用项目组 primary 项目的路径。Plan 列表支持按 `group_id` 过滤：
+
+```bash
+curl http://localhost:8000/api/plans?group_id=a1b2c3d4-...
+```
+
+#### 6. 绑定工作流
+
+```bash
+# 绑定工作流到项目组
+curl -X PUT http://localhost:8000/api/project-groups/{group_id}/workflow \
+  -H "Content-Type: application/json" \
+  -d '{"workflow_id": "wf-uuid-001"}'
+
+# 解除绑定
+curl -X DELETE http://localhost:8000/api/project-groups/{group_id}/workflow
+```
+
+### 前端使用方式
+
+#### 项目组详情页
+
+路径：`/projects/groups/[id]`，包含 5 个 Tab：
+
+| Tab | 内容 |
+|-----|------|
+| 对话 | 聚合组内所有项目的 session 列表 |
+| 任务 | 聚合组内所有项目的任务（可按状态过滤） |
+| 版本 | 聚合组内所有项目的版本记录 |
+| 成员 | 成员项目 + 用户成员管理 |
+| 设置 | 项目组信息编辑、工作流绑定、危险操作 |
+
+Header 展示：成员项目数 / 用户成员数 / 创建时间 / 创建者。
+
+#### 统一选择器编码规则
+
+前端所有创建入口（浮动聊天、独立任务、对话/Session、工作项）均使用统一的项目/项目组选择器：
+
+```
+选择器值编码：
+  • project:{cwd}   → 选择单个项目，值为项目的工作目录路径
+  • group:{id}      → 选择项目组，值为项目组 ID
+
+示例：
+  • "project:/Users/dev/my-backend"   → 单项目模式
+  • "group:a1b2c3d4-..."              → 项目组模式
+```
+
+选择项目组时，系统自动使用 primary 项目的 `cwd` 作为实际执行路径，并将 `group_id` 写入 Task/Session 记录。
+
+#### 工作项支持项目组筛选
+
+工作项列表页提供统一的项目/项目组选择器，支持：
+- 按项目组过滤工作项
+- 新建工作项时联动筛选器的选中项目/项目组
+
+#### 工作流 Agent 节点 Skills 模糊搜索
+
+工作流编辑器中的 Agent 节点属性面板支持技能模糊搜索：
+- 按名称/描述/分类实时过滤
+- 前端本地实现，无额外 API 调用
+
+### API 参考
+
+| 路由 | 方法 | 说明 |
+|------|------|------|
+| `/api/project-groups` | GET | 列出项目组（参数：`workspace_id`） |
+| `/api/project-groups` | POST | 创建项目组 |
+| `/api/project-groups/{id}` | GET | 获取详情（含成员列表） |
+| `/api/project-groups/{id}` | PUT | 更新（name/description） |
+| `/api/project-groups/{id}` | DELETE | 删除（级联删除成员关系） |
+| `/api/project-groups/{id}/members` | POST | 添加成员项目 |
+| `/api/project-groups/{id}/members/{pid}` | DELETE | 移除成员项目 |
+| `/api/project-groups/{id}/users` | GET | 列出用户成员 |
+| `/api/project-groups/{id}/users` | POST | 添加用户成员 |
+| `/api/project-groups/{id}/users/{uid}` | PUT | 修改用户角色 |
+| `/api/project-groups/{id}/users/{uid}` | DELETE | 移除用户成员 |
+| `/api/project-groups/{id}/conversations` | GET | 聚合查询对话 |
+| `/api/project-groups/{id}/tasks` | GET | 聚合查询任务（可按 status 过滤） |
+| `/api/project-groups/{id}/versions` | GET | 聚合查询版本 |
+| `/api/project-groups/{id}/workflow` | GET | 查看绑定的工作流 |
+| `/api/project-groups/{id}/workflow` | PUT | 绑定工作流 |
+| `/api/project-groups/{id}/workflow` | DELETE | 解除工作流绑定 |
+
+### 数据库表
+
+| 表 | 说明 |
+|------|------|
+| `project_groups` | 项目组定义（id, workspace_id, name, description, created_by, workflow_id） |
+| `project_group_members` | 成员项目关联（group_id, project_id, role: primary/member） |
+| `project_group_user_members` | 用户成员（group_id, user_id, role: owner/member/viewer） |
+| `plans.group_id` | Plan 与项目组的关联字段 |
+| `tasks.group_id` | Task 与项目组的关联字段 |
+
+---
+
+## 知识图谱（Knowledge Graph）
+
+知识图谱自动分析仓库代码结构，生成 4 类可视化图谱，存放于仓库下 `.knowledge/` 目录。
+
+### 图谱类型
+
+| 类型 | 内容 | 产物 |
+|------|------|------|
+| **模块依赖图** | import 关系、架构分层、被依赖统计 | `module/module_graph.json` + `.md` |
+| **API 接口图谱** | 路由、HTTP 方法、参数、关联 Service | `api/api_graph.json` + `.md` |
+| **数据库 Schema** | 表结构、外键、索引、ER 关系图 | `db/schema_graph.json` + `.md` + `er_diagram.md` |
+| **业务概念图** | 核心实体、关系、领域划分 | `concept/concept_graph.json` + `.md` |
+
+### 生成方式
+
+| 方式 | 适用场景 | 说明 |
+|------|---------|------|
+| **静态分析**（默认） | Python 项目 | 基于 AST 解析 import / FastAPI 路由 / SQLite DDL，无需额外配置 |
+| **Agent 驱动** | 任意语言项目 | 用户在 UI 选择已配置的 Agent（Codex/Claude/Qoder），后端通过 AgentExecutor 发送分析 Prompt，Agent 读取代码并生成 JSON |
+
+### 快速使用
+
+1. 进入项目或项目组详情页 → **知识图谱** Tab。
+2. 选择「生成类型」（全部/模块/API/数据库/概念）和「分析方式」（静态分析或选择 Agent）。
+3. 点击「立即生成」，等待异步任务完成。
+4. 左侧文件树浏览产物，右侧查看 Markdown / JSON，支持在线编辑保存和 ZIP 导出。
+
+### CLI 方式（仅静态分析）
+
+```bash
+python3 scripts/gen_knowledge_graph.py --type all --repo-path /path/to/project
+```
 
 ---
 

@@ -14,6 +14,7 @@ from backend.core.dependencies import (
     get_optional_user,
 )
 from backend.db.engine import async_session_factory
+from backend.services.project_group_service import project_group_service
 from backend.services.session_discovery import discover_sessions
 
 logger = logging.getLogger("tide.dashboard")
@@ -284,33 +285,61 @@ async def get_stats(
     weekly_completed_work_items = 0
     wi_assignees = _current_user_assignees(current_user)
     wi_pid_clause, wi_pid_params = _build_work_item_pid_clause(accessible_pids)
-    if wi_assignees and wi_pid_clause is not None:
-        a_placeholders = ",".join(f":a{i}" for i in range(len(wi_assignees)))
-        a_params = {f"a{i}": v for i, v in enumerate(wi_assignees)}
+    is_admin = current_user and current_user.get("role") == "admin"
+    if (wi_assignees or is_admin) and wi_pid_clause is not None:
+        if is_admin:
+            # admin 角色查看全部未完成工作项，不按 assignee 过滤
+            assignee_filter = ""
+            a_params: dict = {}
+        else:
+            a_placeholders = ",".join(f":a{i}" for i in range(len(wi_assignees)))
+            assignee_filter = f" WHERE assignee IN ({a_placeholders})"
+            a_params = {f"a{i}": v for i, v in enumerate(wi_assignees)}
         try:
             async with async_session_factory() as session:
-                r = await session.execute(
-                    text(
-                        "SELECT COUNT(*) FROM work_items"
-                        f" WHERE assignee IN ({a_placeholders})"
-                        " AND completed_at IS NULL"
-                        f"{wi_pid_clause}"
-                    ),
-                    {**a_params, **wi_pid_params},
-                )
+                if is_admin:
+                    r = await session.execute(
+                        text(
+                            "SELECT COUNT(*) FROM work_items"
+                            " WHERE completed_at IS NULL"
+                            f"{wi_pid_clause}"
+                        ),
+                        {**wi_pid_params},
+                    )
+                else:
+                    r = await session.execute(
+                        text(
+                            "SELECT COUNT(*) FROM work_items"
+                            f" WHERE assignee IN ({','.join(f':a{i}' for i in range(len(wi_assignees)))})"
+                            " AND completed_at IS NULL"
+                            f"{wi_pid_clause}"
+                        ),
+                        {**a_params, **wi_pid_params},
+                    )
                 my_work_items_count = int(r.scalar() or 0)
 
                 week_start = _week_start_iso()
-                r = await session.execute(
-                    text(
-                        "SELECT COUNT(*) FROM work_items"
-                        f" WHERE assignee IN ({a_placeholders})"
-                        " AND completed_at IS NOT NULL"
-                        " AND completed_at >= :week_start"
-                        f"{wi_pid_clause}"
-                    ),
-                    {**a_params, "week_start": week_start, **wi_pid_params},
-                )
+                if is_admin:
+                    r = await session.execute(
+                        text(
+                            "SELECT COUNT(*) FROM work_items"
+                            " WHERE completed_at IS NOT NULL"
+                            " AND completed_at >= :week_start"
+                            f"{wi_pid_clause}"
+                        ),
+                        {"week_start": week_start, **wi_pid_params},
+                    )
+                else:
+                    r = await session.execute(
+                        text(
+                            "SELECT COUNT(*) FROM work_items"
+                            f" WHERE assignee IN ({','.join(f':a{i}' for i in range(len(wi_assignees)))})"
+                            " AND completed_at IS NOT NULL"
+                            " AND completed_at >= :week_start"
+                            f"{wi_pid_clause}"
+                        ),
+                        {**a_params, "week_start": week_start, **wi_pid_params},
+                    )
                 weekly_completed_work_items = int(r.scalar() or 0)
         except Exception as exc:  # 表不存在 / 迁移未完成 → 返回 0。
             logger.warning("work-item stats query failed: %s", exc)
@@ -728,14 +757,21 @@ async def get_my_work_items(
     """
     accessible_pids = await get_accessible_project_ids(current_user)
     assignees = _current_user_assignees(current_user)
-    if not assignees:
+    is_admin = current_user and current_user.get("role") == "admin"
+    if not assignees and not is_admin:
         return []
     pid_clause, pid_params = _build_work_item_pid_clause(accessible_pids)
     if pid_clause is None:
         return []
 
-    a_placeholders = ",".join(f":a{i}" for i in range(len(assignees)))
-    a_params = {f"a{i}": v for i, v in enumerate(assignees)}
+    if is_admin:
+        # admin 角色查看全部未完成工作项
+        assignee_clause = ""
+        a_params: dict = {}
+    else:
+        a_placeholders = ",".join(f":a{i}" for i in range(len(assignees)))
+        assignee_clause = f" AND assignee IN ({a_placeholders})"
+        a_params = {f"a{i}": v for i, v in enumerate(assignees)}
 
     try:
         async with async_session_factory() as session:
@@ -745,8 +781,8 @@ async def get_my_work_items(
                     " title, description, priority, assignee, version_id,"
                     " started_at, completed_at, created_at, updated_at"
                     " FROM work_items"
-                    f" WHERE assignee IN ({a_placeholders})"
-                    " AND completed_at IS NULL"
+                    " WHERE completed_at IS NULL"
+                    f"{assignee_clause}"
                     f"{pid_clause}"
                     " ORDER BY priority DESC, created_at DESC"
                     " LIMIT :limit"
@@ -801,17 +837,37 @@ async def get_my_work_items(
 @router.get("/project-progress")
 async def get_project_progress(
     limit: int = Query(8, ge=1, le=50),
+    group_id: Optional[str] = Query(None, description="仅返回该项目组内项目的进度"),
     current_user=Depends(get_optional_user),
 ):
     """获取各项目工作项进度（仅返回总数 > 0 的项目）。
 
     返回字段：``id / name / total / completed``，按 ``total DESC`` 排序。
     项目名称通过 cwd 反解 + 注册表解析；找不到则使用 cwd 路径末段。
+
+    可选 ``group_id`` 参数：仅返回属于该项目组成员的项目。
     """
     accessible_pids = await get_accessible_project_ids(current_user)
     pid_clause, pid_params = _build_work_item_pid_clause(accessible_pids)
     if pid_clause is None:
         return []
+
+    # 项目组过滤：只保留组内项目的 project_id
+    group_clause = ""
+    group_params: dict = {}
+    if group_id:
+        try:
+            members = await project_group_service.get_group_projects(group_id)
+        except Exception as exc:
+            logger.warning("resolve group projects failed: %s", exc)
+            members = []
+        member_pids = [m["project_id"] for m in members if m.get("project_id")]
+        if not member_pids:
+            return []
+        gp_placeholders = ",".join(f":gp{i}" for i in range(len(member_pids)))
+        group_clause = f" AND project_id IN ({gp_placeholders})"
+        for i, pid in enumerate(member_pids):
+            group_params[f"gp{i}"] = pid
 
     try:
         async with async_session_factory() as session:
@@ -822,13 +878,13 @@ async def get_project_progress(
                     " AS completed"
                     " FROM work_items"
                     " WHERE 1=1"
-                    f"{pid_clause}"
+                    f"{pid_clause}{group_clause}"
                     " GROUP BY project_id"
                     " HAVING total > 0"
                     " ORDER BY total DESC"
                     " LIMIT :limit"
                 ),
-                {**pid_params, "limit": limit},
+                {**pid_params, **group_params, "limit": limit},
             )
             rows = r.fetchall()
     except Exception as exc:
@@ -849,4 +905,228 @@ async def get_project_progress(
                 "completed": int(row[2] or 0),
             }
         )
+    return results
+
+
+@router.get("/group-progress")
+async def get_group_progress(
+    workspace_id: str = "default",
+    limit: int = Query(8, ge=1, le=50),
+    current_user=Depends(get_optional_user),
+):
+    """项目组进度汇总：返回当前用户可访问的项目组，含组内工作项总数与已完成数。
+
+    只返回总工作项数 > 0 的项目组，按总数降序。
+    权限过滤与其它 dashboard 接口一致：项目组内部分项目不可访问时，
+    仅以可访问部分参与汇总。
+    """
+    accessible_pids = await get_accessible_project_ids(current_user)
+    if accessible_pids is not None and not accessible_pids:
+        return []
+
+    try:
+        groups = await project_group_service.list_groups(workspace_id)
+    except Exception as exc:
+        logger.warning("list project groups failed: %s", exc)
+        return []
+    if not groups:
+        return []
+
+    results: list[dict] = []
+    for grp in groups:
+        gid = grp.get("id")
+        if not gid:
+            continue
+        try:
+            members = await project_group_service.get_group_projects(gid)
+        except Exception as exc:
+            logger.warning("resolve group %s projects failed: %s", gid, exc)
+            members = []
+        member_pids = [m["project_id"] for m in members if m.get("project_id")]
+        # 应用访问权限过滤
+        if accessible_pids is not None:
+            member_pids = [pid for pid in member_pids if pid in accessible_pids]
+        if not member_pids:
+            continue
+
+        placeholders = ",".join(f":p{i}" for i in range(len(member_pids)))
+        params = {f"p{i}": pid for i, pid in enumerate(member_pids)}
+        try:
+            async with async_session_factory() as session:
+                r = await session.execute(
+                    text(
+                        "SELECT COUNT(*) AS total,"
+                        " SUM(CASE WHEN completed_at IS NOT NULL THEN 1 ELSE 0 END)"
+                        " AS completed,"
+                        " MAX(updated_at) AS last_updated"
+                        " FROM work_items"
+                        f" WHERE project_id IN ({placeholders})"
+                    ),
+                    params,
+                )
+                row = r.fetchone()
+        except Exception as exc:
+            logger.warning("group-progress aggregate failed for %s: %s", gid, exc)
+            continue
+
+        total = int(row[0] or 0) if row else 0
+        if total <= 0:
+            continue
+        completed = int(row[1] or 0) if row else 0
+        last_updated = row[2] if row else None
+        results.append(
+            {
+                "id": gid,
+                "name": grp.get("name") or gid[:8],
+                "description": grp.get("description"),
+                "member_count": int(grp.get("member_count") or len(member_pids)),
+                "accessible_member_count": len(member_pids),
+                "total": total,
+                "completed": completed,
+                "last_updated": last_updated,
+            }
+        )
+
+    results.sort(key=lambda x: x["total"], reverse=True)
+    return results[:limit]
+
+
+# ---------- Token 成本统计 ----------
+
+_VALID_COST_PERIODS = {"today", "week", "month"}
+_VALID_COST_DIMENSIONS = {"agent", "model", "project"}
+
+
+@router.get("/cost-summary")
+async def get_cost_summary(
+    workspace_id: str = "default",
+    period: str = Query("today"),
+    current_user=Depends(get_optional_user),
+):
+    """返回当前 workspace 在指定 period 内的 token 成本汇总。
+
+    period 可选值：``today`` / ``week`` / ``month``，不识别的值退回 ``today``。
+    返回字段见 :func:`backend.services.cost_service.CostService.get_cost_summary`。
+    """
+    from backend.services.cost_service import cost_service
+
+    if period not in _VALID_COST_PERIODS:
+        period = "today"
+
+    accessible_pids = await get_accessible_project_ids(current_user)
+    cwd_clause, cwd_params, _ = _build_cwd_filter(accessible_pids)
+
+    start_iso = cost_service._period_start_iso(period)
+    params: dict = {"ws": workspace_id, **cwd_params}
+    time_clause = ""
+    if start_iso:
+        time_clause = " AND COALESCE(completed_at, started_at, created_at) >= :start"
+        params["start"] = start_iso
+
+    try:
+        async with async_session_factory() as session:
+            r = await session.execute(
+                text(
+                    "SELECT"
+                    " COALESCE(SUM(estimated_cost_usd), 0),"
+                    " COALESCE(SUM(token_input), 0),"
+                    " COALESCE(SUM(token_output), 0),"
+                    " COUNT(*)"
+                    " FROM tasks"
+                    " WHERE workspace_id = :ws"
+                    f"{cwd_clause}{time_clause}"
+                ),
+                params,
+            )
+            row = r.fetchone()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("cost-summary query failed: %s", exc)
+        return {
+            "period": period,
+            "total_cost_usd": 0.0,
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "task_count": 0,
+        }
+
+    total_cost = float(row[0] or 0) if row else 0.0
+    return {
+        "period": period,
+        "total_cost_usd": round(total_cost, 6),
+        "total_input_tokens": int(row[1] or 0) if row else 0,
+        "total_output_tokens": int(row[2] or 0) if row else 0,
+        "task_count": int(row[3] or 0) if row else 0,
+    }
+
+
+@router.get("/cost-by-dimension")
+async def get_cost_by_dimension(
+    workspace_id: str = "default",
+    dimension: str = Query("agent"),
+    period: str = Query("today"),
+    current_user=Depends(get_optional_user),
+):
+    """按维度（agent / model / project）聚合 token 成本。
+
+    未识别的维度返回空列表；period 同 ``cost-summary``。
+    “project” 维度返回项额外包含 ``project_id``/``project_name`` 以便前端渲染。
+    """
+    from backend.services.cost_service import cost_service
+
+    if dimension not in _VALID_COST_DIMENSIONS:
+        return []
+    if period not in _VALID_COST_PERIODS:
+        period = "today"
+
+    accessible_pids = await get_accessible_project_ids(current_user)
+    cwd_clause, cwd_params, _ = _build_cwd_filter(accessible_pids)
+
+    column_map = {"agent": "agent_id", "model": "model", "project": "cwd"}
+    column = column_map[dimension]
+
+    start_iso = cost_service._period_start_iso(period)
+    params: dict = {"ws": workspace_id, **cwd_params}
+    time_clause = ""
+    if start_iso:
+        time_clause = " AND COALESCE(completed_at, started_at, created_at) >= :start"
+        params["start"] = start_iso
+
+    try:
+        async with async_session_factory() as session:
+            r = await session.execute(
+                text(
+                    f"SELECT {column} AS k,"
+                    " COALESCE(SUM(estimated_cost_usd), 0) AS cost,"
+                    " COALESCE(SUM(token_input), 0) AS ti,"
+                    " COALESCE(SUM(token_output), 0) AS to_,"
+                    " COUNT(*) AS cnt"
+                    " FROM tasks"
+                    " WHERE workspace_id = :ws"
+                    f"{cwd_clause}{time_clause}"
+                    f" GROUP BY {column}"
+                    " ORDER BY cost DESC"
+                ),
+                params,
+            )
+            rows = r.fetchall()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("cost-by-dimension query failed: %s", exc)
+        return []
+
+    registry = _load_registered_projects() if dimension == "project" else {}
+    results: list[dict] = []
+    for row in rows:
+        key = row[0] or ""
+        item: dict = {
+            "key": key,
+            "total_cost_usd": round(float(row[1] or 0), 6),
+            "total_input_tokens": int(row[2] or 0),
+            "total_output_tokens": int(row[3] or 0),
+            "task_count": int(row[4] or 0),
+        }
+        if dimension == "project" and key:
+            reg = registry.get(key) or {}
+            item["project_id"] = _encode_project_id(key)
+            item["project_name"] = reg.get("name") or _project_name_from_cwd(key)
+        results.append(item)
     return results

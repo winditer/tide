@@ -12,17 +12,22 @@ import {
   getWorkItemTransitions,
   getWorkItems,
   getWorkItem,
+  getWorkItemCrossRepoResults,
   getProjectWorkflow,
   bindProjectWorkflow,
   unbindProjectWorkflow,
   addArtifact,
   removeArtifact,
+  aiDecomposeWorkItems,
+  batchCreateWorkItems,
+  resolveMerge,
   type WorkItemFilters,
+  type BatchCreateWorkItemsPayload,
+  type ResolveMergeParams,
 } from "../api/work-items";
 import type {
   WorkItemCreate,
   WorkItemUpdate,
-  ProjectSettings,
 } from "../types/work-item";
 
 export function useWorkItemBoard(
@@ -60,6 +65,14 @@ export function useWorkItemTransitions(id: string | undefined) {
   return useQuery({
     queryKey: ["work-items", "transitions", id],
     queryFn: () => getWorkItemTransitions(id!),
+    enabled: !!id,
+  });
+}
+
+export function useWorkItemCrossRepoResults(id: string | undefined) {
+  return useQuery({
+    queryKey: ["work-items", "cross-repo-results", id],
+    queryFn: () => getWorkItemCrossRepoResults(id!),
     enabled: !!id,
   });
 }
@@ -161,6 +174,45 @@ export function useRemoveArtifact() {
       workItemId: string;
       artifactId: string;
     }) => removeArtifact(workItemId, artifactId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["work-items"] });
+    },
+  });
+}
+
+/**
+ * AI 分解需求：调用后端解析文本/链接/文件，返回候选工作项列表（不入库）。
+ * 调用方应在用户确认后再使用 ``useBatchCreateWorkItems`` 持久化。
+ */
+export function useAIDecompose() {
+  return useMutation({
+    mutationFn: (data: FormData) => aiDecomposeWorkItems(data),
+  });
+}
+
+/** 批量创建工作项；成功后失效 work-items 查询。 */
+export function useBatchCreateWorkItems() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: BatchCreateWorkItemsPayload) =>
+      batchCreateWorkItems(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["work-items"] });
+    },
+  });
+}
+
+/** 完成合并冲突解决（推进或放弃合并）。 */
+export function useResolveMerge() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      workItemId,
+      data,
+    }: {
+      workItemId: string;
+      data: ResolveMergeParams;
+    }) => resolveMerge(workItemId, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["work-items"] });
     },

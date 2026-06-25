@@ -8,8 +8,9 @@ import {
   useState,
   type CSSProperties,
 } from "react";
-import { useAgents, useChat, useProjects } from "@tide/core";
+import { useAgents, useChat, useProjects, useProjectGroups } from "@tide/core";
 import { ChatMessageList } from "./ChatMessageList";
+import { ChatArtifactPanel } from "./ChatArtifactPanel";
 
 interface ButtonPosition {
   /** distance from viewport bottom in px */
@@ -21,6 +22,7 @@ interface ButtonPosition {
 const DEFAULT_POSITION: ButtonPosition = { bottom: 24, right: 24 };
 const POSITION_STORAGE_KEY = "tide.floating-chat.position";
 const PROJECT_STORAGE_KEY = "tide.floating-chat.project";
+const SCOPE_STORAGE_KEY = "tide.floating-chat.scope";
 const AGENT_STORAGE_KEY = "tide.floating-chat.agent";
 const BUTTON_SIZE = 48;
 const DRAG_THRESHOLD = 4;
@@ -80,7 +82,8 @@ export function FloatingChat() {
   const [mounted, setMounted] = useState(false);
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState<ButtonPosition>(DEFAULT_POSITION);
-  const [projectCwd, setProjectCwd] = useState<string>("");
+  /** 统一作用域选择。编码："project:<cwd>" / "group:<id>" / ""。 */
+  const [scopeValue, setScopeValue] = useState<string>("");
   const [agentId, setAgentId] = useState<string>("");
   const [draftInput, setDraftInput] = useState("");
   const [isDragging, setIsDragging] = useState(false);
@@ -91,13 +94,20 @@ export function FloatingChat() {
   useEffect(() => {
     setMounted(true);
     setPosition(loadPosition());
-    setProjectCwd(readLocal(PROJECT_STORAGE_KEY));
+    // 优先读新 key；以前只保存 cwd 的旧 key 按 project: 前缀迁移
+    const newScope = readLocal(SCOPE_STORAGE_KEY);
+    if (newScope) {
+      setScopeValue(newScope);
+    } else {
+      const legacyCwd = readLocal(PROJECT_STORAGE_KEY);
+      setScopeValue(legacyCwd ? `project:${legacyCwd}` : "");
+    }
     setAgentId(readLocal(AGENT_STORAGE_KEY));
   }, []);
 
   useEffect(() => {
-    if (mounted) writeLocal(PROJECT_STORAGE_KEY, projectCwd);
-  }, [projectCwd, mounted]);
+    if (mounted) writeLocal(SCOPE_STORAGE_KEY, scopeValue);
+  }, [scopeValue, mounted]);
 
   useEffect(() => {
     if (mounted) writeLocal(AGENT_STORAGE_KEY, agentId);
@@ -105,12 +115,22 @@ export function FloatingChat() {
 
   const projectsQuery = useProjects();
   const projects = projectsQuery.data?.projects ?? [];
+  const groupsQuery = useProjectGroups();
+  const groups = groupsQuery.data?.groups ?? [];
   const { data: agentsData } = useAgents();
   const agents = agentsData?.agents ?? [];
+
+  // 从统一 scope 解码出当前选择的项目 cwd 与项目组 id
+  const projectCwd = scopeValue.startsWith("project:") ? scopeValue.slice(8) : "";
+  const groupId = scopeValue.startsWith("group:") ? scopeValue.slice(6) : "";
 
   const selectedProject = useMemo(
     () => projects.find((p) => p.cwd === projectCwd) ?? null,
     [projects, projectCwd]
+  );
+  const selectedGroup = useMemo(
+    () => groups.find((g) => g.id === groupId) ?? null,
+    [groups, groupId]
   );
 
   const chat = useChat({
@@ -140,12 +160,13 @@ export function FloatingChat() {
     try {
       await chatRef.current.sendMessage(trimmed, {
         projectCwd: projectCwd || undefined,
+        groupId: groupId || undefined,
         agentId: agentId || undefined,
       });
     } finally {
       sendingRef.current = false;
     }
-  }, [draftInput, projectCwd, agentId]);
+  }, [draftInput, projectCwd, groupId, agentId]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -387,7 +408,10 @@ export function FloatingChat() {
               <div className="ml-auto flex items-center gap-1">
                 <button
                   type="button"
-                  onClick={chat.clearHistory}
+                  onClick={() => {
+                    chat.clearHistory();
+                    chat.clearArtifacts();
+                  }}
                   title="清空历史"
                   className="flex h-7 w-7 items-center justify-center rounded-md text-zinc-400 transition-colors hover:bg-white/10 hover:text-white"
                 >
@@ -478,16 +502,29 @@ export function FloatingChat() {
             {/* Context bar */}
             <div className="flex shrink-0 items-center gap-2 border-b border-border/50 bg-card px-3 py-2">
               <select
-                value={projectCwd}
-                onChange={(e) => setProjectCwd(e.target.value)}
+                value={scopeValue}
+                onChange={(e) => setScopeValue(e.target.value)}
                 className="h-7 max-w-[170px] flex-1 truncate rounded-md border border-border/50 bg-muted/50 px-2 text-xs text-foreground transition-colors focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30"
               >
                 <option value="">无项目 · 纯对话</option>
-                {projects.map((p) => (
-                  <option key={p.id} value={p.cwd}>
-                    {p.name}
-                  </option>
-                ))}
+                {projects.length > 0 && (
+                  <optgroup label="项目">
+                    {projects.map((p) => (
+                      <option key={p.id} value={`project:${p.cwd}`}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {groups.length > 0 && (
+                  <optgroup label="项目组">
+                    {groups.map((g) => (
+                      <option key={g.id} value={`group:${g.id}`}>
+                        {g.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
               <select
                 value={agentId}
@@ -503,14 +540,19 @@ export function FloatingChat() {
               </select>
             </div>
 
+            {/* Artifacts panel — hidden when no artifacts produced. */}
+            <ChatArtifactPanel artifacts={chat.artifacts} />
+
             {/* Messages */}
             <div className="flex-1 overflow-hidden bg-background">
               <ChatMessageList
                 messages={chat.messages}
                 emptyHint={
-                  selectedProject
-                    ? `在「${selectedProject.name}」中执行任务`
-                    : "纯对话模式 · 不绑定项目"
+                  selectedGroup
+                    ? `在项目组「${selectedGroup.name}」中执行任务`
+                    : selectedProject
+                      ? `在「${selectedProject.name}」中执行任务`
+                      : "纯对话模式 · 不绑定项目"
                 }
                 onApprove={(approvalId, comment) => void chat.approveTask(approvalId, comment)}
                 onReject={(approvalId, comment) => void chat.rejectTask(approvalId, comment)}
@@ -532,9 +574,11 @@ export function FloatingChat() {
                   onChange={(e) => setDraftInput(e.target.value)}
                   onKeyDown={handleKeyDown}
                   placeholder={
-                    selectedProject
-                      ? `在「${selectedProject.name}」中执行... (⌘+Enter)`
-                      : "输入消息开始对话... (⌘+Enter)"
+                    selectedGroup
+                      ? `在项目组「${selectedGroup.name}」中执行... (⌘+Enter)`
+                      : selectedProject
+                        ? `在「${selectedProject.name}」中执行... (⌘+Enter)`
+                        : "输入消息开始对话... (⌘+Enter)"
                   }
                   className="min-h-[60px] max-h-[200px] flex-1 resize-y rounded-lg border-0 bg-muted/50 px-3 py-2 text-sm leading-snug text-foreground placeholder:text-muted-foreground transition-shadow focus:outline-none focus:ring-2 focus:ring-ring"
                 />
@@ -568,9 +612,11 @@ export function FloatingChat() {
               </div>
               <div className="mt-1.5 flex items-center justify-between text-[10px] text-muted-foreground">
                 <span>
-                  {selectedProject
-                    ? `项目 · ${selectedProject.name}`
-                    : "纯对话模式"}
+                  {selectedGroup
+                    ? `项目组 · ${selectedGroup.name}`
+                    : selectedProject
+                      ? `项目 · ${selectedProject.name}`
+                      : "纯对话模式"}
                 </span>
                 <span>⌘ + ↵ 发送</span>
               </div>

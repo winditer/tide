@@ -1,1 +1,1 @@
-{"version":3,"file":"SessionBoard.d.ts","sourceRoot":"","sources":["../../src/kanban/SessionBoard.tsx"],"names":[],"mappings":"AAWA,wBAAgB,YAAY,gCAsF3B"}
+{"version":3,"file":"SessionBoard.d.ts","sourceRoot":"","sources":["../../src/kanban/SessionBoard.tsx"],"names":[],"mappings":"AAWA,MAAM,WAAW,iBAAiB;IAChC,OAAO,CAAC,EAAE,MAAM,CAAC;IACjB,SAAS,CAAC,EAAE,MAAM,CAAC;CACpB;AAED,wBAAgB,YAAY,CAAC,EAAE,OAAO,EAAE,SAAS,EAAE,GAAE,iBAAsB,+BA0F1E"}

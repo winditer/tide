@@ -83,6 +83,10 @@ function handleWsEvent(event: TaskEvent, queryClient: ReturnType<typeof useQuery
       queryClient.invalidateQueries({ queryKey: ["approvals"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       break;
+    case "security.alert":
+      queryClient.invalidateQueries({ queryKey: ["security-findings"] });
+      queryClient.invalidateQueries({ queryKey: ["security-summary"] });
+      break;
     default:
       // Unknown event type — no invalidation
       break;

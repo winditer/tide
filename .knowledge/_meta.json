@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0",
+  "version": 6,
+  "repo_name": "tide",
+  "repo_path": "/Users/haifeng/Documents/tide",
+  "git_commit": "d5f6809fb0785bd0db091fbdaa8c5534baf6a8d6",
+  "git_branch": "workflow",
+  "generated_at": "2026-06-24T02:54:15.432094Z",
+  "generator": "agent",
+  "sections": [
+    "concept",
+    "db",
+    "module",
+    "api"
+  ]
+}

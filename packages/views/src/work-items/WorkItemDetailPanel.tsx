@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { Pencil, Trash2 } from "lucide-react";
+import { Pencil, Trash2, AlertTriangle, GitMerge } from "lucide-react";
 import { Button, Badge, Input, Select } from "@tide/ui";
 import {
   useWorkItem,
@@ -24,6 +24,8 @@ import {
   type WorkItemArtifact,
   type Approval,
 } from "@tide/core";
+import { CrossRepoResults } from "./CrossRepoResults";
+import { MergeConflictPanel } from "../code-editor/MergeConflictPanel";
 
 const PRIORITY_OPTIONS: { value: string; label: string }[] = [
   { value: "0", label: "无" },
@@ -320,6 +322,15 @@ export function WorkItemDetailPanel({
 
         {/* Approval action area */}
         <WorkItemApprovalSection item={item} />
+
+        {/* Merge conflict section */}
+        <WorkItemMergeConflictSection item={item} />
+
+        {/* 跨仓库执行结果：仅项目组工作项且后端返回不为空时渲染 */}
+        <CrossRepoResults
+          workItemId={item.id}
+          enabled={!!item.group_id}
+        />
 
         {/* 产物 Artifacts */}
         <WorkItemArtifactsSection item={item} />
@@ -667,6 +678,69 @@ function WorkItemApprovalSection({ item }: WorkItemApprovalSectionProps) {
           <p className="mt-2 text-[11px] text-destructive">
             操作失败：{String(error)}
           </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function WorkItemMergeConflictSection({ item }: { item: WorkItem }) {
+  const [showPanel, setShowPanel] = useState(false);
+
+  // Check if metadata contains merge_conflict info
+  const meta = item.metadata as Record<string, any> | undefined;
+  if (!meta || !meta.merge_conflict) return null;
+
+  const conflictData = meta.merge_conflict_data as {
+    cwd?: string;
+    source_branch?: string;
+    target_branch?: string;
+    conflict_files?: string[];
+  } | undefined;
+
+  const cwd = conflictData?.cwd || "";
+  const sourceBranch = conflictData?.source_branch || "source";
+  const targetBranch = conflictData?.target_branch || "target";
+  const conflictFiles = conflictData?.conflict_files || [];
+
+  if (showPanel && conflictFiles.length > 0) {
+    return (
+      <div>
+        <MergeConflictPanel
+          projectId={item.project_id}
+          workItemId={item.id}
+          cwd={cwd}
+          sourceBranch={sourceBranch}
+          targetBranch={targetBranch}
+          conflictFiles={conflictFiles}
+          onResolved={() => setShowPanel(false)}
+          onAbort={() => setShowPanel(false)}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="rounded-xl border border-amber-200/70 bg-amber-50/60 p-4 shadow-card">
+        <div className="flex items-center gap-2">
+          <AlertTriangle className="h-4 w-4 text-amber-700" />
+          <span className="text-xs font-semibold text-amber-800">合并冲突</span>
+        </div>
+        <p className="mt-1.5 text-[11px] text-muted-foreground">
+          {conflictFiles.length > 0
+            ? `${conflictFiles.length} 个文件存在冲突，需要手动解决`
+            : "存在合并冲突，需要解决"}
+        </p>
+        {conflictFiles.length > 0 && (
+          <Button
+            size="sm"
+            className="mt-2 h-7 text-[11px] bg-amber-600 hover:bg-amber-700 text-white"
+            onClick={() => setShowPanel(true)}
+          >
+            <GitMerge className="mr-1 h-3 w-3" />
+            解决冲突
+          </Button>
         )}
       </div>
     </div>

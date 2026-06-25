@@ -179,7 +179,7 @@ export function renderInline(
     if (token.startsWith("`")) {
       const codeCls =
         variant === "compact"
-          ? "rounded bg-zinc-200 px-1 font-mono text-xs text-zinc-900"
+          ? "rounded bg-zinc-100 border border-zinc-200 px-1 py-0.5 font-mono text-[0.85em] text-rose-600/80"
           : "rounded border border-zinc-300 bg-zinc-100 px-1.5 py-0.5 font-mono text-[0.85em] text-zinc-800";
       out.push(
         <code key={`${keyBase}-c-${idx}`} className={codeCls}>
@@ -188,7 +188,7 @@ export function renderInline(
       );
     } else if (token.startsWith("**")) {
       out.push(
-        <strong key={`${keyBase}-b-${idx}`} className="font-bold text-zinc-900">
+        <strong key={`${keyBase}-b-${idx}`} className={variant === "compact" ? "font-semibold text-zinc-800" : "font-bold text-zinc-900"}>
           {token.slice(2, -2)}
         </strong>
       );
@@ -202,7 +202,11 @@ export function renderInline(
             href={m[2]}
             target="_blank"
             rel="noreferrer noopener"
-            className="text-blue-700 underline decoration-zinc-400 underline-offset-2 hover:text-blue-900"
+            className={
+              variant === "compact"
+                ? "text-blue-600 underline decoration-blue-300 decoration-1 underline-offset-2 hover:text-blue-800 hover:decoration-blue-500 transition-colors"
+                : "text-blue-700 underline decoration-zinc-400 underline-offset-2 hover:text-blue-900"
+            }
           >
             {m[1]}
           </a>
@@ -250,18 +254,18 @@ const DEFAULT_CLASSES: BlockClasses = {
 };
 
 const COMPACT_CLASSES: BlockClasses = {
-  h1: "mt-1 mb-1.5 text-base font-bold text-zinc-900",
-  h2: "mt-2 mb-1 text-[15px] font-bold text-zinc-900",
-  h3: "mt-2 mb-1 text-sm font-semibold text-zinc-900",
-  h4: "mt-1.5 mb-1 text-[13px] font-semibold text-zinc-900",
-  p: "my-1 text-sm leading-6 text-zinc-800",
-  ul: "my-1 ml-4 list-disc space-y-0.5 text-sm text-zinc-800 marker:text-zinc-900",
-  ol: "my-1 ml-4 list-decimal space-y-0.5 text-sm text-zinc-800 marker:text-zinc-900",
-  li: "leading-6",
+  h1: "mt-1 mb-2 text-base font-bold text-zinc-900 tracking-tight",
+  h2: "mt-5 mb-2 text-[15px] font-semibold text-zinc-800 border-b border-zinc-200 pb-1.5",
+  h3: "mt-4 mb-1.5 text-sm font-semibold text-zinc-700",
+  h4: "mt-3 mb-1 text-[13px] font-semibold text-zinc-600",
+  p: "my-2 text-[13px] leading-[1.75] text-zinc-600",
+  ul: "my-2 ml-5 list-disc space-y-1 text-[13px] text-zinc-700 marker:text-zinc-400",
+  ol: "my-2 ml-5 list-decimal space-y-1 text-[13px] text-zinc-700 marker:text-zinc-500",
+  li: "leading-[1.75]",
   quote:
-    "my-2 border-l-4 border-zinc-900 bg-amber-50 px-2 py-1 text-sm text-zinc-800",
-  hr: "my-2 border-t border-dashed border-zinc-400",
-  pre: "my-1.5 overflow-x-auto rounded bg-zinc-800 p-2 text-xs leading-5 text-zinc-100",
+    "my-3 border-l-[3px] border-blue-300 bg-blue-50/60 rounded-r px-3 py-2 text-[13px] leading-relaxed text-zinc-600 italic",
+  hr: "my-4 border-t border-zinc-200",
+  pre: "my-2.5 max-w-full overflow-x-auto rounded-lg bg-zinc-800 px-3 py-2.5 text-xs leading-5 text-zinc-100 font-mono",
 };
 
 export function renderBlocks(
@@ -342,25 +346,25 @@ export function renderBlocks(
             key={key}
             className={
               variant === "compact"
-                ? "my-2 overflow-x-auto border border-zinc-900"
+                ? "my-3 overflow-x-auto rounded-lg border border-zinc-200 shadow-sm"
                 : "my-4 overflow-x-auto border-2 border-zinc-900 shadow-[4px_4px_0_0_rgba(24,24,27,1)]"
             }
           >
             <table
               className={
                 variant === "compact"
-                  ? "w-full border-collapse text-xs"
+                  ? "min-w-full border-collapse text-[13px]"
                   : "w-full border-collapse text-sm"
               }
             >
-              <thead className="bg-zinc-900 text-zinc-50">
+              <thead className={variant === "compact" ? "bg-zinc-50 border-b border-zinc-200" : "bg-zinc-900 text-zinc-50"}>
                 <tr>
                   {b.headers.map((h, j) => (
                     <th
                       key={`${key}-h-${j}`}
                       className={
                         variant === "compact"
-                          ? "px-2 py-1 text-left font-bold"
+                          ? "whitespace-nowrap px-3 py-1.5 text-left font-semibold text-zinc-700"
                           : "px-3 py-2 text-left font-bold"
                       }
                     >
@@ -373,14 +377,18 @@ export function renderBlocks(
                 {b.rows.map((row, ri) => (
                   <tr
                     key={`${key}-r-${ri}`}
-                    className="border-t border-zinc-300 odd:bg-white even:bg-zinc-50"
+                    className={
+                      variant === "compact"
+                        ? "border-t border-zinc-100 odd:bg-white even:bg-zinc-50/50 hover:bg-zinc-100/60 transition-colors"
+                        : "border-t border-zinc-300 odd:bg-white even:bg-zinc-50"
+                    }
                   >
                     {row.map((cell, ci) => (
                       <td
                         key={`${key}-r-${ri}-c-${ci}`}
                         className={
                           variant === "compact"
-                            ? "px-2 py-1 align-top text-zinc-700"
+                            ? "px-3 py-1.5 align-top text-zinc-600 [&>code]:whitespace-nowrap"
                             : "px-3 py-2 align-top text-zinc-700"
                         }
                       >

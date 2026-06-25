@@ -1,15 +1,16 @@
 "use client";
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { useSessionBoard, useMoveCard } from "@tide/core";
 import { useQueryClient } from "@tanstack/react-query";
 import { KanbanBoard } from "./KanbanBoard";
 import { KanbanFilters } from "./KanbanFilters";
 import { EmptyState } from "./EmptyState";
-export function SessionBoard() {
+export function SessionBoard({ groupId, projectId } = {}) {
     var _a;
     const [search, setSearch] = useState("");
-    const { data, isLoading } = useSessionBoard();
+    const queryParams = useMemo(() => ({ group_id: groupId, project_id: projectId }), [groupId, projectId]);
+    const { data, isLoading } = useSessionBoard(queryParams);
     const moveMutation = useMoveCard();
     const queryClient = useQueryClient();
     const filterColumns = useCallback((columns) => {
@@ -22,7 +23,7 @@ export function SessionBoard() {
         const { draggableId, destination, source } = result;
         if (!destination || destination.droppableId === source.droppableId)
             return;
-        queryClient.setQueryData(["kanban", "sessions", undefined], (old) => {
+        queryClient.setQueryData(["kanban", "sessions", queryParams], (old) => {
             if (!(old === null || old === void 0 ? void 0 : old.columns))
                 return old;
             const columns = old.columns.map((col) => (Object.assign(Object.assign({}, col), { cards: col.cards.filter((c) => c.id !== draggableId) })));
@@ -45,7 +46,7 @@ export function SessionBoard() {
                 queryClient.invalidateQueries({ queryKey: ["kanban", "sessions"] });
             },
         });
-    }, [moveMutation, queryClient]);
+    }, [moveMutation, queryClient, queryParams]);
     if (isLoading) {
         return _jsx("div", { className: "py-8 text-center text-muted-foreground", children: "\u52A0\u8F7D\u4E2D..." });
     }

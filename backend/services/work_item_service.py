@@ -326,6 +326,7 @@ class WorkItemService:
         source_id = (data.source_id if hasattr(data, "source_id") else data.get("source_id")) or None
         metadata = (data.metadata if hasattr(data, "metadata") else data.get("metadata")) or None
         version_id = (data.version_id if hasattr(data, "version_id") else data.get("version_id")) or None
+        group_id = data.get("group_id") if isinstance(data, dict) else getattr(data, "group_id", None)
 
         # 1. 查找 project_settings；若项目尚未绑定工作流，则尝试自动绑定一个
         #    默认（最早创建且 enabled）的工作流，避免普通成员在新项目首次创建
@@ -364,10 +365,10 @@ class WorkItemService:
                     INSERT INTO work_items
                         (id, project_id, workflow_id, current_node_id, title, description,
                          priority, assignee, tags, source_type, source_id, metadata,
-                         version_id, started_at, created_at, updated_at)
+                         version_id, started_at, created_at, updated_at, group_id)
                     VALUES (:id, :project_id, :workflow_id, :current_node_id, :title, :description,
                             :priority, :assignee, :tags, :source_type, :source_id, :metadata,
-                            :version_id, :started_at, :created_at, :updated_at)
+                            :version_id, :started_at, :created_at, :updated_at, :group_id)
                 """),
                 {
                     "id": item_id,
@@ -386,6 +387,7 @@ class WorkItemService:
                     "started_at": now,
                     "created_at": now,
                     "updated_at": now,
+                    "group_id": group_id,
                 },
             )
             await session.commit()
@@ -430,7 +432,8 @@ class WorkItemService:
                 text("""
                     SELECT id, project_id, workflow_id, current_node_id, title, description,
                            priority, assignee, tags, source_type, source_id, metadata,
-                           version_id, started_at, completed_at, created_at, updated_at
+                           version_id, started_at, completed_at, created_at, updated_at,
+                           group_id
                     FROM work_items WHERE id = :id
                 """),
                 {"id": item_id},
@@ -452,14 +455,18 @@ class WorkItemService:
         search: Optional[str] = None,
         assignee: Optional[str] = None,
         version_id: Optional[str] = None,
+        group_id: Optional[str] = None,
     ) -> List[dict]:
-        """列出工作项，支持按项目、状态、关键词、负责人和版本筛选。"""
+        """列出工作项，支持按项目、状态、关键词、负责人、版本和项目组筛选。"""
         conditions = []
         params: dict = {}
 
         if project_id:
             conditions.append("project_id = :project_id")
             params["project_id"] = project_id
+        if group_id:
+            conditions.append("group_id = :group_id")
+            params["group_id"] = group_id
         if status:
             if status == "completed":
                 conditions.append("completed_at IS NOT NULL")
@@ -482,7 +489,8 @@ class WorkItemService:
                 text(f"""
                     SELECT id, project_id, workflow_id, current_node_id, title, description,
                            priority, assignee, tags, source_type, source_id, metadata,
-                           version_id, started_at, completed_at, created_at, updated_at
+                           version_id, started_at, completed_at, created_at, updated_at,
+                           group_id
                     FROM work_items
                     {where}
                     ORDER BY created_at DESC
@@ -718,6 +726,114 @@ class WorkItemService:
             rows = result.fetchall()
         return [dict(row._mapping) for row in rows]
 
+    async def get_cross_repo_results(self, item_id: str) -> dict:
+        """跨仓库执行结果聚合。
+
+        当工作项关联了项目组（``group_id``）时，返回该工作项
+        驱动的跨仓库 Plan 下所有子任务的 diff/commit 汇总，供前端
+        按仓库分组展示。未关联项目组或未生成 Plan 时返回空
+        结果，调用方可友好降级处理。
+        """
+        item = await self.get_work_item(item_id)
+        if not item:
+            raise ValueError(f"Work item {item_id} not found")
+
+        group_id = item.get("group_id")
+        empty: dict = {"group_id": group_id, "results": []}
+        if not group_id:
+            return empty
+
+        # 1. 通过 work_item_transitions.task_id 关联 plan_tasks 反查出 plan_id
+        async with async_session_factory() as session:
+            plan_row = await session.execute(
+                text("""
+                    SELECT DISTINCT pt.plan_id
+                    FROM work_item_transitions wit
+                    JOIN plan_tasks pt ON wit.task_id = pt.task_id
+                    WHERE wit.work_item_id = :item_id
+                      AND wit.task_id IS NOT NULL
+                    ORDER BY pt.plan_id
+                    LIMIT 1
+                """),
+                {"item_id": item_id},
+            )
+            row = plan_row.fetchone()
+        if not row:
+            return empty
+        plan_id = row[0]
+        if not plan_id:
+            return empty
+
+        # 2. 拉取 plan 下所有子任务与执行结果
+        async with async_session_factory() as session:
+            tasks_result = await session.execute(
+                text("""
+                    SELECT t.id           AS task_id,
+                           t.status       AS status,
+                           t.cwd          AS cwd,
+                           t.diff_summary AS diff_summary,
+                           t.commit_hash  AS commit_hash,
+                           t.commit_message AS commit_message,
+                           t.completed_at AS completed_at,
+                           pt.task_index  AS task_index
+                    FROM plan_tasks pt
+                    JOIN tasks t ON pt.task_id = t.id
+                    WHERE pt.plan_id = :plan_id
+                    ORDER BY pt.task_index
+                """),
+                {"plan_id": plan_id},
+            )
+            task_rows = [dict(r._mapping) for r in tasks_result.fetchall()]
+
+        if not task_rows:
+            return empty
+
+        # 3. 查项目组成员，建立 cwd → (project_id, name) 映射
+        from backend.services.project_group_service import project_group_service
+        try:
+            group_projects = await project_group_service.get_group_projects(group_id)
+        except Exception as exc:  # pragma: no cover - 防御性
+            logger.warning(
+                "[WorkItem] Failed to load group projects %s: %s", group_id[:8], exc,
+            )
+            group_projects = []
+
+        cwd_to_project: dict = {}
+        for p in group_projects:
+            cwd = (p.get("cwd") or "").rstrip("/")
+            if cwd:
+                cwd_to_project[cwd] = {
+                    "project_id": p.get("project_id"),
+                    "project_name": p.get("name") or p.get("project_id"),
+                }
+
+        # 4. 按仓库组装返回结果
+        results: List[dict] = []
+        for r in task_rows:
+            cwd = (r.get("cwd") or "").rstrip("/")
+            mapped = cwd_to_project.get(cwd, {})
+            results.append({
+                "project_id": mapped.get("project_id"),
+                "project_name": (
+                    mapped.get("project_name")
+                    or (Path(cwd).name if cwd else None)
+                ),
+                "cwd": cwd or None,
+                "status": r.get("status"),
+                "task_id": r.get("task_id"),
+                "task_index": r.get("task_index"),
+                "diff_summary": r.get("diff_summary"),
+                "commit_hash": r.get("commit_hash"),
+                "commit_message": r.get("commit_message"),
+                "completed_at": r.get("completed_at"),
+            })
+
+        return {
+            "group_id": group_id,
+            "plan_id": plan_id,
+            "results": results,
+        }
+
     # ── 自动化触发 ───────────────────────────────────────
 
     async def _safe_trigger_agent(self, item: dict, node: dict):
@@ -751,6 +867,12 @@ class WorkItemService:
         )
         try:
             from backend.services.task_service import task_service
+
+            # 项目组分支：若工作项关联了 group_id，使用跨仓库模式
+            group_id = item.get("group_id")
+            if group_id:
+                await self._trigger_group_agent_node(item, node, group_id)
+                return
 
             data = node.get("data", {})
             agent_id = data.get("agentId") or data.get("agent_id") or "codex"
@@ -889,6 +1011,185 @@ class WorkItemService:
         except Exception as exc:
             logger.exception(
                 "Failed to trigger agent node for work item %s: %s",
+                item["id"][:8], exc,
+            )
+
+    async def _trigger_group_agent_node(self, item: dict, node: dict, group_id: str):
+        """项目组模式：为组内各仓库自动生成跨仓库 Plan。失败时回退到单仓库模式。"""
+        if not item or not node or not group_id:
+            logger.warning(
+                "[WorkItem] _trigger_group_agent_node missing args: item=%s node=%s group=%s",
+                bool(item), bool(node), bool(group_id),
+            )
+            return
+        logger.info(
+            "[WorkItem] Triggering GROUP agent node '%s' for item '%s' (group=%s)",
+            node.get("id"),
+            item.get("id"),
+            group_id[:8],
+        )
+        try:
+            from backend.services.task_service import task_service
+            from backend.services.project_group_service import project_group_service
+            from backend.services.plan_service import plan_service
+
+            data = node.get("data", {})
+            agent_id = data.get("agentId") or data.get("agent_id") or "codex"
+            model = data.get("model") or ""
+            prompt_template = data.get("promptTemplate") or data.get("prompt") or ""
+
+            # 1. 获取项目组上下文
+            group_context = await project_group_service.get_group_context_prompt(group_id)
+            group_projects = await project_group_service.get_group_projects(group_id)
+            if not group_projects:
+                logger.warning(
+                    "[WorkItem] Group %s has no projects, falling back to single-repo mode",
+                    group_id[:8],
+                )
+                item_copy = dict(item)
+                item_copy.pop("group_id", None)
+                await self._trigger_agent_node(item_copy, node)
+                return
+
+            # 确定主项目
+            primary_project = next(
+                (p for p in group_projects if p["role"] == "primary"),
+                group_projects[0],
+            )
+            primary_cwd = primary_project["cwd"]
+            if not primary_cwd or not os.path.isabs(primary_cwd):
+                primary_cwd = await self._get_project_path(item["project_id"]) or str(Path.cwd())
+
+            # 2. 渲染基础 prompt
+            base_prompt = self._render_prompt_template(prompt_template, item)
+            if not base_prompt:
+                base_prompt = f"处理工作项: {item['title']}"
+                if item.get("description"):
+                    base_prompt += f"\n\n{item['description']}"
+
+            # 3. 构建跨仓库 Plan definition
+            # 后端项目可并行（phase 0），前端项目依赖后端（phase 1）
+            plan_tasks = []
+            backend_indices = []
+            for idx, project in enumerate(group_projects):
+                project_name = project["name"]
+                project_cwd = project["cwd"]
+                if not project_cwd:
+                    continue
+
+                # 判断是否为前端项目（简单启发式：名称含 web/frontend/app）
+                is_frontend = any(
+                    kw in project_name.lower()
+                    for kw in ("web", "frontend", "app", "ui", "client")
+                )
+                phase = 1 if is_frontend and backend_indices else 0
+
+                task_prompt = (
+                    f"{group_context}\n\n"
+                    f"## 需求\n{base_prompt}\n\n"
+                    f"## 当前目标仓库\n"
+                    f"你现在在 `{project_name}` 仓库（{project_cwd}）中工作。\n"
+                    f"请只修改本仓库相关的代码。如果此需求不涉及本仓库，请输出'无需修改'并结束。"
+                )
+
+                plan_task_def = {
+                    "title": f"[{project_name}] {item['title'][:50]}",
+                    "prompt": task_prompt,
+                    "agent_id": agent_id,
+                    "phase": phase,
+                    "depends_on": backend_indices if is_frontend and backend_indices else [],
+                    "project_id": project["project_id"],
+                    "cwd": project_cwd,
+                }
+                plan_tasks.append(plan_task_def)
+
+                if not is_frontend:
+                    backend_indices.append(idx)
+
+            if not plan_tasks:
+                logger.error("[WorkItem] No valid projects in group %s", group_id[:8])
+                return
+
+            # 4. 创建 Plan
+            plan_definition = {
+                "tasks": plan_tasks,
+                "max_parallel": min(len(plan_tasks), 3),
+            }
+
+            plan = await plan_service.create_plan(
+                workspace_id="default",
+                definition_json=plan_definition,
+                cwd=primary_cwd,
+                model=model,
+            )
+
+            plan_id = plan.get("id") if plan else None
+            if plan_id:
+                logger.info(
+                    "[WorkItem] Cross-repo plan created: %s (%d tasks) for item '%s'",
+                    plan_id[:8], len(plan_tasks), item["id"][:8],
+                )
+
+                # 将 plan 中第一个 task 的 id 关联到 transition
+                plan_task_ids = plan.get("task_ids", [])
+                first_task_id = plan_task_ids[0] if plan_task_ids else None
+
+                # 如果 plan 返回中没有 task_ids，从数据库查询
+                if not first_task_id:
+                    async with async_session_factory() as session:
+                        result = await session.execute(
+                            text("""
+                                SELECT task_id FROM plan_tasks
+                                WHERE plan_id = :plan_id
+                                ORDER BY task_index LIMIT 1
+                            """),
+                            {"plan_id": plan_id},
+                        )
+                        row = result.fetchone()
+                        if row:
+                            first_task_id = row[0]
+
+                if first_task_id:
+                    async with async_session_factory() as session:
+                        await session.execute(
+                            text("""
+                                UPDATE work_item_transitions
+                                SET task_id = :task_id
+                                WHERE id = (
+                                    SELECT id FROM work_item_transitions
+                                    WHERE work_item_id = :item_id
+                                      AND to_node_id = :node_id
+                                      AND task_id IS NULL
+                                    ORDER BY created_at DESC
+                                    LIMIT 1
+                                )
+                            """),
+                            {
+                                "task_id": first_task_id,
+                                "item_id": item["id"],
+                                "node_id": node["id"],
+                            },
+                        )
+                        await session.commit()
+            else:
+                logger.error(
+                    "[WorkItem] Cross-repo plan creation failed for item '%s', falling back to single-repo mode",
+                    item["id"][:8],
+                )
+                # Plan 创建失败 → 回退为单仓库模式，避免工作项状态被卡住
+                try:
+                    item_copy = dict(item)
+                    item_copy.pop("group_id", None)
+                    await self._trigger_agent_node(item_copy, node)
+                except Exception as fallback_exc:
+                    logger.exception(
+                        "Fallback to single-repo agent failed for item %s: %s",
+                        item["id"][:8], fallback_exc,
+                    )
+
+        except Exception as exc:
+            logger.exception(
+                "Failed to trigger group agent node for work item %s: %s",
                 item["id"][:8], exc,
             )
 

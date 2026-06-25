@@ -49,16 +49,31 @@ async def create_task(
 ):
     """创建任务"""
     _ensure_not_viewer(current_user)
-    await check_cwd_write_permission(body.cwd, current_user)
+    cwd = (body.cwd or "").strip()
+    group_id = (body.group_id or "").strip() or None
+
+    # 解析 group_id → cwd（仅在未显式提供 cwd 时取 primary 项目路径）
+    if group_id and not cwd:
+        from backend.services.project_group_service import project_group_service
+        group_projects = await project_group_service.get_group_projects(group_id)
+        if group_projects:
+            primary = next(
+                (p for p in group_projects if p.get("role") == "primary"),
+                group_projects[0],
+            )
+            cwd = (primary.get("cwd") or "").strip()
+
+    await check_cwd_write_permission(cwd or None, current_user)
     try:
         result = await task_service.create_task(
             workspace_id=body.workspace_id,
             prompt=body.prompt,
             agent_id=body.agent_id,
             model=body.model or "",
-            cwd=body.cwd or "",
+            cwd=cwd,
             attachments=body.attachments,
             session_id=body.session_id or "",
+            group_id=group_id,
         )
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
@@ -99,6 +114,7 @@ async def _fetch_db_tasks(
     status: Optional[str],
     agent_id: Optional[str],
     project: Optional[str] = None,
+    group_id: Optional[str] = None,
     session_id: Optional[str] = None,
     created_after: Optional[str] = None,
     created_before: Optional[str] = None,
@@ -117,6 +133,9 @@ async def _fetch_db_tasks(
         conditions.append("(cwd = :project OR cwd LIKE :project_prefix)")
         params["project"] = project
         params["project_prefix"] = project.rstrip("/") + "/%"
+    if group_id:
+        conditions.append("group_id = :group_id")
+        params["group_id"] = group_id
     if session_id:
         conditions.append("session_id = :session_id")
         params["session_id"] = session_id
@@ -199,6 +218,7 @@ async def list_tasks(
     status: str = Query(None),
     agent_id: str = Query(None),
     project: str = Query(None, description="按项目根/cwd 过滤文件扫描结果"),
+    group_id: Optional[str] = Query(None, description="按项目组过滤"),
     session_id: Optional[str] = Query(None, description="按会话 ID 过滤"),
     created_after: Optional[str] = Query(None, description="创建时间下界 (ISO datetime)"),
     created_before: Optional[str] = Query(None, description="创建时间上界 (ISO datetime)"),
@@ -206,7 +226,11 @@ async def list_tasks(
     page_size: int = Query(20, ge=1, le=100),
     current_user=Depends(get_optional_user),
 ):
-    """任务列表：合并 DB 任务 + 本地 Agent 会话文件扫描结果。"""
+    """任务列表：合并 DB 任务 + 本地 Agent 会话文件扫描结果。
+
+    - 当传入 ``group_id`` 时仅按 DB 中 ``tasks.group_id`` 过滤；文件扫描
+      源不带项目组归属信息，故跳过文件源以避免误命中。
+    """
     accessible_pids = await get_accessible_project_ids(current_user)
     # 1) DB 任务（全量，后面再分页）
     db_items = await _fetch_db_tasks(
@@ -214,6 +238,7 @@ async def list_tasks(
         status,
         agent_id,
         project,
+        group_id=group_id,
         session_id=session_id,
         created_after=created_after,
         created_before=created_before,
@@ -231,7 +256,8 @@ async def list_tasks(
     }
 
     # 文件源只能产出已完成态；status 过滤若不为空且非 "completed"，则不纳入
-    include_files = not status or status == "completed"
+    # 项目组过滤启用时跳过文件源（文件源无 group 归属信息）
+    include_files = (not status or status == "completed") and not group_id
     if include_files:
         file_sessions = discover_sessions(project_cwd=project, agent_id=agent_id)
         for s in file_sessions:

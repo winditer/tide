@@ -15,14 +15,22 @@
     "./workflows/*": "./src/workflows/*.tsx",
     "./workflows/nodes": "./src/workflows/nodes/index.ts",
     "./workflows/nodes/*": "./src/workflows/nodes/*.tsx",
-    "./work-items/*": "./src/work-items/*.tsx"
+    "./work-items/*": "./src/work-items/*.tsx",
+    "./shared/*": "./src/shared/*.tsx",
+    "./code-editor": "./src/code-editor/index.ts",
+    "./code-editor/*": "./src/code-editor/*.tsx"
   },
   "dependencies": {
     "@tide/core": "*",
     "@tide/ui": "*",
+    "@monaco-editor/react": "^4.7.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "@hello-pangea/dnd": "^18.0.0"
+  },
+  "peerDependencies": {
+    "next": ">=14.0.0",
+    "lucide-react": ">=0.300.0"
   },
   "devDependencies": {
     "@types/react": "^19.0.0",

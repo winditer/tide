@@ -43,6 +43,11 @@ function buildHeaders(extra?: HeadersInit): Headers {
   return headers;
 }
 
+/** Exported for cases where callers need to construct auth headers manually (e.g. blob downloads). */
+export function buildAuthHeaders(extra?: HeadersInit): Headers {
+  return buildHeaders(extra);
+}
+
 async function readResponse<T>(response: Response): Promise<T> {
   // Read body as text exactly once to avoid "body stream already read" errors
   const raw = await response.text();

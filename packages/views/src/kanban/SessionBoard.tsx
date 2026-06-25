@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { useSessionBoard, useMoveCard } from "@tide/core";
 import type { KanbanColumn, KanbanCard } from "@tide/core";
 import { useQueryClient } from "@tanstack/react-query";
@@ -9,9 +9,18 @@ import { KanbanBoard } from "./KanbanBoard";
 import { KanbanFilters } from "./KanbanFilters";
 import { EmptyState } from "./EmptyState";
 
-export function SessionBoard() {
+export interface SessionBoardProps {
+  groupId?: string;
+  projectId?: string;
+}
+
+export function SessionBoard({ groupId, projectId }: SessionBoardProps = {}) {
   const [search, setSearch] = useState("");
-  const { data, isLoading } = useSessionBoard();
+  const queryParams = useMemo(
+    () => ({ group_id: groupId, project_id: projectId }),
+    [groupId, projectId],
+  );
+  const { data, isLoading } = useSessionBoard(queryParams);
   const moveMutation = useMoveCard();
   const queryClient = useQueryClient();
 
@@ -33,7 +42,7 @@ export function SessionBoard() {
       if (!destination || destination.droppableId === source.droppableId) return;
 
       queryClient.setQueryData(
-        ["kanban", "sessions", undefined],
+        ["kanban", "sessions", queryParams],
         (old: any) => {
           if (!old?.columns) return old;
           const columns = old.columns.map((col: KanbanColumn) => ({
@@ -72,7 +81,7 @@ export function SessionBoard() {
         }
       );
     },
-    [moveMutation, queryClient]
+    [moveMutation, queryClient, queryParams]
   );
 
   if (isLoading) {

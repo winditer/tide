@@ -10,14 +10,17 @@ import {
   CardContent,
   Input,
   Select,
+  type SelectOptionGroup,
 } from "@tide/ui";
 import {
   useAgents,
   useCreateSessionMutation,
   useProjects,
+  useProjectGroups,
   useSessionsQuery,
   useArchiveSessionMutation,
   useUnarchiveSessionMutation,
+  type CreateSessionInput,
   type SessionInfo,
 } from "@tide/core";
 
@@ -115,7 +118,8 @@ function SessionsPageContent() {
   const searchParams = useSearchParams();
 
   const [tab, setTab] = useState<"project" | "chat">("project");
-  const [project, setProject] = useState<string>("");
+  /** 统一项目/项目组选择："" / "project:<cwd>" / "group:<id>" */
+  const [scopeValue, setScopeValue] = useState<string>("");
   const [agentId, setAgentId] = useState<string>("");
   const [showArchived, setShowArchived] = useState<boolean>(false);
   const [creating, setCreating] = useState<null | "convo" | "chat">(null);
@@ -138,14 +142,27 @@ function SessionsPageContent() {
   }, [searchParams, router, tab]);
 
   const { data: projects } = useProjects();
+  const { data: groupsData } = useProjectGroups();
   const { data: agents } = useAgents();
   const archiveMutation = useArchiveSessionMutation();
   const unarchiveMutation = useUnarchiveSessionMutation();
 
-  // 项目会话（项目/Agent 过滤生效）
+  // 解析 scopeValue 为 API 参数
+  const scopeFilters = useMemo(() => {
+    if (scopeValue.startsWith("project:")) {
+      return { project: scopeValue.slice(8), group_id: undefined };
+    }
+    if (scopeValue.startsWith("group:")) {
+      return { project: undefined, group_id: scopeValue.slice(6) };
+    }
+    return { project: undefined, group_id: undefined };
+  }, [scopeValue]);
+
+  // 项目会话（项目/项目组/Agent 过滤生效）
   const projectQuery = useSessionsQuery({
     type: "project",
-    project: project || undefined,
+    project: scopeFilters.project,
+    group_id: scopeFilters.group_id,
     agent_id: agentId || undefined,
     page_size: 200,
     show_archived: showArchived,
@@ -196,6 +213,36 @@ function SessionsPageContent() {
     );
   }, [sessions, tab]);
 
+  const projectList = projects?.projects ?? [];
+  const groupList = groupsData?.groups ?? [];
+
+  const scopeFlatOptions = useMemo(
+    () => [{ label: "全部", value: "" }],
+    [],
+  );
+  const scopeOptionGroups = useMemo<SelectOptionGroup[]>(() => {
+    const out: SelectOptionGroup[] = [];
+    if (projectList.length > 0) {
+      out.push({
+        label: "项目",
+        options: projectList.map((p) => ({
+          value: `project:${p.cwd}`,
+          label: p.name,
+        })),
+      });
+    }
+    if (groupList.length > 0) {
+      out.push({
+        label: "项目组",
+        options: groupList.map((g) => ({
+          value: `group:${g.id}`,
+          label: `${g.name} (${g.member_count})`,
+        })),
+      });
+    }
+    return out;
+  }, [projectList, groupList]);
+
   return (
     <div className="space-y-8">
       {/* Header */}
@@ -239,17 +286,14 @@ function SessionsPageContent() {
           筛选
         </span>
         {tab === "project" && (
-          <div className="min-w-[220px]">
+          <div className="min-w-[240px]">
             <Select
-              value={project}
-              onChange={(e) => setProject(e.target.value)}
-              options={[
-                { label: "全部项目", value: "" },
-                ...((projects?.projects ?? []).map((p) => ({
-                  label: p.name,
-                  value: p.cwd,
-                }))),
-              ]}
+              value={scopeValue}
+              onChange={(e) => setScopeValue(e.target.value)}
+              options={scopeFlatOptions}
+              groups={scopeOptionGroups}
+              aria-label="选择项目或项目组"
+              title="选择项目或项目组"
             />
           </div>
         )}
@@ -266,11 +310,11 @@ function SessionsPageContent() {
             ]}
           />
         </div>
-        {((tab === "project" && project) || agentId) && (
+        {((tab === "project" && scopeValue) || agentId) && (
           <button
             type="button"
             onClick={() => {
-              setProject("");
+              setScopeValue("");
               setAgentId("");
             }}
             className="text-xs text-muted-foreground hover:text-foreground transition-smooth"
@@ -567,40 +611,50 @@ interface CreateSessionDialogProps {
 
 function CreateSessionDialog({ onClose, onCreated, defaultType = "convo" }: CreateSessionDialogProps) {
   const { data: projects } = useProjects();
+  const { data: groupsData } = useProjectGroups();
   const { data: agents } = useAgents();
   const create = useCreateSessionMutation();
 
-  const projectOptions = (projects?.projects ?? []).map((p) => ({
-    label: `${p.name}  ·  ${p.cwd}`,
-    value: p.cwd,
-  }));
+  const projectList = projects?.projects ?? [];
+  const groupList = groupsData?.groups ?? [];
   const agentOptions = (agents?.agents ?? []).map((a) => ({
     label: a.name || a.id,
     value: a.id,
   }));
 
-  const defaultProject = projectOptions[0]?.value ?? "";
+  const defaultScope = projectList[0]
+    ? `project:${projectList[0].cwd}`
+    : "";
   const defaultAgent = agentOptions[0]?.value ?? "codex";
 
   const [sessionType, setSessionType] = useState<"convo" | "chat">(defaultType);
-  const [projectCwd, setProjectCwd] = useState<string>(defaultProject);
+  /** 统一作用域选择："project:<cwd>" / "group:<id>" / "" */
+  const [scopeValue, setScopeValue] = useState<string>(defaultScope);
   const [agentId, setAgentId] = useState<string>(defaultAgent);
   const [title, setTitle] = useState<string>("");
 
   const isChat = sessionType === "chat";
-  const canSubmit = isChat ? true : Boolean((projectCwd || "").trim());
+  const projectCwd = scopeValue.startsWith("project:") ? scopeValue.slice(8) : "";
+  const groupId = scopeValue.startsWith("group:") ? scopeValue.slice(6) : "";
+  const canSubmit = isChat ? true : Boolean(projectCwd || groupId);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const cwd = (projectCwd || "").trim();
-    if (!isChat && !cwd) return;
+    if (!isChat && !projectCwd && !groupId) return;
+    const input: CreateSessionInput = {
+      session_type: sessionType,
+      agent_id: agentId || "codex",
+      title: title.trim() || undefined,
+    };
+    if (isChat) {
+      input.project_cwd = "";
+    } else if (groupId) {
+      input.group_id = groupId;
+    } else if (projectCwd) {
+      input.project_cwd = projectCwd;
+    }
     try {
-      const result = await create.mutateAsync({
-        session_type: sessionType,
-        project_cwd: isChat ? "" : cwd,
-        agent_id: agentId || "codex",
-        title: title.trim() || undefined,
-      });
+      const result = await create.mutateAsync(input);
       onCreated(result.session_id);
     } catch {
       /* error surfaced below */
@@ -664,19 +718,40 @@ function CreateSessionDialog({ onClose, onCreated, defaultType = "convo" }: Crea
           {!isChat && (
             <div className="space-y-1.5">
               <label className="block text-sm font-medium text-foreground">
-                项目
+                项目 / 项目组
               </label>
-              {projectOptions.length > 0 ? (
-                <Select
-                  value={projectCwd}
-                  onChange={(e) => setProjectCwd(e.target.value)}
-                  options={projectOptions}
-                  className="rounded-lg border-border/50"
-                />
+              {projectList.length > 0 || groupList.length > 0 ? (
+                <select
+                  value={scopeValue}
+                  onChange={(e) => setScopeValue(e.target.value)}
+                  className="flex h-10 w-full rounded-lg border border-border/50 bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                >
+                  <option value="">请选择项目或项目组...</option>
+                  {projectList.length > 0 && (
+                    <optgroup label="项目">
+                      {projectList.map((p) => (
+                        <option key={p.id} value={`project:${p.cwd}`}>
+                          {p.name}  ·  {p.cwd}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {groupList.length > 0 && (
+                    <optgroup label="项目组">
+                      {groupList.map((g) => (
+                        <option key={g.id} value={`group:${g.id}`}>
+                          {g.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
               ) : (
                 <Input
                   value={projectCwd}
-                  onChange={(e) => setProjectCwd(e.target.value)}
+                  onChange={(e) =>
+                    setScopeValue(e.target.value ? `project:${e.target.value}` : "")
+                  }
                   placeholder="/absolute/path/to/project"
                   className="rounded-lg border-border/50"
                 />

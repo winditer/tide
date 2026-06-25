@@ -1,6 +1,10 @@
 "use client";
 
+import { useState } from "react";
+import { AlertTriangle, GitMerge, ArrowRight } from "lucide-react";
+import { Badge, Button } from "@tide/ui";
 import type { WorkflowNodeRun, WorkflowRun } from "@tide/core";
+import { MergeConflictPanel } from "../code-editor/MergeConflictPanel";
 import { STATUS_BG, STATUS_LABEL, statusTone } from "./node-tones";
 
 interface NodeRunListProps {
@@ -8,6 +12,8 @@ interface NodeRunListProps {
   onApprove?: (nodeId: string) => void;
   onReject?: (nodeId: string) => void;
   isPending?: boolean;
+  projectId?: string;
+  workItemId?: string;
 }
 
 function formatTime(iso: string | null) {
@@ -24,8 +30,11 @@ export function NodeRunList({
   onApprove,
   onReject,
   isPending,
+  projectId,
+  workItemId,
 }: NodeRunListProps) {
   const runs: WorkflowNodeRun[] = run.node_runs ?? [];
+  const [conflictPanelNodeId, setConflictPanelNodeId] = useState<string | null>(null);
 
   return (
     <div className="overflow-hidden bg-card rounded-xl shadow-card border border-border/50">
@@ -52,6 +61,17 @@ export function NodeRunList({
               const tone = statusTone(nr.status);
               const needsApproval =
                 nr.node_type === "approval" && nr.status === "running";
+              const isMergeConflict =
+                nr.node_type === "git_merge" && nr.status === "waiting_approval";
+              const mergeOutput =
+                isMergeConflict && nr.output && typeof nr.output === "object"
+                  ? (nr.output as {
+                      conflict_files?: string[];
+                      source_branch?: string;
+                      target_branch?: string;
+                      cwd?: string;
+                    })
+                  : null;
               return (
                 <li key={nr.id} className="px-4 py-3 hover:bg-muted/30 transition-smooth">
                   <div className="flex items-center gap-3">
@@ -82,12 +102,61 @@ export function NodeRunList({
                         <span>开始 {formatTime(nr.started_at)}</span>
                         <span>结束 {formatTime(nr.finished_at)}</span>
                       </div>
+
+                      {/* Merge conflict card */}
+                      {isMergeConflict && mergeOutput && (
+                        <div className="mt-2 rounded-lg border border-amber-200/70 bg-amber-50/60 p-3">
+                          <div className="flex items-center gap-2">
+                            <AlertTriangle className="h-4 w-4 text-amber-700" />
+                            <span className="text-xs font-semibold text-amber-800">合并冲突</span>
+                          </div>
+                          <div className="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+                            <Badge variant="outline" className="text-[10px] font-mono">
+                              {mergeOutput.source_branch || "source"}
+                            </Badge>
+                            <ArrowRight className="h-3 w-3" />
+                            <Badge variant="outline" className="text-[10px] font-mono">
+                              {mergeOutput.target_branch || "target"}
+                            </Badge>
+                          </div>
+                          <p className="mt-1 text-[11px] text-muted-foreground">
+                            {mergeOutput.conflict_files?.length ?? 0} 个文件存在冲突
+                          </p>
+                          <Button
+                            size="sm"
+                            className="mt-2 h-7 text-[11px] bg-amber-600 hover:bg-amber-700 text-white"
+                            onClick={() => setConflictPanelNodeId(nr.node_id)}
+                          >
+                            <GitMerge className="mr-1 h-3 w-3" />
+                            解决冲突
+                          </Button>
+                        </div>
+                      )}
+
+                      {/* Merge conflict panel */}
+                      {conflictPanelNodeId === nr.node_id && mergeOutput && (
+                        <div className="mt-3">
+                          <MergeConflictPanel
+                            projectId={projectId || ""}
+                            workItemId={workItemId}
+                            runId={run.id}
+                            nodeId={nr.node_id}
+                            cwd={mergeOutput.cwd || ""}
+                            sourceBranch={mergeOutput.source_branch || "source"}
+                            targetBranch={mergeOutput.target_branch || "target"}
+                            conflictFiles={mergeOutput.conflict_files || []}
+                            onResolved={() => setConflictPanelNodeId(null)}
+                            onAbort={() => setConflictPanelNodeId(null)}
+                          />
+                        </div>
+                      )}
+
                       {nr.error && (
                         <div className="mt-1.5 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] leading-relaxed text-rose-800">
                           {String(nr.error)}
                         </div>
                       )}
-                      {nr.output != null && (
+                      {nr.output != null && !isMergeConflict && (
                         <pre className="mt-1.5 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/50 bg-muted/30 px-2 py-1 font-mono text-[10px] leading-relaxed text-foreground">
                           {typeof nr.output === "string"
                             ? nr.output

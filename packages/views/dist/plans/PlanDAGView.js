@@ -56,9 +56,8 @@ async function layoutGraph(nodes, edges) {
         type: "smoothstep",
         animated: false,
         style: {
-            stroke: "rgba(24,24,27,0.6)",
+            stroke: "rgba(99,102,241,0.55)",
             strokeWidth: 1.5,
-            strokeDasharray: "4 3",
         },
     }));
     return { nodes: flowNodes, edges: flowEdges };
@@ -96,7 +95,7 @@ function DAGCanvas({ planId, onNodeClick, refetchInterval }) {
     if (isEmpty) {
         return (_jsx("div", { className: "flex h-full items-center justify-center", children: _jsx("div", { className: "font-mono text-xs tracking-widest text-zinc-500", children: "\u25C7 NO NODES IN THIS PLAN" }) }));
     }
-    return (_jsxs(ReactFlow, { nodes: (_a = layouted === null || layouted === void 0 ? void 0 : layouted.nodes) !== null && _a !== void 0 ? _a : [], edges: (_b = layouted === null || layouted === void 0 ? void 0 : layouted.edges) !== null && _b !== void 0 ? _b : [], nodeTypes: nodeTypes, onNodeClick: handleNodeClick, fitView: true, fitViewOptions: { padding: 0.25 }, proOptions: { hideAttribution: true }, minZoom: 0.2, maxZoom: 1.6, nodesDraggable: false, nodesConnectable: false, elementsSelectable: true, children: [_jsx(Background, { variant: BackgroundVariant.Dots, gap: 20, size: 1.2, color: "rgba(24,24,27,0.18)" }), _jsx(Controls, { showInteractive: false, className: "!border !border-zinc-900 !bg-white !shadow-[3px_3px_0_0_rgba(24,24,27,0.92)]" }), _jsx(MiniMap, { zoomable: true, pannable: true, nodeStrokeWidth: 3, nodeColor: (n) => {
+    return (_jsxs(ReactFlow, { nodes: (_a = layouted === null || layouted === void 0 ? void 0 : layouted.nodes) !== null && _a !== void 0 ? _a : [], edges: (_b = layouted === null || layouted === void 0 ? void 0 : layouted.edges) !== null && _b !== void 0 ? _b : [], nodeTypes: nodeTypes, onNodeClick: handleNodeClick, fitView: true, fitViewOptions: { padding: 0.25 }, proOptions: { hideAttribution: true }, minZoom: 0.2, maxZoom: 1.6, nodesDraggable: false, nodesConnectable: false, elementsSelectable: true, children: [_jsx(Background, { variant: BackgroundVariant.Dots, gap: 20, size: 1.2, color: "rgba(99,102,241,0.18)" }), _jsx(Controls, { showInteractive: false, className: "!rounded-lg !border !border-border/60 !bg-card !shadow-sm" }), _jsx(MiniMap, { zoomable: true, pannable: true, nodeStrokeWidth: 3, nodeColor: (n) => {
                     var _a, _b, _c;
                     const status = String((_b = (_a = n.data) === null || _a === void 0 ? void 0 : _a.status) !== null && _b !== void 0 ? _b : "queued");
                     const m = {
@@ -111,12 +110,9 @@ function DAGCanvas({ planId, onNodeClick, refetchInterval }) {
                         rejected: "#ef4444",
                     };
                     return (_c = m[status]) !== null && _c !== void 0 ? _c : "#94a3b8";
-                }, className: "!border !border-zinc-900 !bg-white !shadow-[3px_3px_0_0_rgba(24,24,27,0.92)]" })] }));
+                }, className: "!rounded-lg !border !border-border/60 !bg-card !shadow-sm" })] }));
 }
 export function PlanDAGView(props) {
-    return (_jsxs("div", { className: "relative h-full w-full overflow-hidden border border-zinc-900 bg-[radial-gradient(circle_at_1px_1px,rgba(24,24,27,0.08)_1px,transparent_0)] bg-[length:18px_18px]", children: [_jsx(CornerTick, { className: "left-[-1px] top-[-1px]" }), _jsx(CornerTick, { className: "right-[-1px] top-[-1px] rotate-90" }), _jsx(CornerTick, { className: "left-[-1px] bottom-[-1px] -rotate-90" }), _jsx(CornerTick, { className: "right-[-1px] bottom-[-1px] rotate-180" }), _jsxs("div", { className: "pointer-events-none absolute left-3 top-3 z-10 flex items-center gap-2 font-mono text-[10px] tracking-[0.25em] text-zinc-700", children: [_jsx("span", { className: "inline-block h-2 w-2 bg-zinc-900" }), _jsx("span", { children: "DAG \u00B7 LAYERED \u00B7 ELK" })] }), _jsx(ReactFlowProvider, { children: _jsx(DAGCanvas, Object.assign({}, props)) })] }));
-}
-function CornerTick({ className }) {
-    return (_jsx("svg", { className: `pointer-events-none absolute h-4 w-4 ${className !== null && className !== void 0 ? className : ""}`, viewBox: "0 0 16 16", fill: "none", children: _jsx("path", { d: "M0 0 L16 0 L16 1 L1 1 L1 16 L0 16 Z", fill: "rgb(24,24,27)" }) }));
+    return (_jsxs("div", { className: "relative h-full w-full overflow-hidden rounded-xl border border-border/50 bg-muted/20", children: [_jsxs("div", { className: "pointer-events-none absolute left-3 top-3 z-10 inline-flex items-center gap-2 rounded-md border border-border/60 bg-card/80 px-2 py-1 font-mono text-[10px] tracking-[0.18em] text-muted-foreground shadow-sm backdrop-blur", children: [_jsx("span", { className: "inline-block h-1.5 w-1.5 rounded-full bg-indigo-500" }), _jsx("span", { children: "DAG \u00B7 LAYERED \u00B7 ELK" })] }), _jsx(ReactFlowProvider, { children: _jsx(DAGCanvas, Object.assign({}, props)) })] }));
 }
 //# sourceMappingURL=PlanDAGView.js.map

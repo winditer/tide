@@ -9,6 +9,7 @@ PlanService — Plan CRUD + DAG 解析 + 时间线聚合。
 
 import json
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,6 +32,18 @@ class PlanService:
     def _now_iso() -> str:
         return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
+    def _decode_project_id(self, project_id: str) -> Optional[str]:
+        """从 project_id（base64 编码的 cwd）解码出绝对路径。"""
+        if not project_id:
+            return None
+        try:
+            import base64
+            padded = project_id + "=" * (-len(project_id) % 4)
+            path = base64.urlsafe_b64decode(padded).decode()
+            return path if path and os.path.isabs(path) else None
+        except Exception:
+            return None
+
     # ── create ───────────────────────────────────────────
 
     async def create_plan(
@@ -39,15 +52,42 @@ class PlanService:
         definition_json: dict,
         cwd: Optional[str] = None,
         model: Optional[str] = None,
+        group_id: Optional[str] = None,
     ) -> dict:
         """
         创建 Plan + 解析 definition 中的子任务 + 写 plan_tasks 关联。
         返回 plan 字典。
+
+        当提供 ``group_id`` 且未显式指定 ``cwd`` 时，自动使用项目组 primary
+        项目的路径作为默认工作目录，保证跳过子任务覆盖时有一个合理的默认 cwd。
         """
         plan_id = str(uuid.uuid4())
         now = self._now_iso()
         max_parallel = definition_json.get("max_parallel", 3)
         tasks_def = definition_json.get("tasks", [])
+
+        # 项目组上下文：未指定 cwd 时使用 primary 项目路径
+        if group_id and not cwd:
+            try:
+                from backend.services.project_group_service import (
+                    project_group_service,
+                )
+
+                group_projects = await project_group_service.get_group_projects(
+                    group_id
+                )
+                if group_projects:
+                    primary = next(
+                        (p for p in group_projects if p.get("role") == "primary"),
+                        group_projects[0],
+                    )
+                    primary_cwd = (primary or {}).get("cwd")
+                    if primary_cwd:
+                        cwd = primary_cwd
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "resolve group primary cwd failed: %s", group_id
+                )
 
         if not cwd:
             cwd = str(Path.cwd())
@@ -56,8 +96,8 @@ class PlanService:
         async with async_session_factory() as session:
             await session.execute(
                 text("""
-                INSERT INTO plans (id, workspace_id, cwd, model, status, max_parallel, definition, created_at)
-                VALUES (:id, :workspace_id, :cwd, :model, 'active', :max_parallel, :definition, :created_at)
+                INSERT INTO plans (id, workspace_id, cwd, model, status, max_parallel, definition, group_id, created_at)
+                VALUES (:id, :workspace_id, :cwd, :model, 'active', :max_parallel, :definition, :group_id, :created_at)
                 """),
                 {
                     "id": plan_id,
@@ -66,6 +106,7 @@ class PlanService:
                     "model": model,
                     "max_parallel": max_parallel,
                     "definition": json.dumps(definition_json),
+                    "group_id": group_id,
                     "created_at": now,
                 },
             )
@@ -80,6 +121,17 @@ class PlanService:
             task_depends_on = task_def.get("depends_on", [])
             # 过滤自引用依赖（防止 task 依赖自身导致调度死锁）
             task_depends_on = [d for d in task_depends_on if d != idx]
+
+            # 子任务级 cwd：优先使用任务自身指定的 cwd/project_id
+            task_cwd = cwd  # 默认继承 Plan 级别
+            task_cwd_override = task_def.get("cwd")
+            task_project_id = task_def.get("project_id")
+            if task_cwd_override and os.path.isabs(task_cwd_override):
+                task_cwd = task_cwd_override
+            elif task_project_id:
+                decoded = self._decode_project_id(task_project_id)
+                if decoded:
+                    task_cwd = decoded
 
             async with async_session_factory() as session:
                 # 写 tasks 表
@@ -96,7 +148,7 @@ class PlanService:
                         "prompt": task_prompt,
                         "agent_id": task_agent_id,
                         "model": model,
-                        "cwd": cwd,
+                        "cwd": task_cwd,
                         "created_at": now,
                     },
                 )
@@ -134,6 +186,7 @@ class PlanService:
         status: Optional[str] = None,
         project: Optional[str] = None,
         session_id: Optional[str] = None,
+        group_id: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list:
@@ -142,6 +195,7 @@ class PlanService:
         - ``project``: 按 ``plans.cwd`` 精确匹配。
         - ``session_id``: 按子任务 ``tasks.session_id`` 筛选（返回包含该
           session 的 plan）。
+        - ``group_id``: 按 ``plans.group_id`` 精确匹配项目组。
         """
         conditions = ["p.workspace_id = :workspace_id"]
         params: dict = {"workspace_id": workspace_id}
@@ -153,6 +207,10 @@ class PlanService:
         if project:
             conditions.append("p.cwd = :project")
             params["project"] = project
+
+        if group_id:
+            conditions.append("p.group_id = :group_id")
+            params["group_id"] = group_id
 
         join_clause = ""
         if session_id:
@@ -173,7 +231,7 @@ class PlanService:
             result = await session.execute(
                 text(f"""
                 SELECT p.id, p.workspace_id, p.chat_id, p.cwd, p.model, p.status,
-                       p.max_parallel, p.definition, p.created_at, p.completed_at
+                       p.max_parallel, p.definition, p.group_id, p.created_at, p.completed_at
                 FROM plans p{join_clause}
                 WHERE {where}
                 ORDER BY p.created_at DESC
@@ -192,7 +250,7 @@ class PlanService:
             result = await session.execute(
                 text("""
                 SELECT id, workspace_id, chat_id, cwd, model, status,
-                       max_parallel, definition, created_at, completed_at
+                       max_parallel, definition, group_id, created_at, completed_at
                 FROM plans WHERE id = :plan_id
                 """),
                 {"plan_id": plan_id},

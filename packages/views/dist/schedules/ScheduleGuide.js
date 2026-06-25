@@ -1,0 +1,34 @@
+"use client";
+import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
+import { useEffect, useState } from "react";
+import { HelpCircle, X } from "lucide-react";
+import { SCHEDULES_GUIDE } from "./schedules-guide";
+import { parseMarkdown, renderBlocks } from "../shared/SimpleMarkdown";
+/* ------------------------------------------------------------------ */
+/* Component                                                           */
+/* Markdown rendering is delegated to packages/views/src/shared/       */
+/* SimpleMarkdown.                                                     */
+/* ------------------------------------------------------------------ */
+export function ScheduleGuide() {
+    const [open, setOpen] = useState(false);
+    // Close on Escape
+    useEffect(() => {
+        if (!open)
+            return;
+        const onKey = (e) => {
+            if (e.key === "Escape")
+                setOpen(false);
+        };
+        window.addEventListener("keydown", onKey);
+        // Lock body scroll while modal is open
+        const original = document.body.style.overflow;
+        document.body.style.overflow = "hidden";
+        return () => {
+            window.removeEventListener("keydown", onKey);
+            document.body.style.overflow = original;
+        };
+    }, [open]);
+    const blocks = parseMarkdown(SCHEDULES_GUIDE);
+    return (_jsxs(_Fragment, { children: [_jsx("button", { type: "button", onClick: () => setOpen(true), title: "\u4F7F\u7528\u6307\u5357", "aria-label": "\u4F7F\u7528\u6307\u5357", className: "inline-flex h-9 w-9 items-center justify-center rounded-md border border-border/60 bg-background text-muted-foreground transition-smooth hover:bg-muted/50 hover:text-foreground", children: _jsx(HelpCircle, { className: "h-[18px] w-[18px]", strokeWidth: 2 }) }), open && (_jsx("div", { className: "fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/50 p-4 backdrop-blur-sm", onClick: () => setOpen(false), role: "dialog", "aria-modal": "true", "aria-label": "\u5B9A\u65F6\u8C03\u5EA6\u4F7F\u7528\u6307\u5357", children: _jsxs("div", { className: "relative flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-border/50 bg-background shadow-2xl", onClick: (e) => e.stopPropagation(), children: [_jsxs("div", { className: "flex items-center justify-between gap-4 border-b border-border/50 px-6 py-4", children: [_jsxs("div", { className: "flex min-w-0 items-center gap-2.5", children: [_jsx("span", { "aria-hidden": "true", className: "text-lg leading-none", children: "\uD83D\uDCD6" }), _jsx("h2", { className: "truncate text-lg font-semibold tracking-tight text-foreground", children: "\u5B9A\u65F6\u8C03\u5EA6\u4F7F\u7528\u6307\u5357" })] }), _jsx("button", { type: "button", onClick: () => setOpen(false), "aria-label": "\u5173\u95ED", className: "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-smooth hover:bg-muted/50 hover:text-foreground", children: _jsx(X, { className: "h-4 w-4", strokeWidth: 2 }) })] }), _jsx("div", { className: "flex-1 overflow-y-auto px-6 py-5", children: _jsx("article", { className: "text-[0.95rem] leading-relaxed text-foreground", children: renderBlocks(blocks) }) }), _jsx("div", { className: "flex justify-end border-t border-border/50 bg-muted/30 px-6 py-3", children: _jsx("button", { type: "button", onClick: () => setOpen(false), className: "inline-flex h-9 items-center rounded-md bg-foreground px-4 text-sm font-medium text-background transition-smooth hover:bg-foreground/90", children: "\u6211\u77E5\u9053\u4E86" }) })] }) }))] }));
+}
+//# sourceMappingURL=ScheduleGuide.js.map

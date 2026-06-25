@@ -6,6 +6,17 @@ export { StatCards } from "./dashboard/StatCards";
 export { RecentTasks } from "./dashboard/RecentTasks";
 export { AgentPanel } from "./dashboard/AgentPanel";
 export { QuickInput } from "./dashboard/QuickInput";
+export { FloatingChat } from "./dashboard/FloatingChat";
+export { ChatMessageList } from "./dashboard/ChatMessageList";
+export { QuickActions } from "./dashboard/QuickActions";
+export { ActiveProjects } from "./dashboard/ActiveProjects";
+export { ActivityTimeline } from "./dashboard/ActivityTimeline";
+export { TaskStatusChart } from "./dashboard/TaskStatusChart";
+export { UpcomingSchedules } from "./dashboard/UpcomingSchedules";
+export { MyWorkItems } from "./dashboard/MyWorkItems";
+export { ProjectProgress } from "./dashboard/ProjectProgress";
+export { CostOverview } from "./dashboard/CostOverview";
+export { formatRelativeTime, formatAbsoluteTime, } from "./dashboard/format-time";
 export { Sidebar } from "./layout/Sidebar";
 export { Header } from "./layout/Header";
 // Plan views
@@ -22,12 +33,25 @@ export { BoardCard } from "./kanban/BoardCard";
 export { KanbanFilters } from "./kanban/KanbanFilters";
 export { EmptyState as KanbanEmptyState } from "./kanban/EmptyState";
 export { ProjectBoard } from "./kanban/ProjectBoard";
+export { ProjectCard } from "./kanban/ProjectCard";
 export { SessionBoard } from "./kanban/SessionBoard";
 export { AgentBoard } from "./kanban/AgentBoard";
 export { WorkflowBoard } from "./kanban/WorkflowBoard";
 export { ScheduleList } from "./schedules/ScheduleList";
 export { ScheduleForm } from "./schedules/ScheduleForm";
 export { ScheduleRunHistory } from "./schedules/ScheduleRunHistory";
+export { ScheduleGuide } from "./schedules/ScheduleGuide";
+export { SCHEDULES_GUIDE } from "./schedules/schedules-guide";
+// Work items
+export { WorkItemBoard } from "./work-items/WorkItemBoard";
+export { WorkItemCard } from "./work-items/WorkItemCard";
+export { WorkItemCreateDialog } from "./work-items/WorkItemCreateDialog";
+export { WorkItemDetailPanel } from "./work-items/WorkItemDetailPanel";
+export { WorkItemListView } from "./work-items/WorkItemListView";
+// Project groups
+export { ProjectGroupCard, ProjectGroupCreateDialog, ProjectGroupList, } from "./project-groups";
+// Knowledge graph
+export { KnowledgeGraphCard } from "./knowledge";
 // Workflow views
 export { WorkflowCanvas } from "./workflows/WorkflowCanvas";
 export { WorkflowRunView } from "./workflows/WorkflowRunView";

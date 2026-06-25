@@ -9,12 +9,12 @@ var __rest = (this && this.__rest) || function (s, e) {
         }
     return t;
 };
-import { jsx as _jsx } from "react/jsx-runtime";
+import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import * as React from "react";
 import { cn } from "../lib/utils";
 const Select = React.forwardRef((_a, ref) => {
-    var { className, options } = _a, props = __rest(_a, ["className", "options"]);
-    return (_jsx("select", Object.assign({ ref: ref, className: cn("flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50", className) }, props, { children: options.map((opt) => (_jsx("option", { value: opt.value, children: opt.label }, opt.value))) })));
+    var { className, options, groups } = _a, props = __rest(_a, ["className", "options", "groups"]);
+    return (_jsxs("select", Object.assign({ ref: ref, className: cn("flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50", className) }, props, { children: [options.map((opt) => (_jsx("option", { value: opt.value, disabled: opt.disabled, children: opt.label }, opt.value))), groups === null || groups === void 0 ? void 0 : groups.map((g) => (_jsx("optgroup", { label: g.label, children: g.options.map((opt) => (_jsx("option", { value: opt.value, disabled: opt.disabled, children: opt.label }, opt.value))) }, g.label)))] })));
 });
 Select.displayName = "Select";
 export { Select };

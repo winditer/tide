@@ -3,6 +3,10 @@ function buildQuery(params) {
     const searchParams = new URLSearchParams();
     if (params === null || params === void 0 ? void 0 : params.workspace_id)
         searchParams.set("workspace_id", params.workspace_id);
+    if (params === null || params === void 0 ? void 0 : params.group_id)
+        searchParams.set("group_id", params.group_id);
+    if (params === null || params === void 0 ? void 0 : params.project_id)
+        searchParams.set("project_id", params.project_id);
     const q = searchParams.toString();
     return q ? `?${q}` : "";
 }
@@ -41,6 +45,14 @@ function normalizeProjectBoard(raw) {
                         task_count: p.task_count,
                         active_count: p.active_count,
                         completed_count: p.completed_count,
+                        archived: !!p.archived,
+                        work_item_stats: p.work_item_stats,
+                        members: p.members,
+                        workflow_name: p.workflow_name,
+                        versions_count: p.versions_count,
+                        active_version: p.active_version,
+                        last_activity: p.last_activity,
+                        health: p.health,
                     },
                     updated_at: (_g = p.last_active_at) !== null && _g !== void 0 ? _g : undefined,
                 });
@@ -68,6 +80,14 @@ function normalizeProjectBoard(raw) {
                         task_count: p.task_count,
                         active_count: p.active_count,
                         completed_count: p.completed_count,
+                        archived: !!p.archived,
+                        work_item_stats: p.work_item_stats,
+                        members: p.members,
+                        workflow_name: p.workflow_name,
+                        versions_count: p.versions_count,
+                        active_version: p.active_version,
+                        last_activity: p.last_activity,
+                        health: p.health,
                     },
                     updated_at: (_g = p.last_active_at) !== null && _g !== void 0 ? _g : undefined,
                 });
@@ -108,6 +128,7 @@ function normalizeSessionBoard(raw) {
     const buckets = {};
     for (const key of SESSION_COLUMN_ORDER)
         buckets[key] = [];
+    const seenIds = new Set();
     const groups = (_a = raw.groups) !== null && _a !== void 0 ? _a : {};
     for (const [agent, agentBuckets] of Object.entries(groups)) {
         if (!agentBuckets || typeof agentBuckets !== "object")
@@ -118,8 +139,16 @@ function normalizeSessionBoard(raw) {
             if (!buckets[status])
                 buckets[status] = [];
             for (const t of items) {
+                let cardId = String((_b = t.id) !== null && _b !== void 0 ? _b : "");
+                if (seenIds.has(cardId)) {
+                    let idx = 2;
+                    while (seenIds.has(`${cardId}_${idx}`))
+                        idx++;
+                    cardId = `${cardId}_${idx}`;
+                }
+                seenIds.add(cardId);
                 buckets[status].push({
-                    id: String((_b = t.id) !== null && _b !== void 0 ? _b : ""),
+                    id: cardId,
                     title: (_c = t.prompt) !== null && _c !== void 0 ? _c : String((_d = t.id) !== null && _d !== void 0 ? _d : ""),
                     status,
                     type: "session",

@@ -39,6 +39,11 @@ QODER_PROJECTS_DIR = Path(
     os.getenv("QODER_PROJECTS_DIR", QODER_HOME / "projects")
 ).expanduser()
 
+# Qoder IDE 客户端对话缓存目录（与 projects 目录格式不同，需要单独扫描）
+QODER_CACHE_DIR = Path(
+    os.getenv("QODER_CACHE_DIR", QODER_HOME / "cache" / "projects")
+).expanduser()
+
 MAX_SESSION_FILES = int(os.getenv("MAX_SESSION_FILES", "5000"))
 PROJECT_DISCOVERY_TTL = float(os.getenv("PROJECT_DISCOVERY_TTL", "30"))
 PEEK_MAX_LINES = int(os.getenv("PROJECT_DISCOVERY_PEEK_LINES", "50"))

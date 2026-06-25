@@ -1,8 +1,18 @@
 "use client";
 
-import { useId, useMemo, useState } from "react";
-import { Button, Input, Select } from "@tide/ui";
-import { useCreatePlan, useProjects } from "@tide/core";
+import { useEffect, useMemo, useState } from "react";
+import {
+  Button,
+  Input,
+  Select,
+  type SelectOptionGroup,
+} from "@tide/ui";
+import {
+  useCreatePlan,
+  useProjects,
+  useProjectGroups,
+  useProjectGroup,
+} from "@tide/core";
 import type { PlanTaskDef } from "@tide/core";
 
 const AGENT_OPTIONS = [
@@ -19,12 +29,17 @@ const MODEL_PRESETS = [
   { label: "claude-opus-4", value: "claude-opus-4" },
 ];
 
+const SCOPE_PROJECT_PREFIX = "project:";
+const SCOPE_GROUP_PREFIX = "group:";
+
 interface DraftRow {
   title: string;
   prompt: string;
   agent_id: string;
   depends_on: string; // comma-separated indices
   phase: string;
+  /** 子任务级 cwd 覆盖（绝对路径，可选） */
+  cwd: string;
 }
 
 const emptyRow = (): DraftRow => ({
@@ -33,106 +48,194 @@ const emptyRow = (): DraftRow => ({
   agent_id: "codex",
   depends_on: "",
   phase: "0",
+  cwd: "",
 });
 
 interface PlanCreateFormProps {
   onSuccess?: (planId: string) => void;
+  /**
+   * 默认归属，与列表页/工作项创建对话框统一编码：
+   * - "project:<id>" → 默认选中具体项目
+   * - "group:<id>"   → 默认选中具体项目组
+   */
+  initialScopeValue?: string;
 }
 
-export function PlanCreateForm({ onSuccess }: PlanCreateFormProps) {
+export function PlanCreateForm({
+  onSuccess,
+  initialScopeValue,
+}: PlanCreateFormProps) {
   const [rows, setRows] = useState<DraftRow[]>([emptyRow()]);
   const [model, setModel] = useState("");
   const [modelPreset, setModelPreset] = useState("");
-  const [cwd, setCwd] = useState("");
   const [maxParallel, setMaxParallel] = useState("3");
+  /**
+   * 工作区归属：
+   * - "project:<id>" → 单仓库 Plan，cwd = 该项目 cwd
+   * - "group:<id>"   → 项目组工作区，group_id=<id>，默认 cwd 由后端解析为 primary
+   */
+  const [scopeValue, setScopeValue] = useState<string>(
+    initialScopeValue ?? "",
+  );
   const create = useCreatePlan();
-  const cwdListId = useId();
 
   const { data: projectsData } = useProjects();
-  const projectOptions = useMemo(
-    () => projectsData?.projects ?? [],
-    [projectsData]
+  const { data: groupsData } = useProjectGroups();
+  const projects = useMemo(() => projectsData?.projects ?? [], [projectsData]);
+  const groups = useMemo(() => groupsData?.groups ?? [], [groupsData]);
+
+  const selectedProjectId = scopeValue.startsWith(SCOPE_PROJECT_PREFIX)
+    ? scopeValue.slice(SCOPE_PROJECT_PREFIX.length)
+    : undefined;
+  const selectedGroupId = scopeValue.startsWith(SCOPE_GROUP_PREFIX)
+    ? scopeValue.slice(SCOPE_GROUP_PREFIX.length)
+    : undefined;
+
+  const { data: groupDetail } = useProjectGroup(selectedGroupId);
+
+  const selectedProject = useMemo(
+    () => projects.find((p) => p.id === selectedProjectId),
+    [projects, selectedProjectId],
+  );
+
+  const groupPrimary = useMemo(() => {
+    if (!groupDetail) return undefined;
+    return (
+      groupDetail.members.find((m) => m.role === "primary") ??
+      groupDetail.members[0]
+    );
+  }, [groupDetail]);
+
+  const scopeGroupsOptions = useMemo<SelectOptionGroup[]>(() => {
+    const out: SelectOptionGroup[] = [];
+    if (projects.length > 0) {
+      out.push({
+        label: "项目",
+        options: projects.map((p) => ({
+          value: `${SCOPE_PROJECT_PREFIX}${p.id}`,
+          label: p.name === p.cwd ? p.cwd : `${p.name}  ·  ${p.cwd}`,
+        })),
+      });
+    }
+    if (groups.length > 0) {
+      out.push({
+        label: "项目组",
+        options: groups.map((g) => ({
+          value: `${SCOPE_GROUP_PREFIX}${g.id}`,
+          label: `${g.name} (${g.member_count})`,
+        })),
+      });
+    }
+    return out;
+  }, [projects, groups]);
+
+  const scopeFlatOptions = useMemo(
+    () => [{ value: "", label: "请选择项目或项目组…" }],
+    [],
   );
 
   const updateRow = (idx: number, patch: Partial<DraftRow>) => {
     setRows((prev) =>
-      prev.map((r, i) => (i === idx ? { ...r, ...patch } : r))
+      prev.map((r, i) => (i === idx ? { ...r, ...patch } : r)),
     );
   };
   const removeRow = (idx: number) =>
-    setRows((prev) => (prev.length === 1 ? prev : prev.filter((_, i) => i !== idx)));
+    setRows((prev) =>
+      prev.length === 1 ? prev : prev.filter((_, i) => i !== idx),
+    );
   const addRow = () => setRows((prev) => [...prev, emptyRow()]);
 
   const buildTasks = (): PlanTaskDef[] => {
     return rows
       .filter((r) => r.title.trim() && r.prompt.trim())
-      .map<PlanTaskDef>((r) => ({
-        title: r.title.trim(),
-        prompt: r.prompt.trim(),
-        agent_id: r.agent_id || "codex",
-        phase: Number(r.phase) || 0,
-        depends_on: r.depends_on
-          .split(/[ ,]+/)
-          .filter((s) => s.length > 0)
-          .map((s) => Number(s))
-          .filter((n) => Number.isFinite(n) && n >= 0),
-      }));
+      .map<PlanTaskDef>((r) => {
+        const cwdOverride = r.cwd.trim();
+        return {
+          title: r.title.trim(),
+          prompt: r.prompt.trim(),
+          agent_id: r.agent_id || "codex",
+          phase: Number(r.phase) || 0,
+          depends_on: r.depends_on
+            .split(/[ ,]+/)
+            .filter((s) => s.length > 0)
+            .map((s) => Number(s))
+            .filter((n) => Number.isFinite(n) && n >= 0),
+          ...(cwdOverride ? { cwd: cwdOverride } : {}),
+        };
+      });
   };
+
+  // 项目组下子任务 cwd 候选：用于选择目标仓库
+  const groupMemberCwds = useMemo(() => {
+    if (!groupDetail) return [] as { value: string; label: string }[];
+    return groupDetail.members
+      .filter((m): m is typeof m & { cwd: string } => !!m.cwd)
+      .map((m) => ({ value: m.cwd, label: `${m.name} (${m.role})` }));
+  }, [groupDetail]);
+
+  // 切换归属时清空已填的子任务 cwd 覆盖（避免跨项目残留）
+  useEffect(() => {
+    setRows((prev) => prev.map((r) => ({ ...r, cwd: "" })));
+  }, [scopeValue]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const tasks = buildTasks();
     if (tasks.length === 0) return;
+    if (!selectedProjectId && !selectedGroupId) return;
+
+    const params: Parameters<typeof create.mutateAsync>[0] = {
+      definition: { tasks, max_parallel: Number(maxParallel) || 3 },
+      model: model.trim() || undefined,
+    };
+
+    if (selectedGroupId) {
+      params.group_id = selectedGroupId;
+      // cwd 不传：后端会自动取 group primary 的路径
+    } else if (selectedProject) {
+      params.cwd = selectedProject.cwd || undefined;
+    }
+
     try {
-      const plan = await create.mutateAsync({
-        definition: { tasks, max_parallel: Number(maxParallel) || 3 },
-        cwd: cwd.trim() || undefined,
-        model: model.trim() || undefined,
-      });
+      const plan = await create.mutateAsync(params);
       onSuccess?.(plan.id);
     } catch {
       // surfaced via mutation state
     }
   };
 
+  const submitDisabled =
+    create.isPending ||
+    (!selectedProjectId && !selectedGroupId) ||
+    (!!selectedGroupId && !groupPrimary);
+
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
       {/* Global params */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <div>
-          <Label>项目目录</Label>
-          <Input
-            list={cwdListId}
-            placeholder="选择或输入工作目录…"
-            value={cwd}
-            onChange={(e) => setCwd(e.target.value)}
+          <Label>工作区</Label>
+          <Select
+            options={scopeFlatOptions}
+            groups={scopeGroupsOptions}
+            value={scopeValue}
+            onChange={(e) => setScopeValue(e.target.value)}
             className="rounded-lg"
+            aria-label="选择项目或项目组"
           />
-          <datalist id={cwdListId}>
-            {projectOptions.map((p) => (
-              <option key={p.id} value={p.cwd}>
-                {p.name}
-              </option>
-            ))}
-          </datalist>
-          {projectOptions.length > 0 && (
-            <div className="mt-1.5 flex flex-wrap gap-1 text-[10px] text-muted-foreground">
-              {projectOptions.slice(0, 4).map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => setCwd(p.cwd)}
-                  className={`rounded-md border px-1.5 py-0.5 transition-colors ${
-                    cwd === p.cwd
-                      ? "border-primary bg-primary text-primary-foreground"
-                      : "border-border hover:border-foreground"
-                  }`}
-                  title={p.cwd}
-                >
-                  {p.name}
-                </button>
-              ))}
-            </div>
+          {selectedGroupId && groupDetail && (
+            <p className="mt-1.5 text-[11px] text-muted-foreground">
+              项目组 ·{" "}
+              <span className="font-mono text-foreground">
+                {groupPrimary?.name ?? "—"}
+              </span>{" "}
+              将作为默认 cwd；子任务可在下方单独覆盖目标仓库。
+            </p>
+          )}
+          {selectedProject && (
+            <p className="mt-1.5 truncate font-mono text-[11px] text-muted-foreground">
+              {selectedProject.cwd}
+            </p>
           )}
         </div>
         <div>
@@ -238,16 +341,35 @@ export function PlanCreateForm({ onSuccess }: PlanCreateFormProps) {
                   }
                 />
               </div>
+              {/* 项目组模式：子任务可单独覆盖目标仓库 */}
+              {selectedGroupId && groupMemberCwds.length > 0 && (
+                <div>
+                  <Select
+                    options={[
+                      { value: "", label: "目标仓库（默认继承组 primary）" },
+                      ...groupMemberCwds,
+                    ]}
+                    value={row.cwd}
+                    onChange={(e) => updateRow(idx, { cwd: e.target.value })}
+                  />
+                </div>
+              )}
             </div>
           </div>
         ))}
       </div>
 
       <div className="flex items-center justify-end gap-2">
-        <Button type="submit" disabled={create.isPending}>
+        <Button type="submit" disabled={submitDisabled}>
           {create.isPending ? "创建中…" : "▶ 创建 Plan"}
         </Button>
       </div>
+
+      {selectedGroupId && !groupPrimary && (
+        <p className="text-xs text-destructive">
+          项目组成员为空，请先为该组添加项目。
+        </p>
+      )}
 
       {create.isError && (
         <p className="text-xs text-destructive">

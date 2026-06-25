@@ -7,6 +7,7 @@ import type {
   WorkItemBoard,
   ProjectSettings,
   WorkItemArtifact,
+  CrossRepoResultsResponse,
 } from "../types/work-item";
 
 function buildQuery(params?: Record<string, string | undefined>): string {
@@ -28,6 +29,7 @@ export interface WorkItemFilters {
   status?: string;
   assignee?: string;
   version_id?: string;
+  group_id?: string;
 }
 
 export function getWorkItems(projectId?: string, filters?: WorkItemFilters): Promise<WorkItem[]> {
@@ -37,6 +39,7 @@ export function getWorkItems(projectId?: string, filters?: WorkItemFilters): Pro
     status: filters?.status,
     assignee: filters?.assignee,
     version_id: filters?.version_id,
+    group_id: filters?.group_id,
   });
   return apiClient.get<WorkItem[]>(`/api/work-items${qs}`);
 }
@@ -78,6 +81,16 @@ export function getWorkItemTransitions(
 ): Promise<WorkItemTransition[]> {
   return apiClient.get<WorkItemTransition[]>(
     `/api/work-items/${id}/transitions`
+  );
+}
+
+// ---------- 跨仓库执行结果聚合 ----------
+
+export function getWorkItemCrossRepoResults(
+  id: string
+): Promise<CrossRepoResultsResponse> {
+  return apiClient.get<CrossRepoResultsResponse>(
+    `/api/work-items/${id}/cross-repo-results`
   );
 }
 
@@ -145,5 +158,90 @@ export function removeArtifact(
 ): Promise<{ artifacts: WorkItemArtifact[] }> {
   return apiClient.del<{ artifacts: WorkItemArtifact[] }>(
     `/api/work-items/${workItemId}/artifacts/${artifactId}`
+  );
+}
+
+// ---------- AI 分解需求 ----------
+
+/** AI 分解返回的单条候选工作项条目（尚未持久化） */
+export interface AIDecomposedItem {
+  title: string;
+  description: string;
+  priority: number;
+  tags: string[];
+}
+
+export interface AIDecomposeResponse {
+  items: AIDecomposedItem[];
+  raw_analysis?: string;
+  skipped_files?: string[];
+}
+
+/**
+ * 调用 AI 分解需求接口（multipart/form-data）。
+ *
+ * 表单字段约定：
+ * - ``text``        : 长文本需求（可选）
+ * - ``links``       : JSON 数组字符串，如 ``["https://..."]``（可选）
+ * - ``project_id``  : 项目 id（必填）
+ * - ``group_id``    : 项目组 id（可选）
+ * - ``files``       : 上传文件，可重复（可选）
+ */
+export function aiDecomposeWorkItems(
+  data: FormData,
+): Promise<AIDecomposeResponse> {
+  // 使用 postRaw 以保留鉴权头注入；FormData 由浏览器自动设置 Content-Type+boundary
+  return apiClient.postRaw<AIDecomposeResponse>(
+    "/api/work-items/ai-decompose",
+    data,
+  );
+}
+
+export interface BatchCreateWorkItemsPayload {
+  items: Array<{
+    title: string;
+    description: string;
+    priority: number;
+    tags: string[];
+  }>;
+  project_id: string;
+  group_id?: string;
+}
+
+export interface BatchCreateWorkItemsResponse {
+  created: WorkItem[];
+  failed: Array<{ index: number; title: string; error: string }>;
+}
+
+/** 批量创建工作项 */
+export function batchCreateWorkItems(
+  payload: BatchCreateWorkItemsPayload,
+): Promise<BatchCreateWorkItemsResponse> {
+  return apiClient.post<BatchCreateWorkItemsResponse>(
+    "/api/work-items/batch",
+    payload,
+  );
+}
+
+// ---------- 合并冲突解决 ----------
+
+export interface ResolveMergeParams {
+  resolved: boolean;
+  message?: string;
+}
+
+export interface ResolveMergeResponse {
+  ok: boolean;
+  work_item_id: string;
+}
+
+/** 完成工作项的合并冲突解决（推进/放弃） */
+export function resolveMerge(
+  workItemId: string,
+  data: ResolveMergeParams,
+): Promise<ResolveMergeResponse> {
+  return apiClient.post<ResolveMergeResponse>(
+    `/api/work-items/${workItemId}/resolve-merge`,
+    data,
   );
 }

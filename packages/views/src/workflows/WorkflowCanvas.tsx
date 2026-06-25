@@ -259,12 +259,19 @@ function CanvasInner({
     });
   }, []);
 
+  // Only treat real content mutations as dirty changes.
+  // ReactFlow emits `dimensions` (initial measure) and `select` (focus) changes
+  // that should NOT mark the workflow as unsaved.
+  const isContentNodeChange = (c: NodeChange) =>
+    c.type !== "dimensions" && c.type !== "select";
+  const isContentEdgeChange = (c: EdgeChange) => c.type !== "select";
+
   const onNodesChange = useCallback(
     (changes: NodeChange[]) => {
       setNodes((nds) => {
         const next = applyNodeChanges(changes, nds);
         nodesRef.current = next;
-        if (!readOnly) emitChange();
+        if (!readOnly && changes.some(isContentNodeChange)) emitChange();
         return next;
       });
     },
@@ -276,7 +283,7 @@ function CanvasInner({
       setEdges((eds) => {
         const next = applyEdgeChanges(changes, eds);
         edgesRef.current = next;
-        if (!readOnly) emitChange();
+        if (!readOnly && changes.some(isContentEdgeChange)) emitChange();
         return next;
       });
     },

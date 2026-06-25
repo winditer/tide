@@ -44,6 +44,8 @@ import {
   type VersionStatus,
 } from "@tide/core";
 import {
+  FileCode,
+  GitBranch,
   Pencil,
   Search,
   ShieldCheck,
@@ -51,14 +53,16 @@ import {
   Trash2,
   UserPlus,
 } from "lucide-react";
+import { KnowledgeGraphCard } from "@tide/views";
 
-type TabKey = "conversations" | "tasks" | "versions" | "members" | "settings";
+type TabKey = "conversations" | "tasks" | "versions" | "members" | "knowledge" | "settings";
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "conversations", label: "对话" },
   { key: "tasks", label: "任务" },
   { key: "versions", label: "版本" },
   { key: "members", label: "成员" },
+  { key: "knowledge", label: "知识图谱" },
   { key: "settings", label: "设置" },
 ];
 
@@ -239,6 +243,21 @@ export default function ProjectDetailPage({
             </button>
           );
         })}
+        {/* Route-based tabs */}
+        <Link
+          href={`/projects/${id}/files`}
+          className="relative -mb-px flex items-center gap-1.5 border-b-2 border-transparent px-4 py-2.5 text-sm text-muted-foreground transition-smooth hover:text-foreground"
+        >
+          <FileCode className="h-3.5 w-3.5" />
+          文件
+        </Link>
+        <Link
+          href={`/projects/${id}/audit`}
+          className="relative -mb-px flex items-center gap-1.5 border-b-2 border-transparent px-4 py-2.5 text-sm text-muted-foreground transition-smooth hover:text-foreground"
+        >
+          <GitBranch className="h-3.5 w-3.5" />
+          审计
+        </Link>
       </nav>
 
       {tab === "conversations" && (
@@ -264,6 +283,10 @@ export default function ProjectDetailPage({
       {tab === "versions" && <VersionsPane projectId={project.id} />}
 
       {tab === "members" && <MembersPane projectId={project.id} />}
+
+      {tab === "knowledge" && (
+        <KnowledgeGraphCard scope="project" targetId={project.id} />
+      )}
 
       {tab === "settings" && (
         <SettingsPane

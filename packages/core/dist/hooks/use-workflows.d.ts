@@ -1,12 +1,13 @@
-import type { CreateWorkflowInput, UpdateWorkflowInput, RunWorkflowInput, WorkflowRun } from "../types/workflow";
-export declare function useWorkflows(): import("@tanstack/react-query").UseQueryResult<NoInfer<import("..").ListWorkflowsResponse>, Error>;
-export declare function useWorkflow(id: string): import("@tanstack/react-query").UseQueryResult<NoInfer<import("..").Workflow>, Error>;
-export declare function useCreateWorkflow(): import("@tanstack/react-query").UseMutationResult<import("..").Workflow, Error, CreateWorkflowInput, unknown>;
-export declare function useUpdateWorkflow(): import("@tanstack/react-query").UseMutationResult<import("..").Workflow, Error, {
+import type { CreateWorkflowInput, UpdateWorkflowInput, RunWorkflowInput, Workflow, WorkflowRun } from "../types/workflow";
+export declare function useWorkflows(): import("@tanstack/react-query").UseQueryResult<NoInfer<Workflow[]>, Error>;
+export declare function useWorkflow(id: string): import("@tanstack/react-query").UseQueryResult<NoInfer<Workflow>, Error>;
+export declare function useCreateWorkflow(): import("@tanstack/react-query").UseMutationResult<Workflow, Error, CreateWorkflowInput, unknown>;
+export declare function useUpdateWorkflow(): import("@tanstack/react-query").UseMutationResult<Workflow, Error, {
     id: string;
     params: UpdateWorkflowInput;
 }, unknown>;
 export declare function useDeleteWorkflow(): import("@tanstack/react-query").UseMutationResult<void, Error, string, unknown>;
+export declare function useToggleWorkflow(): import("@tanstack/react-query").UseMutationResult<Workflow, Error, string, unknown>;
 export declare function useRunWorkflow(): import("@tanstack/react-query").UseMutationResult<WorkflowRun, Error, {
     id: string;
     body?: RunWorkflowInput;

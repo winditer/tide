@@ -14,6 +14,9 @@ export function updateWorkflow(id, params) {
 export function deleteWorkflow(id) {
     return apiClient.del(`/api/workflows/${id}`);
 }
+export function toggleWorkflow(id) {
+    return apiClient.patch(`/api/workflows/${id}/toggle`);
+}
 export function runWorkflow(id, body) {
     return apiClient.post(`/api/workflows/${id}/run`, body !== null && body !== void 0 ? body : {});
 }

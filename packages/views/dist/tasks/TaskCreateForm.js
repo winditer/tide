@@ -2,7 +2,7 @@
 import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
 import { useEffect, useMemo, useRef, useState, } from "react";
 import { Button, Input, Select } from "@tide/ui";
-import { fetchSessionsForProject, uploadTaskAttachments, useCreateTaskMutation, useProjects, } from "@tide/core";
+import { fetchSessionsForProject, uploadTaskAttachments, useCreateTaskMutation, useProjects, useProjectGroups, } from "@tide/core";
 const AGENT_OPTIONS = [
     { label: "Codex", value: "codex" },
     { label: "Claude Code", value: "claude" },
@@ -48,12 +48,17 @@ function genId() {
     return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 export function TaskCreateForm({ onSuccess }) {
-    var _a, _b, _c, _d;
+    var _a, _b, _c, _d, _e, _f;
     const [prompt, setPrompt] = useState("");
     const [agentId, setAgentId] = useState("codex");
     const [model, setModel] = useState("");
-    const [cwd, setCwd] = useState("");
-    const [cwdOpen, setCwdOpen] = useState(false);
+    /**
+     * 统一作用域编码：
+     * - ``"project:<cwd>"`` -> 单仓库，后端使用 cwd
+     * - ``"group:<id>"``    -> 项目组，后端根据 group_id 注入多仓库上下文
+     * - ``""``              -> 未选（需后端默认 cwd）
+     */
+    const [scopeValue, setScopeValue] = useState("");
     const [sessionId, setSessionId] = useState("");
     const [sessionOpen, setSessionOpen] = useState(false);
     const [sessionList, setSessionList] = useState([]);
@@ -63,25 +68,18 @@ export function TaskCreateForm({ onSuccess }) {
     const [dragActive, setDragActive] = useState(false);
     const [uploadError, setUploadError] = useState(null);
     const fileInputRef = useRef(null);
-    const cwdBoxRef = useRef(null);
     const sessionBoxRef = useRef(null);
     const previewUrlsRef = useRef([]);
     const createMutation = useCreateTaskMutation();
     const projectsQuery = useProjects();
     const projects = (_b = (_a = projectsQuery.data) === null || _a === void 0 ? void 0 : _a.projects) !== null && _b !== void 0 ? _b : [];
+    const groupsQuery = useProjectGroups();
+    const groups = (_d = (_c = groupsQuery.data) === null || _c === void 0 ? void 0 : _c.groups) !== null && _d !== void 0 ? _d : [];
+    // 从统一 scope 解码
+    const projectCwd = scopeValue.startsWith("project:") ? scopeValue.slice(8) : "";
+    const groupId = scopeValue.startsWith("group:") ? scopeValue.slice(6) : "";
     // 关闭 CWD 下拉（点击外部）
-    useEffect(() => {
-        if (!cwdOpen)
-            return;
-        const handler = (e) => {
-            if (cwdBoxRef.current && !cwdBoxRef.current.contains(e.target)) {
-                setCwdOpen(false);
-            }
-        };
-        document.addEventListener("mousedown", handler);
-        return () => document.removeEventListener("mousedown", handler);
-    }, [cwdOpen]);
-    // 关闭 Session 下拉（点击外部）
+    // 项目组模式下不需要会话选择，状态以下仅在项目模式下生效
     useEffect(() => {
         if (!sessionOpen)
             return;
@@ -94,19 +92,18 @@ export function TaskCreateForm({ onSuccess }) {
         document.addEventListener("mousedown", handler);
         return () => document.removeEventListener("mousedown", handler);
     }, [sessionOpen]);
-    // cwd 变化时加载会话列表
+    // 当选中项目时加载会话列表；项目组模式清空
     useEffect(() => {
-        const target = cwd.trim();
         setSessionId("");
         setSessionError(null);
-        if (!target) {
+        if (!projectCwd) {
             setSessionList([]);
             setSessionLoading(false);
             return;
         }
         let cancelled = false;
         setSessionLoading(true);
-        fetchSessionsForProject(target)
+        fetchSessionsForProject(projectCwd)
             .then((res) => {
             var _a;
             if (cancelled)
@@ -126,7 +123,7 @@ export function TaskCreateForm({ onSuccess }) {
         return () => {
             cancelled = true;
         };
-    }, [cwd]);
+    }, [projectCwd]);
     // 卸载时释放 ObjectURL
     useEffect(() => {
         const urls = previewUrlsRef.current;
@@ -134,13 +131,9 @@ export function TaskCreateForm({ onSuccess }) {
             urls.forEach((u) => URL.revokeObjectURL(u));
         };
     }, []);
-    const filteredProjects = useMemo(() => {
-        const q = cwd.trim().toLowerCase();
-        if (!q)
-            return projects;
-        return projects.filter((p) => p.name.toLowerCase().includes(q) ||
-            p.cwd.toLowerCase().includes(q));
-    }, [projects, cwd]);
+    const filteredProjects = useMemo(() => projects, [projects]);
+    // 项目组模式下不展示该项
+    void filteredProjects;
     const groupedSessions = useMemo(() => {
         const project = [];
         const chat = [];
@@ -153,7 +146,7 @@ export function TaskCreateForm({ onSuccess }) {
         return { project, chat };
     }, [sessionList]);
     const selectedSession = useMemo(() => { var _a; return (_a = sessionList.find((s) => s.id === sessionId)) !== null && _a !== void 0 ? _a : null; }, [sessionList, sessionId]);
-    const sessionDisabled = !cwd.trim();
+    const sessionDisabled = !projectCwd;
     const isUploading = attachments.some((a) => a.status === "uploading");
     const handleFiles = async (files) => {
         setUploadError(null);
@@ -243,10 +236,6 @@ export function TaskCreateForm({ onSuccess }) {
             return prev.filter((a) => a.id !== id);
         });
     };
-    const pickProject = (path) => {
-        setCwd(path);
-        setCwdOpen(false);
-    };
     const pickSession = (id) => {
         setSessionId(id);
         setSessionOpen(false);
@@ -260,15 +249,21 @@ export function TaskCreateForm({ onSuccess }) {
         const remotePaths = attachments
             .filter((a) => a.status === "done" && a.remotePath)
             .map((a) => a.remotePath);
+        const params = {
+            prompt: prompt.trim(),
+            agent_id: agentId,
+            model: model.trim() || undefined,
+            session_id: sessionId || undefined,
+            attachments: remotePaths,
+        };
+        if (groupId) {
+            params.group_id = groupId;
+        }
+        else if (projectCwd) {
+            params.cwd = projectCwd;
+        }
         try {
-            await createMutation.mutateAsync({
-                prompt: prompt.trim(),
-                agent_id: agentId,
-                model: model.trim() || undefined,
-                cwd: cwd.trim() || undefined,
-                session_id: sessionId || undefined,
-                attachments: remotePaths,
-            });
+            await createMutation.mutateAsync(params);
             // 清理预览 URL
             attachments.forEach((a) => {
                 if (a.previewUrl)
@@ -277,7 +272,7 @@ export function TaskCreateForm({ onSuccess }) {
             previewUrlsRef.current = [];
             setPrompt("");
             setModel("");
-            setCwd("");
+            setScopeValue("");
             setSessionId("");
             setAttachments([]);
             setUploadError(null);
@@ -287,16 +282,15 @@ export function TaskCreateForm({ onSuccess }) {
             // mutation 状态会展示错误
         }
     };
-    return (_jsxs("form", { onSubmit: handleSubmit, className: "space-y-4", children: [_jsxs("div", { children: [_jsx("label", { className: "mb-1.5 block text-sm font-medium", children: "Prompt *" }), _jsx("textarea", { className: "flex min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50", placeholder: "\u8F93\u5165\u4EFB\u52A1\u6307\u4EE4...", value: prompt, onChange: (e) => setPrompt(e.target.value), required: true })] }), _jsxs("div", { className: "grid grid-cols-1 gap-4 sm:grid-cols-2", children: [_jsxs("div", { children: [_jsx("label", { className: "mb-1.5 block text-sm font-medium", children: "Agent" }), _jsx(Select, { options: AGENT_OPTIONS, value: agentId, onChange: (e) => setAgentId(e.target.value) })] }), _jsxs("div", { children: [_jsx("label", { className: "mb-1.5 block text-sm font-medium", children: "\u6A21\u578B" }), _jsx(Input, { placeholder: "\u53EF\u9009\uFF0C\u5982 o4-mini", value: model, onChange: (e) => setModel(e.target.value) })] })] }), _jsxs("div", { children: [_jsx("label", { className: "mb-1.5 block text-sm font-medium", children: "\u5DE5\u4F5C\u76EE\u5F55" }), _jsxs("div", { className: "relative", ref: cwdBoxRef, children: [_jsx(Input, { placeholder: "\u9009\u62E9\u9879\u76EE\u6216\u8F93\u5165\u8DEF\u5F84...", value: cwd, onChange: (e) => {
-                                    setCwd(e.target.value);
-                                    setCwdOpen(true);
-                                }, onFocus: () => setCwdOpen(true), autoComplete: "off" }), cwdOpen && (filteredProjects.length > 0 || projectsQuery.isLoading) && (_jsxs("div", { className: "absolute z-50 mt-1 max-h-60 w-full overflow-auto rounded-md border border-input bg-popover p-1 text-popover-foreground shadow-md", children: [projectsQuery.isLoading && (_jsx("div", { className: "px-2 py-2 text-xs text-muted-foreground", children: "\u52A0\u8F7D\u9879\u76EE\u4E2D..." })), filteredProjects.map((p) => (_jsxs("button", { type: "button", onClick: () => pickProject(p.cwd), className: "flex w-full flex-col items-start gap-0.5 rounded px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground", children: [_jsx("span", { className: "font-medium", children: p.name }), _jsx("span", { className: "truncate text-xs text-muted-foreground", children: p.cwd })] }, p.id)))] }))] })] }), _jsxs("div", { children: [_jsxs("label", { className: "mb-1.5 block text-sm font-medium", children: ["\u4F1A\u8BDD", _jsx("span", { className: "ml-1 text-xs font-normal text-muted-foreground", children: "(\u53EF\u9009\uFF0C\u9ED8\u8BA4\u65B0\u5EFA\u4F1A\u8BDD)" })] }), _jsxs("div", { className: "relative", ref: sessionBoxRef, children: [_jsxs("button", { type: "button", disabled: sessionDisabled, onClick: () => !sessionDisabled && setSessionOpen((v) => !v), className: "flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 " +
+    return (_jsxs("form", { onSubmit: handleSubmit, className: "space-y-4", children: [_jsxs("div", { children: [_jsx("label", { className: "mb-1.5 block text-sm font-medium", children: "Prompt *" }), _jsx("textarea", { className: "flex min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50", placeholder: "\u8F93\u5165\u4EFB\u52A1\u6307\u4EE4...", value: prompt, onChange: (e) => setPrompt(e.target.value), required: true })] }), _jsxs("div", { className: "grid grid-cols-1 gap-4 sm:grid-cols-2", children: [_jsxs("div", { children: [_jsx("label", { className: "mb-1.5 block text-sm font-medium", children: "Agent" }), _jsx(Select, { options: AGENT_OPTIONS, value: agentId, onChange: (e) => setAgentId(e.target.value) })] }), _jsxs("div", { children: [_jsx("label", { className: "mb-1.5 block text-sm font-medium", children: "\u6A21\u578B" }), _jsx(Input, { placeholder: "\u53EF\u9009\uFF0C\u5982 o4-mini", value: model, onChange: (e) => setModel(e.target.value) })] })] }), _jsxs("div", { children: [_jsx("label", { className: "mb-1.5 block text-sm font-medium", children: "\u9879\u76EE / \u9879\u76EE\u7EC4" }), _jsxs("select", { value: scopeValue, onChange: (e) => setScopeValue(e.target.value), className: "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2", children: [_jsx("option", { value: "", children: "\u9ED8\u8BA4\uFF08\u540E\u7AEF\u63A8\u65AD\uFF09" }), projects.length > 0 && (_jsx("optgroup", { label: "\u9879\u76EE", children: projects.map((p) => (_jsx("option", { value: `project:${p.cwd}`, children: p.name }, p.id))) })), groups.length > 0 && (_jsx("optgroup", { label: "\u9879\u76EE\u7EC4", children: groups.map((g) => (_jsx("option", { value: `group:${g.id}`, children: g.name }, g.id))) }))] }), projectCwd && (_jsxs("p", { className: "mt-1.5 truncate text-xs text-muted-foreground", children: ["\u5DE5\u4F5C\u76EE\u5F55\uFF1A", projectCwd] }))] }), _jsxs("div", { children: [_jsxs("label", { className: "mb-1.5 block text-sm font-medium", children: ["\u4F1A\u8BDD", _jsx("span", { className: "ml-1 text-xs font-normal text-muted-foreground", children: "(\u53EF\u9009\uFF0C\u9ED8\u8BA4\u65B0\u5EFA\u4F1A\u8BDD)" })] }), _jsxs("div", { className: "relative", ref: sessionBoxRef, children: [_jsxs("button", { type: "button", disabled: sessionDisabled, onClick: () => !sessionDisabled && setSessionOpen((v) => !v), className: "flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 " +
                                     (selectedSession ? "text-foreground" : "text-muted-foreground"), children: [selectedSession ? (_jsxs("span", { className: "flex min-w-0 items-center gap-2", children: [_jsx("span", { className: "inline-flex h-5 shrink-0 items-center rounded px-1.5 text-[10px] font-semibold tracking-wide " +
-                                                    ((_c = AGENT_BADGE_CLASS[selectedSession.agent_id]) !== null && _c !== void 0 ? _c : "bg-muted text-muted-foreground"), children: (_d = AGENT_LABEL[selectedSession.agent_id]) !== null && _d !== void 0 ? _d : selectedSession.agent_id.slice(0, 2).toUpperCase() }), _jsx("span", { className: "truncate", children: selectedSession.title || selectedSession.id }), _jsx("span", { className: "shrink-0 text-xs text-muted-foreground", children: formatSessionDate(selectedSession.created_at) })] })) : (_jsx("span", { children: sessionDisabled
-                                            ? "请先选择工作目录"
-                                            : sessionLoading
-                                                ? "加载会话中..."
-                                                : "新建会话（默认）/ 选择已有会话..." })), _jsx("svg", { xmlns: "http://www.w3.org/2000/svg", width: "14", height: "14", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", className: "ml-2 shrink-0 opacity-60", "aria-hidden": "true", children: _jsx("polyline", { points: "6 9 12 15 18 9" }) })] }), sessionOpen && !sessionDisabled && (_jsxs("div", { className: "absolute z-50 mt-1 max-h-72 w-full overflow-auto rounded-md border border-input bg-popover p-1 text-popover-foreground shadow-md", children: [_jsxs("button", { type: "button", onClick: () => pickSession(""), className: "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground " +
+                                                    ((_e = AGENT_BADGE_CLASS[selectedSession.agent_id]) !== null && _e !== void 0 ? _e : "bg-muted text-muted-foreground"), children: (_f = AGENT_LABEL[selectedSession.agent_id]) !== null && _f !== void 0 ? _f : selectedSession.agent_id.slice(0, 2).toUpperCase() }), _jsx("span", { className: "truncate", children: selectedSession.title || selectedSession.id }), _jsx("span", { className: "shrink-0 text-xs text-muted-foreground", children: formatSessionDate(selectedSession.created_at) })] })) : (_jsx("span", { children: groupId
+                                            ? "项目组任务不支持选择会话"
+                                            : sessionDisabled
+                                                ? "请先选择项目"
+                                                : sessionLoading
+                                                    ? "加载会话中..."
+                                                    : "新建会话（默认）/ 选择已有会话..." })), _jsx("svg", { xmlns: "http://www.w3.org/2000/svg", width: "14", height: "14", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", className: "ml-2 shrink-0 opacity-60", "aria-hidden": "true", children: _jsx("polyline", { points: "6 9 12 15 18 9" }) })] }), sessionOpen && !sessionDisabled && (_jsxs("div", { className: "absolute z-50 mt-1 max-h-72 w-full overflow-auto rounded-md border border-input bg-popover p-1 text-popover-foreground shadow-md", children: [_jsxs("button", { type: "button", onClick: () => pickSession(""), className: "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground " +
                                             (sessionId === "" ? "bg-accent/60" : ""), children: [_jsx("span", { className: "inline-flex h-5 w-5 shrink-0 items-center justify-center rounded border border-dashed border-muted-foreground/60 text-[11px] text-muted-foreground", children: "+" }), _jsx("span", { className: "font-medium", children: "\u65B0\u5EFA\u4F1A\u8BDD" }), _jsx("span", { className: "ml-auto text-xs text-muted-foreground", children: "\u9ED8\u8BA4" })] }), sessionLoading && (_jsx("div", { className: "px-2 py-2 text-xs text-muted-foreground", children: "\u52A0\u8F7D\u4F1A\u8BDD\u4E2D..." })), sessionError && !sessionLoading && (_jsx("div", { className: "px-2 py-2 text-xs text-destructive", children: sessionError })), !sessionLoading && !sessionError && groupedSessions.project.length > 0 && (_jsxs(_Fragment, { children: [_jsx("div", { className: "mt-1 px-2 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground", children: "Sessions \u00B7 \u9879\u76EE\u4F1A\u8BDD" }), groupedSessions.project.map((s) => (_jsx(SessionRow, { item: s, active: sessionId === s.id, onPick: pickSession }, `p-${s.id}`)))] })), !sessionLoading && !sessionError && groupedSessions.chat.length > 0 && (_jsxs(_Fragment, { children: [_jsx("div", { className: "mt-1 px-2 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground", children: "Chats \u00B7 \u666E\u901A\u5BF9\u8BDD" }), groupedSessions.chat.map((s) => (_jsx(SessionRow, { item: s, active: sessionId === s.id, onPick: pickSession }, `c-${s.id}`)))] })), !sessionLoading &&
                                         !sessionError &&
                                         groupedSessions.project.length === 0 &&

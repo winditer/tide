@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { useAgentBoard, useMoveCard } from "@tide/core";
 import type { KanbanColumn, KanbanCard, AgentSwimlane } from "@tide/core";
 import { useQueryClient } from "@tanstack/react-query";
@@ -10,9 +10,18 @@ import { BoardColumn } from "./BoardColumn";
 import { KanbanFilters } from "./KanbanFilters";
 import { EmptyState } from "./EmptyState";
 
-export function AgentBoard() {
+export interface AgentBoardProps {
+  groupId?: string;
+  projectId?: string;
+}
+
+export function AgentBoard({ groupId, projectId }: AgentBoardProps = {}) {
   const [search, setSearch] = useState("");
-  const { data, isLoading } = useAgentBoard();
+  const queryParams = useMemo(
+    () => ({ group_id: groupId, project_id: projectId }),
+    [groupId, projectId],
+  );
+  const { data, isLoading } = useAgentBoard(queryParams);
   const moveMutation = useMoveCard();
   const queryClient = useQueryClient();
 
@@ -23,7 +32,7 @@ export function AgentBoard() {
 
       // Optimistic update
       queryClient.setQueryData(
-        ["kanban", "agents", undefined],
+        ["kanban", "agents", queryParams],
         (old: AgentSwimlane[] | undefined) => {
           if (!old) return old;
           return old.map((swimlane) => ({
@@ -75,7 +84,7 @@ export function AgentBoard() {
         }
       );
     },
-    [moveMutation, queryClient]
+    [moveMutation, queryClient, queryParams]
   );
 
   if (isLoading) {

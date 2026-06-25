@@ -64,7 +64,8 @@ export type WorkflowNodeRunStatus =
   | "running"
   | "completed"
   | "failed"
-  | "skipped";
+  | "skipped"
+  | "waiting_approval";
 
 export interface WorkflowNodeRun {
   id: string;

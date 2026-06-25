@@ -8,12 +8,15 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import uuid
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 from backend.core.dependencies import (
     check_cwd_write_permission,
@@ -29,7 +32,10 @@ from backend.services.session_discovery import (
     find_session,
     read_session_messages,
 )
+from backend.services.project_discovery import find_project_root
 from backend.services.task_service import task_service
+
+logger = logging.getLogger("tide.api.sessions")
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
@@ -61,6 +67,10 @@ class SessionCreate(BaseModel):
     session_type: Optional[str] = Field(
         default=None,
         description="会话类型：'convo'/'chat'，可选，默认根据是否提供 cwd 推断",
+    )
+    group_id: Optional[str] = Field(
+        None,
+        description="项目组 ID；选择项目组时会自动取 primary 项目的 cwd",
     )
 
 
@@ -150,6 +160,7 @@ async def list_chats(
 async def list_sessions(
     workspace_id: str = Query("default"),
     project: Optional[str] = Query(None, description="按项目根/cwd 过滤"),
+    group_id: Optional[str] = Query(None, description="按项目组过滤"),
     agent_id: Optional[str] = Query(None),
     type: Optional[str] = Query("all", description="会话类型过滤: all/project/chat"),
     page: int = Query(1, ge=1),
@@ -178,6 +189,9 @@ async def list_sessions(
             conditions.append("(cwd = :project OR cwd LIKE :project_prefix)")
             params["project"] = project
             params["project_prefix"] = project.rstrip("/") + "/%"
+        if group_id:
+            conditions.append("group_id = :group_id")
+            params["group_id"] = group_id
         where = " AND ".join(conditions)
         r = await session.execute(
             text(
@@ -209,12 +223,38 @@ async def list_sessions(
                 }
             )
 
-    # 文件扫描补充
-    db_sids = {s["session_id"] for s in db_sessions if s.get("session_id")}
-    file_sessions: list[dict] = []
+    # 文件扫描补充：构建 session_id → file_meta 映射用于合并
+    file_meta_map: dict[str, dict] = {}
     for s in discover_sessions(project_cwd=project, agent_id=agent_id):
         sid = s.get("session_id")
-        if sid and sid in db_sids:
+        if sid:
+            file_meta_map[sid] = s
+
+    # 用文件元数据丰富 DB sessions（补充 project_root / project_name / title）
+    db_sids = {s["session_id"] for s in db_sessions if s.get("session_id")}
+    for db_s in db_sessions:
+        sid = db_s.get("session_id") or ""
+        file_s = file_meta_map.get(sid)
+        if file_s:
+            if not db_s.get("project_root"):
+                db_s["project_root"] = file_s.get("project_root")
+            if not db_s.get("project_name"):
+                db_s["project_name"] = file_s.get("project_name")
+            if not db_s.get("title"):
+                db_s["title"] = file_s.get("title")
+        else:
+            # 无对应文件时，从 cwd 计算 project_root
+            cwd_val = db_s.get("cwd") or ""
+            if cwd_val and not db_s.get("project_root"):
+                pr = find_project_root(Path(cwd_val))
+                if pr:
+                    db_s["project_root"] = str(pr)
+                    db_s["project_name"] = pr.name
+
+    # 仅文件中存在的会话（DB 中无记录）
+    file_sessions: list[dict] = []
+    for sid, s in file_meta_map.items():
+        if sid in db_sids:
             continue
         file_sessions.append(
             {
@@ -285,7 +325,7 @@ async def _related_tasks(session_id: str, workspace_id: str = "default") -> list
         r = await session.execute(
             text(
                 """
-                SELECT id, prompt, agent_id, status, cwd,
+                SELECT id, prompt, agent_id, status, cwd, result,
                        created_at, started_at, completed_at, duration_ms
                 FROM tasks
                 WHERE workspace_id = :ws AND session_id = :sid
@@ -303,6 +343,35 @@ async def _related_tasks(session_id: str, workspace_id: str = "default") -> list
     return items
 
 
+def _synthesize_messages_from_tasks(tasks: list[dict]) -> list[dict]:
+    """从任务数据合成对话消息列表（当会话文件不可用时的降级方案）。
+
+    将每个任务的 prompt 作为 user 消息、result 作为 assistant 消息，
+    按创建时间升序排列，形成完整的对话流。
+    """
+    messages: list[dict] = []
+    # 按 created_at 升序处理（tasks 是 DESC 排序的）
+    for task in reversed(tasks):
+        prompt = (task.get("prompt") or "").strip()
+        result = (task.get("result") or "").strip()
+        created_at = task.get("created_at") or ""
+        completed_at = task.get("completed_at") or ""
+
+        if prompt:
+            messages.append({
+                "role": "user",
+                "content": prompt,
+                "timestamp": str(created_at) if created_at else None,
+            })
+        if result:
+            messages.append({
+                "role": "assistant",
+                "content": result,
+                "timestamp": str(completed_at or created_at) if (completed_at or created_at) else None,
+            })
+    return messages
+
+
 @router.get("/{session_id}")
 async def get_session(
     session_id: str,
@@ -311,11 +380,13 @@ async def get_session(
 ):
     """会话详情：返回会话元信息、对话消息流、关联任务。"""
     info = find_session(session_id)
+    related = await _related_tasks(session_id, workspace_id)
+
+    if info is None and not related:
+        raise HTTPException(status_code=404, detail="Session not found")
+
     if info is None:
         # DB 中可能存在 session（聚合任务），文件未扫描到。降级返回任务聚合视图。
-        related = await _related_tasks(session_id, workspace_id)
-        if not related:
-            raise HTTPException(status_code=404, detail="Session not found")
         agg = related[0]
         info = {
             "session_id": session_id,
@@ -331,19 +402,39 @@ async def get_session(
             "file": None,
             "source": "db",
         }
-        messages: list[dict] = []
+
+    # ── 消息来源策略 ──
+    # 1. 优先从 JSONL 文件解析（已过滤 tool_result 噪音，仅保留 text 块）
+    # 2. 如果文件消息缺少 assistant 回复，用 DB 任务数据补充
+    # 3. 如果完全没有文件消息，从 DB 任务合成
+    file_path = info.get("file")
+    agent_id = info.get("agent_id") or "codex"
+    file_messages = (
+        read_session_messages(file_path, agent_id) if file_path else []
+    )
+    file_has_assistant = any(
+        m.get("role") == "assistant" for m in file_messages
+    )
+    if file_messages and file_has_assistant:
+        # 文件消息包含 assistant 回复 → 使用文件消息（更干净）
+        messages = file_messages
+    elif related:
+        # 无文件消息或文件缺少 assistant → 从 DB 任务合成
+        messages = _synthesize_messages_from_tasks(related)
     else:
-        file_path = info.get("file")
-        agent_id = info.get("agent_id") or "codex"
-        messages = (
-            read_session_messages(file_path, agent_id) if file_path else []
-        )
-        related = await _related_tasks(session_id, workspace_id)
+        # DB 也没数据，使用任何已解析的文件消息
+        messages = file_messages
+
+    # Strip large 'result' field from tasks response (already included in messages)
+    tasks_response = [
+        {k: v for k, v in t.items() if k != "result"}
+        for t in related
+    ]
 
     return {
         "session": info,
         "messages": messages,
-        "tasks": related,
+        "tasks": tasks_response,
     }
 
 
@@ -366,6 +457,19 @@ async def create_session(
     declared_type = (body.session_type or "").lower().strip()
     if declared_type == "chat":
         cwd = ""
+
+    # 解析 group_id → cwd（仅在未显式提供 cwd 时取 primary 项目路径）
+    group_id = (body.group_id or "").strip() or None
+    if group_id and not cwd:
+        from backend.services.project_group_service import project_group_service
+        group_projects = await project_group_service.get_group_projects(group_id)
+        if group_projects:
+            primary = next(
+                (p for p in group_projects if p.get("role") == "primary"),
+                group_projects[0],
+            )
+            cwd = (primary.get("cwd") or "").strip()
+
     session_type = "convo" if cwd else "chat"
     await check_cwd_write_permission(cwd or None, current_user)
 
@@ -389,6 +493,7 @@ async def create_session(
             cwd=cwd,
             attachments=[],
             session_id=session_id,
+            group_id=group_id,
         )
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
@@ -403,6 +508,7 @@ async def create_session(
         "title": prompt,
         "status": task.get("status") or "queued",
         "session_type": session_type,
+        "group_id": group_id,
     }
 
 
@@ -429,3 +535,149 @@ async def unarchive_session(
     _ensure_not_viewer(current_user)
     changed = archive_store.unarchive_session(session_id)
     return {"archived": False, "changed": changed, "id": session_id}
+
+
+# ── Artifacts ─────────────────────────────────
+
+
+def _safe_json_loads(raw, default):
+    if not raw:
+        return default
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+@router.get("/{session_id}/artifacts")
+async def get_session_artifacts(
+    session_id: str,
+    workspace_id: str = Query("default"),
+    current_user=Depends(get_optional_user),
+):
+    """汇总会话关联产物。
+
+    产物来源：
+    1. tasks.result 文本中的 markdown 链接与常见创建文件提示行（实时解析）。
+    2. work_items.metadata.artifacts 中与该 session 关联任务产生的产物。
+
+    响应格式：
+    {"artifacts": [{id, label, url, type, created_at, task_id}]}
+    """
+    artifacts: list[dict] = []
+    seen_keys: set = set()
+
+    def _push(item: dict) -> None:
+        url = (item.get("url") or "").strip()
+        label = (item.get("label") or "").strip()
+        if not url and not label:
+            return
+        key = (item.get("type") or "file", url, label)
+        if key in seen_keys:
+            return
+        seen_keys.add(key)
+        artifacts.append(item)
+
+    # 1. 从 tasks 表提取
+    try:
+        async with async_session_factory() as session:
+            r = await session.execute(
+                text(
+                    """
+                    SELECT id, result, completed_at, created_at
+                    FROM tasks
+                    WHERE workspace_id = :ws AND session_id = :sid
+                    ORDER BY created_at ASC
+                    """
+                ),
+                {"ws": workspace_id, "sid": session_id},
+            )
+            task_rows = r.fetchall()
+    except Exception:
+        logger.exception("query tasks for session artifacts failed: sid=%s", session_id)
+        task_rows = []
+
+    task_ids: list[str] = []
+    for row in task_rows:
+        d = dict(row._mapping)
+        tid = str(d.get("id") or "")
+        task_ids.append(tid)
+        result_text = d.get("result")
+        if not result_text or not isinstance(result_text, str):
+            continue
+        created_at = str(d.get("completed_at") or d.get("created_at") or "")
+        try:
+            extracted = task_service._extract_artifacts_from_result(result_text)
+        except Exception:
+            logger.debug("extract artifacts failed for task=%s", tid[:8], exc_info=True)
+            extracted = []
+        for art in extracted:
+            _push({
+                "id": str(uuid.uuid4()),
+                "label": art.get("label") or "",
+                "url": art.get("url") or "",
+                "type": art.get("type") or "file",
+                "created_at": created_at,
+                "task_id": tid,
+            })
+
+    # 2. 从 work_items.metadata.artifacts 提取与该 session 关联的产物
+    if task_ids:
+        try:
+            async with async_session_factory() as session:
+                r = await session.execute(
+                    text(
+                        """
+                        SELECT DISTINCT wi.id, wi.metadata
+                        FROM work_items wi
+                        JOIN work_item_transitions wit
+                          ON wit.work_item_id = wi.id
+                        WHERE wit.task_id IN :tids
+                        """
+                    ).bindparams(
+                        bindparam("tids", expanding=True)
+                    ),
+                    {"tids": task_ids},
+                )
+                wi_rows = r.fetchall()
+        except Exception:
+            logger.exception(
+                "query work_items for session artifacts failed: sid=%s", session_id,
+            )
+            wi_rows = []
+
+        task_id_set = set(task_ids)
+        for row in wi_rows:
+            d = dict(row._mapping)
+            metadata = _safe_json_loads(d.get("metadata"), {}) or {}
+            wi_artifacts = metadata.get("artifacts") if isinstance(metadata, dict) else None
+            if not isinstance(wi_artifacts, list):
+                continue
+            wid = str(d.get("id") or "")
+            for art in wi_artifacts:
+                if not isinstance(art, dict):
+                    continue
+                # 仅保留当前 session 下任务产生的产物
+                art_task = str(art.get("task_id") or "")
+                if art_task and art_task not in task_id_set:
+                    continue
+                art_id = str(art.get("id") or uuid.uuid4())
+                url = art.get("url") or ""
+                # 本地文件产物：如果 url 为空且拥有 file_path，生成 work-item content API URL
+                if not url and art.get("type") == "file" and art.get("file_path"):
+                    url = f"/api/work-items/{wid}/artifacts/{art_id}/content"
+                label = art.get("label") or art.get("file_path") or ""
+                a_type = art.get("type") or "file"
+                if a_type not in ("file", "link", "markdown"):
+                    # commit/url 等统一归为 link
+                    a_type = "link" if str(url).startswith(("http://", "https://")) else "file"
+                _push({
+                    "id": art_id,
+                    "label": label,
+                    "url": url,
+                    "type": a_type,
+                    "created_at": str(art.get("created_at") or ""),
+                    "task_id": art_task,
+                })
+
+    return {"artifacts": artifacts}

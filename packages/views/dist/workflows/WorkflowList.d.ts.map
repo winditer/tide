@@ -1,1 +1,1 @@
-{"version":3,"file":"WorkflowList.d.ts","sourceRoot":"","sources":["../../src/workflows/WorkflowList.tsx"],"names":[],"mappings":"AAMA,OAAO,KAAK,EAAE,QAAQ,EAAE,MAAM,YAAY,CAAC;AAgB3C,UAAU,iBAAiB;IACzB,KAAK,EAAE,QAAQ,EAAE,CAAC;CACnB;AAED,wBAAgB,YAAY,CAAC,EAAE,KAAK,EAAE,EAAE,iBAAiB,+BAwJxD"}
+{"version":3,"file":"WorkflowList.d.ts","sourceRoot":"","sources":["../../src/workflows/WorkflowList.tsx"],"names":[],"mappings":"AAMA,OAAO,KAAK,EAAE,QAAQ,EAAE,MAAM,YAAY,CAAC;AAgB3C,UAAU,iBAAiB;IACzB,KAAK,EAAE,QAAQ,EAAE,CAAC;CACnB;AAED,wBAAgB,YAAY,CAAC,EAAE,KAAK,EAAE,EAAE,iBAAiB,+BAoJxD"}

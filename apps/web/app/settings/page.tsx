@@ -10,6 +10,9 @@ import {
   ChevronRight,
   Lock,
   Network,
+  Sparkles,
+  Scale,
+  Webhook,
   type LucideIcon,
 } from "lucide-react";
 
@@ -36,6 +39,30 @@ const ITEMS: SettingItem[] = [
     description: "注册外部 A2A Agent，发现 Agent Card、测试连通性与刷新缓存",
     icon: Network,
     allowedRoles: ["admin"],
+  },
+  {
+    href: "/settings/skills",
+    label: "技能库",
+    description: "管理 Agent 技能指南",
+    icon: Sparkles,
+  },
+  {
+    href: "/settings/rules",
+    label: "规则引擎",
+    description: "管理代码规范约束规则",
+    icon: Scale,
+  },
+  {
+    href: "/settings/hooks",
+    label: "事件钩子",
+    description: "配置自动化触发操作",
+    icon: Webhook,
+  },
+  {
+    href: "/settings/security",
+    label: "安全审查",
+    description: "安全规则与扫描结果",
+    icon: ShieldCheck,
   },
 ];
 

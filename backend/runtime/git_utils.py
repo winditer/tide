@@ -917,3 +917,99 @@ async def git_clone(
     if proc.returncode == 0:
         return True, output.strip()
     return False, output.strip()
+
+
+# ── 扩展：Diff / Show / Log / Conflict ─────────────────────────────────────
+
+async def git_diff_full(
+    cwd: str,
+    ref1: str | None = None,
+    ref2: str | None = None,
+    path: str | None = None,
+) -> tuple[int, str]:
+    """获取完整 unified diff。
+
+    - ref1/ref2 均为空：工作区未暂存 diff（git diff）
+    - 仅 ref1：ref1 与工作区的 diff（git diff ref1）
+    - ref1 + ref2：两个 ref 之间的 diff（git diff ref1 ref2）
+    - path 非空时仅返回指定文件的 diff
+    """
+    args: list[str] = ["diff"]
+    if ref1:
+        args.append(ref1)
+    if ref2:
+        args.append(ref2)
+    if path:
+        args.extend(["--", path])
+    return await git_command(Path(cwd), args, timeout=30)
+
+
+async def git_show_file(
+    cwd: str,
+    ref: str,
+    path: str,
+) -> tuple[int, str]:
+    """获取指定 ref (commit/branch) 下特定文件的内容。
+
+    使用 ``git show ref:path``。
+    """
+    return await git_command(Path(cwd), ["show", f"{ref}:{path}"], timeout=30)
+
+
+async def git_log_files(
+    cwd: str,
+    branch: str | None = None,
+    limit: int = 50,
+    since: str | None = None,
+    until: str | None = None,
+    all_branches: bool = False,
+) -> tuple[int, str]:
+    """获取 commit 列表及每个 commit 修改的文件（含增删行数）。
+
+    使用 ``git log --numstat --format=...``，输出格式可由调用方解析。
+    numstat 每行格式：additions\tdeletions\tpath（二进制文件为 -\t-\tpath）。
+
+    当 all_branches=True 时添加 ``--all`` 以搜索所有分支（用于会话级跨分支查询）。
+    """
+    args: list[str] = [
+        "log",
+        f"--max-count={limit}",
+        "--numstat",
+        "--format=%H|%an|%aI|%s",
+    ]
+    if all_branches:
+        args.append("--all")
+    if since:
+        args.append(f"--since={since}")
+    if until:
+        args.append(f"--until={until}")
+    if branch:
+        args.append(branch)
+    return await git_command(Path(cwd), args, timeout=30)
+
+
+async def git_conflict_content(cwd: str, path: str) -> dict[str, str]:
+    """获取冲突文件的三个版本：base (:1:path), ours (:2:path), theirs (:3:path)。
+
+    返回 dict 包含 base / ours / theirs 三个键，获取失败的版本为空字符串。
+    同时尝试读取文件当前内容（含冲突标记）作为 conflict_markers。
+    """
+    result: dict[str, str] = {"base": "", "ours": "", "theirs": "", "conflict_markers": ""}
+
+    stages = [("base", "1"), ("ours", "2"), ("theirs", "3")]
+    for key, stage in stages:
+        code, output = await git_command(
+            Path(cwd), ["show", f":{stage}:{path}"], timeout=15
+        )
+        if code == 0:
+            result[key] = output
+
+    # 读取含冲突标记的文件内容
+    full_path = Path(cwd) / path
+    try:
+        if full_path.exists() and full_path.is_file():
+            result["conflict_markers"] = full_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        pass
+
+    return result

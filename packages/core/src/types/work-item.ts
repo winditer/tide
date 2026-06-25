@@ -42,6 +42,8 @@ export interface WorkItem {
   metadata?: Record<string, any>;
   /** 关联版本 ID（可选） */
   version_id?: string | null;
+  /** 项目组 ID（可选）：存在时表示该工作项是跨仓库任务 */
+  group_id?: string | null;
   /** 推导状态：待操作、进行中、待审批、已完成、失败、已停止、等待中 */
   status?: WorkItemStatus;
   started_at?: string;
@@ -81,6 +83,11 @@ export interface WorkItemCreate {
   source_id?: string;
   metadata?: Record<string, any>;
   version_id?: string | null;
+  /**
+   * 项目组 id：选择“项目组”作为归属时填入；
+   * ``project_id`` 需同时设为该组的 primary 项目。
+   */
+  group_id?: string | null;
 }
 
 export interface WorkItemUpdate {
@@ -114,4 +121,25 @@ export interface WorkItemBoardColumn {
 export interface WorkItemBoard {
   columns: WorkItemBoardColumn[];
   workflow: { id: string; name: string };
+}
+
+/** 跨仓库执行结果中单个子任务的汇总 */
+export interface CrossRepoResultItem {
+  project_id?: string | null;
+  project_name?: string | null;
+  cwd?: string | null;
+  status?: string | null;
+  task_id: string;
+  task_index?: number | null;
+  diff_summary?: string | null;
+  commit_hash?: string | null;
+  commit_message?: string | null;
+  completed_at?: string | null;
+}
+
+/** ``GET /api/work-items/{id}/cross-repo-results`` 返回体 */
+export interface CrossRepoResultsResponse {
+  group_id?: string | null;
+  plan_id?: string | null;
+  results: CrossRepoResultItem[];
 }

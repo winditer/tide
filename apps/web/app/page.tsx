@@ -10,6 +10,7 @@ import { RecentTasks } from "@tide/views/dashboard/RecentTasks";
 import { StatCards } from "@tide/views/dashboard/StatCards";
 import { TaskStatusChart } from "@tide/views/dashboard/TaskStatusChart";
 import { UpcomingSchedules } from "@tide/views/dashboard/UpcomingSchedules";
+import { CostOverview } from "@tide/views/dashboard/CostOverview";
 
 export default function DashboardPage() {
   return (
@@ -42,6 +43,9 @@ export default function DashboardPage() {
         <AgentPanel />
         <ActiveProjects />
       </div>
+
+      {/* 成本概览：全宽 */}
+      <CostOverview />
 
       {/* 即将执行：全宽 */}
       <UpcomingSchedules />

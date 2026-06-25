@@ -88,14 +88,15 @@ function PlanTaskNodeImpl({ data, selected }) {
     const phase = (_b = d.phase) !== null && _b !== void 0 ? _b : 0;
     const agent = (_c = d.agentId) !== null && _c !== void 0 ? _c : d.agent_id;
     return (_jsxs("div", { className: [
-            "group relative w-[260px] select-none",
-            "border border-zinc-900",
-            "bg-white shadow-[6px_6px_0_0_rgba(24,24,27,0.92)]",
-            "transition-transform duration-150",
-            selected ? "translate-x-[-2px] translate-y-[-2px]" : "",
-        ].join(" "), children: [_jsxs("div", { className: `flex items-center justify-between px-3 py-1.5 ${t.accent} text-white ${t.pulse}`, children: [_jsx("span", { className: "font-mono text-[10px] tracking-[0.2em]", children: t.label }), _jsx("span", { className: "font-mono text-[11px]", children: t.glyph })] }), _jsxs("div", { className: `relative px-4 py-3 ${t.surface}`, children: [_jsxs("div", { className: "mb-2 flex items-center justify-between", children: [_jsxs("span", { className: "font-mono text-[10px] tracking-widest text-zinc-500", children: [idx != null
+            "group relative w-[260px] select-none overflow-hidden",
+            "rounded-lg border border-border/60 bg-card shadow-sm",
+            "transition-all duration-150",
+            selected
+                ? "ring-2 ring-indigo-400/60 shadow-md -translate-y-0.5"
+                : "hover:shadow-md hover:-translate-y-0.5",
+        ].join(" "), children: [_jsxs("div", { className: `flex items-center justify-between px-3 py-1.5 ${t.accent} text-white ${t.pulse}`, children: [_jsx("span", { className: "font-mono text-[10px] tracking-[0.2em]", children: t.label }), _jsx("span", { className: "font-mono text-[11px]", children: t.glyph })] }), _jsxs("div", { className: `relative px-4 py-3 ${t.surface}`, children: [_jsxs("div", { className: "mb-2 flex items-center justify-between", children: [_jsxs("span", { className: "font-mono text-[10px] tracking-widest text-muted-foreground", children: [idx != null
                                         ? `#${String(idx).padStart(2, "0")}`
-                                        : "#--", _jsx("span", { className: "mx-1.5 text-zinc-300", children: "/" }), _jsxs("span", { className: "text-zinc-700", children: ["PHASE ", phase] })] }), agent && (_jsx("span", { className: "rounded-sm border border-zinc-300 bg-white px-1.5 py-[1px] font-mono text-[9px] uppercase tracking-wider text-zinc-700", children: agent }))] }), _jsx("div", { className: "text-[13px] font-semibold leading-snug text-zinc-900 line-clamp-3", children: d.title || "Untitled" }), _jsx("div", { className: "mt-2 font-mono text-[9px] tracking-widest text-zinc-400 opacity-0 transition-opacity group-hover:opacity-100", children: "\u2192 CLICK TO INSPECT" })] }), _jsx(Handle, { type: "target", position: Position.Top, className: `!h-2 !w-2 !rounded-none !border-0 ${t.accent}` }), _jsx(Handle, { type: "source", position: Position.Bottom, className: `!h-2 !w-2 !rounded-none !border-0 ${t.accent}` })] }));
+                                        : "#--", _jsx("span", { className: "mx-1.5 text-zinc-300", children: "/" }), _jsxs("span", { className: "text-zinc-700", children: ["PHASE ", phase] })] }), agent && (_jsx("span", { className: "rounded-md border border-border/60 bg-card px-1.5 py-[1px] font-mono text-[9px] uppercase tracking-wider text-muted-foreground", children: agent }))] }), _jsx("div", { className: "text-[13px] font-semibold leading-snug text-zinc-900 line-clamp-3", children: d.title || "Untitled" }), _jsx("div", { className: "mt-2 font-mono text-[9px] tracking-widest text-muted-foreground/70 opacity-0 transition-opacity group-hover:opacity-100", children: "\u2192 CLICK TO INSPECT" })] }), _jsx(Handle, { type: "target", position: Position.Top, className: `!h-2 !w-2 !rounded-full !border-0 ${t.accent}` }), _jsx(Handle, { type: "source", position: Position.Bottom, className: `!h-2 !w-2 !rounded-full !border-0 ${t.accent}` })] }));
 }
 export const PlanTaskNode = memo(PlanTaskNodeImpl);
 //# sourceMappingURL=PlanTaskNode.js.map

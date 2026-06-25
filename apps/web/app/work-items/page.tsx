@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Button, Input, Select } from "@tide/ui";
+import { Button, Input, Select, type SelectOptionGroup } from "@tide/ui";
 import {
   useProjects,
   useProjectMembers,
+  useProjectGroups,
+  useProjectGroup,
   useVersions,
   type ProjectInfo,
   type WorkItemFilters,
@@ -14,14 +16,21 @@ import {
   WorkItemCreateDialog,
   WorkItemDetailPanel,
   WorkItemListView,
+  AIDecomposeDialog,
   type WorkItemGroupBy,
 } from "@tide/views";
 import type { WorkItem } from "@tide/core";
-import { LayoutGrid, List, Search } from "lucide-react";
+import { LayoutGrid, List, Search, Sparkles } from "lucide-react";
 
-const LAST_PROJECT_STORAGE_KEY = "tide:work-items:last-project-id";
+const LAST_SCOPE_STORAGE_KEY = "tide:work-items:last-scope";
+/** 兼容旧版本 localStorage 中仅存项目 id 的 key */
+const LEGACY_PROJECT_STORAGE_KEY = "tide:work-items:last-project-id";
 const VIEW_MODE_STORAGE_KEY = "tide:work-items:view-mode";
 const REFRESH_INTERVAL_STORAGE_KEY = "tide:work-items:refresh-interval";
+
+const SCOPE_ALL = "__all__";
+const SCOPE_PROJECT_PREFIX = "project:";
+const SCOPE_GROUP_PREFIX = "group:";
 
 const REFRESH_INTERVAL_OPTIONS = [
   { value: 0, label: "手动刷新" },
@@ -42,6 +51,27 @@ function pickMostRecentProjectId(projects: ProjectInfo[]): string {
   return sorted[0]?.id ?? "";
 }
 
+/**
+ * 解析 scope 编码值。
+ * - ``""`` / ``"__all__"`` -> 全部
+ * - ``"project:<id>"`` -> 选中具体项目
+ * - ``"group:<id>"``   -> 选中具体项目组
+ */
+function parseScope(value: string): {
+  kind: "all" | "project" | "group";
+  id: string;
+} {
+  if (!value || value === SCOPE_ALL) return { kind: "all", id: "" };
+  if (value.startsWith(SCOPE_PROJECT_PREFIX)) {
+    return { kind: "project", id: value.slice(SCOPE_PROJECT_PREFIX.length) };
+  }
+  if (value.startsWith(SCOPE_GROUP_PREFIX)) {
+    return { kind: "group", id: value.slice(SCOPE_GROUP_PREFIX.length) };
+  }
+  // 兼容旧 localStorage：纯 project id（无前缀），按项目处理
+  return { kind: "project", id: value };
+}
+
 const STATUS_OPTIONS = [
   { value: "", label: "全部状态" },
   { value: "pending", label: "待操作" },
@@ -55,8 +85,12 @@ const STATUS_OPTIONS = [
 
 export default function WorkItemsPage() {
   const { data: projectsData, isLoading: projectsLoading } = useProjects();
-  const [selectedProjectId, setSelectedProjectId] = useState<string>("");
+  const { data: projectGroupsData } = useProjectGroups();
+
+  // 统一归属选择器：编码形式 "project:<id>" / "group:<id>" / "__all__"
+  const [scopeValue, setScopeValue] = useState<string>(SCOPE_ALL);
   const [showCreate, setShowCreate] = useState(false);
+  const [showAIDecompose, setShowAIDecompose] = useState(false);
   const [detailItemId, setDetailItemId] = useState<string | null>(null);
   const [didInit, setDidInit] = useState(false);
 
@@ -94,9 +128,35 @@ export default function WorkItemsPage() {
     () => projectsData?.projects ?? [],
     [projectsData],
   );
+  const groups = useMemo(
+    () => projectGroupsData?.groups ?? [],
+    [projectGroupsData],
+  );
+
+  const scope = useMemo(() => parseScope(scopeValue), [scopeValue]);
+
+  // 项目组模式：拉取详情以确定 primary 项目作为视图的 projectId
+  const { data: groupDetail } = useProjectGroup(
+    scope.kind === "group" ? scope.id : undefined,
+  );
+  const groupPrimaryProjectId = useMemo(() => {
+    if (scope.kind !== "group" || !groupDetail) return "";
+    const primary = groupDetail.members.find((m) => m.role === "primary");
+    return primary?.project_id ?? groupDetail.members[0]?.project_id ?? "";
+  }, [scope, groupDetail]);
+
+  /** 实际驱动看板/列表加载的项目 id */
+  const effectiveProjectId =
+    scope.kind === "project"
+      ? scope.id
+      : scope.kind === "group"
+        ? groupPrimaryProjectId
+        : "";
 
   // 获取项目成员列表（用于负责人筛选下拉）
-  const { data: membersData } = useProjectMembers(selectedProjectId || undefined);
+  const { data: membersData } = useProjectMembers(
+    effectiveProjectId || undefined,
+  );
   const memberOptions = useMemo(() => {
     const opts = [{ value: "", label: "全部负责人" }];
     if (membersData?.members) {
@@ -109,7 +169,7 @@ export default function WorkItemsPage() {
   }, [membersData]);
 
   // 获取项目版本列表（用于版本筛选下拉）
-  const { data: versions } = useVersions(selectedProjectId || undefined);
+  const { data: versions } = useVersions(effectiveProjectId || undefined);
   const versionOptions = useMemo(() => {
     const opts = [{ value: "", label: "全部版本" }];
     for (const v of versions ?? []) {
@@ -127,61 +187,109 @@ export default function WorkItemsPage() {
     return map;
   }, [versions]);
 
-  // 项目变更时重置版本筛选（避免带到另一项目）
+  // 归属变更时重置版本/负责人筛选，避免带到另一项目
   useEffect(() => {
     setVersionFilter("");
-  }, [selectedProjectId]);
+    setAssigneeFilter("");
+  }, [scopeValue]);
 
-  // 构建筛选参数
+  // 构建筛选参数：项目组模式自动注入 group_id
   const filters: WorkItemFilters | undefined = useMemo(() => {
     const f: WorkItemFilters = {};
     if (search.trim()) f.search = search.trim();
     if (statusFilter) f.status = statusFilter;
     if (assigneeFilter) f.assignee = assigneeFilter;
     if (versionFilter) f.version_id = versionFilter;
+    if (scope.kind === "group" && scope.id) f.group_id = scope.id;
     return Object.keys(f).length > 0 ? f : undefined;
-  }, [search, statusFilter, assigneeFilter, versionFilter]);
+  }, [search, statusFilter, assigneeFilter, versionFilter, scope]);
 
   // 看板传递的 versionId：空字串表示不过滤
   const boardVersionId = versionFilter || undefined;
 
-  // 默认选中：localStorage 上次选择 > last_active 最新的项目
+  // 归属下拉选项：扁平 + 两组（项目 / 项目组）
+  const scopeFlatOptions = useMemo(
+    () => [{ value: SCOPE_ALL, label: "全部" }],
+    [],
+  );
+  const scopeGroups = useMemo<SelectOptionGroup[]>(() => {
+    const res: SelectOptionGroup[] = [];
+    if (projects.length > 0) {
+      res.push({
+        label: "项目",
+        options: projects.map((p) => ({
+          value: `${SCOPE_PROJECT_PREFIX}${p.id}`,
+          label: p.name,
+        })),
+      });
+    }
+    if (groups.length > 0) {
+      res.push({
+        label: "项目组",
+        options: groups.map((g) => ({
+          value: `${SCOPE_GROUP_PREFIX}${g.id}`,
+          label: `${g.name} (${g.member_count})`,
+        })),
+      });
+    }
+    return res;
+  }, [projects, groups]);
+
+  // 默认选中：上次选择 > last_active 最新的项目
   useEffect(() => {
-    if (didInit || projectsLoading || projects.length === 0) return;
+    if (didInit || projectsLoading) return;
+    if (projects.length === 0 && groups.length === 0) return;
 
     let next = "";
     try {
-      const saved =
-        typeof window !== "undefined"
-          ? window.localStorage.getItem(LAST_PROJECT_STORAGE_KEY)
-          : null;
-      if (saved && projects.some((p) => p.id === saved)) {
-        next = saved;
+      if (typeof window !== "undefined") {
+        const savedScope = window.localStorage.getItem(LAST_SCOPE_STORAGE_KEY);
+        if (savedScope) {
+          const parsed = parseScope(savedScope);
+          if (
+            parsed.kind === "project" &&
+            projects.some((p) => p.id === parsed.id)
+          ) {
+            next = `${SCOPE_PROJECT_PREFIX}${parsed.id}`;
+          } else if (
+            parsed.kind === "group" &&
+            groups.some((g) => g.id === parsed.id)
+          ) {
+            next = `${SCOPE_GROUP_PREFIX}${parsed.id}`;
+          }
+        }
+        // 回退：旧 key 中仅存了 project id
+        if (!next) {
+          const legacy = window.localStorage.getItem(
+            LEGACY_PROJECT_STORAGE_KEY,
+          );
+          if (legacy && projects.some((p) => p.id === legacy)) {
+            next = `${SCOPE_PROJECT_PREFIX}${legacy}`;
+          }
+        }
       }
     } catch {
       // ignore localStorage 异常（隐私模式 / SSR）
     }
 
     if (!next) {
-      next = pickMostRecentProjectId(projects);
+      const recent = pickMostRecentProjectId(projects);
+      if (recent) next = `${SCOPE_PROJECT_PREFIX}${recent}`;
     }
 
-    if (next) setSelectedProjectId(next);
+    if (next) setScopeValue(next);
     setDidInit(true);
-  }, [projects, projectsLoading, didInit]);
+  }, [projects, groups, projectsLoading, didInit]);
 
-  // 选中项目时持久化，便于下次进入恢复
+  // 选中变更时持久化，便于下次进入恢复
   useEffect(() => {
-    if (!selectedProjectId) return;
+    if (scope.kind === "all") return;
     try {
-      window.localStorage.setItem(
-        LAST_PROJECT_STORAGE_KEY,
-        selectedProjectId,
-      );
+      window.localStorage.setItem(LAST_SCOPE_STORAGE_KEY, scopeValue);
     } catch {
       // ignore
     }
-  }, [selectedProjectId]);
+  }, [scopeValue, scope]);
 
   // 持久化视图模式
   useEffect(() => {
@@ -200,14 +308,12 @@ export default function WorkItemsPage() {
     } catch {}
   }, [refreshInterval]);
 
-  const projectOptions = [
-    { value: "", label: "选择项目…" },
-    ...projects.map((p) => ({ value: p.id, label: p.name })),
-  ];
-
   const handleCardClick = (item: WorkItem) => {
     setDetailItemId(item.id);
   };
+
+  // 是否已选中具体归属（用于决定是否渲染列表/筛选栏）
+  const hasScope = scope.kind !== "all" && !!effectiveProjectId;
 
   return (
     <main className="mx-auto max-w-7xl px-2 py-2 space-y-6">
@@ -222,15 +328,25 @@ export default function WorkItemsPage() {
           </div>
           <div className="flex items-center gap-3">
             <Select
-              value={selectedProjectId}
-              onChange={(e) => setSelectedProjectId(e.target.value)}
-              options={projectOptions}
-              className="min-w-[200px]"
+              value={scopeValue}
+              onChange={(e) => setScopeValue(e.target.value)}
+              options={scopeFlatOptions}
+              groups={scopeGroups}
+              className="min-w-[220px]"
+              aria-label="选择项目或项目组"
+              title="选择项目或项目组"
             />
             <Button
-              disabled={!selectedProjectId}
-              onClick={() => setShowCreate(true)}
+              variant="outline"
+              disabled={!hasScope}
+              onClick={() => setShowAIDecompose(true)}
+              className="gap-1.5"
+              title="使用 AI 将需求拆解为多个工作项"
             >
+              <Sparkles className="h-4 w-4" />
+              AI 分解
+            </Button>
+            <Button disabled={!hasScope} onClick={() => setShowCreate(true)}>
               ＋ 新建工作项
             </Button>
           </div>
@@ -238,7 +354,7 @@ export default function WorkItemsPage() {
       </header>
 
       {/* 筛选栏 + 视图切换 */}
-      {selectedProjectId && (
+      {hasScope && (
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           {/* 筛选 */}
           <div className="flex items-center gap-3 flex-wrap">
@@ -303,28 +419,28 @@ export default function WorkItemsPage() {
               />
             )}
             <div className="flex items-center gap-1 rounded-lg border border-border/60 bg-muted/30 p-1">
-            <button
-              onClick={() => setViewMode("board")}
-              className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                viewMode === "board"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              <LayoutGrid className="h-3.5 w-3.5" />
-              看板
-            </button>
-            <button
-              onClick={() => setViewMode("list")}
-              className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                viewMode === "list"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              <List className="h-3.5 w-3.5" />
-              列表
-            </button>
+              <button
+                onClick={() => setViewMode("board")}
+                className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                  viewMode === "board"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <LayoutGrid className="h-3.5 w-3.5" />
+                看板
+              </button>
+              <button
+                onClick={() => setViewMode("list")}
+                className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                  viewMode === "list"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <List className="h-3.5 w-3.5" />
+                列表
+              </button>
             </div>
           </div>
         </div>
@@ -335,16 +451,22 @@ export default function WorkItemsPage() {
         <div className="py-16 text-center text-sm text-muted-foreground">
           加载项目中…
         </div>
-      ) : !selectedProjectId ? (
+      ) : !hasScope ? (
         <div className="flex flex-col items-center justify-center rounded-xl bg-card shadow-card py-20 text-center">
-          <p className="text-sm text-muted-foreground">请选择项目</p>
+          <p className="text-sm text-muted-foreground">
+            {scope.kind === "group"
+              ? "项目组成员为空，请先为该组添加项目"
+              : "请选择项目或项目组"}
+          </p>
           <p className="mt-2 text-base font-medium">
-            请选择一个项目以查看其工作项
+            {scope.kind === "group"
+              ? "无可用的 primary 项目"
+              : "请从右上角选择一个项目或项目组以查看其工作项"}
           </p>
         </div>
       ) : viewMode === "board" ? (
         <WorkItemBoard
-          projectId={selectedProjectId}
+          projectId={effectiveProjectId}
           versionId={boardVersionId}
           onCardClick={handleCardClick}
           versionMap={versionMap}
@@ -353,19 +475,28 @@ export default function WorkItemsPage() {
         />
       ) : (
         <WorkItemListView
-          projectId={selectedProjectId}
+          projectId={effectiveProjectId}
           filters={filters}
           onItemClick={handleCardClick}
         />
       )}
 
       {/* Create dialog */}
-      {showCreate && selectedProjectId && (
+      {showCreate && hasScope && (
         <WorkItemCreateDialog
-          projectId={selectedProjectId}
+          projectId={effectiveProjectId}
+          initialScopeValue={scopeValue}
           onClose={() => setShowCreate(false)}
         />
       )}
+
+      {/* AI 分解弹窗 */}
+      <AIDecomposeDialog
+        open={showAIDecompose && hasScope}
+        onOpenChange={setShowAIDecompose}
+        projectId={effectiveProjectId}
+        groupId={scope.kind === "group" ? scope.id : undefined}
+      />
 
       {/* Detail panel */}
       {detailItemId && (

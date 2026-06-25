@@ -46,7 +46,7 @@ export {
   useRetryTaskMutation,
 } from "./hooks/use-tasks";
 
-export { useChat, buildContextPrompt } from "./hooks/use-chat";
+export { useChat, buildContextPrompt, extractArtifactsFromContent } from "./hooks/use-chat";
 export type {
   ChatMessage,
   ChatMessageRole,
@@ -57,6 +57,8 @@ export type {
   UseChatOptions,
   UseChatResult,
   SendMessageOverrides,
+  ChatArtifact,
+  ChatArtifactType,
 } from "./hooks/use-chat";
 
 export {
@@ -71,6 +73,7 @@ export {
   useUpcomingSchedules,
   useMyWorkItems,
   useProjectProgress,
+  useGroupProgress,
 } from "./hooks/use-dashboard";
 
 export {
@@ -85,6 +88,7 @@ export {
   fetchUpcomingSchedules,
   getMyWorkItems,
   getProjectProgress,
+  getGroupProgress,
 } from "./api/dashboard";
 export type {
   DashboardStats,
@@ -104,6 +108,7 @@ export type {
   UpcomingSchedule,
   MyWorkItem,
   ProjectProgress,
+  ProjectGroupProgress,
 } from "./api/dashboard";
 
 export {
@@ -319,6 +324,8 @@ export type {
   WorkItemBoardColumn,
   WorkItemBoard,
   WorkItemArtifact,
+  CrossRepoResultItem,
+  CrossRepoResultsResponse,
 } from "./types/work-item";
 export {
   getWorkItems,
@@ -328,6 +335,7 @@ export {
   deleteWorkItem,
   transitionWorkItem,
   getWorkItemTransitions,
+  getWorkItemCrossRepoResults,
   getWorkItemBoard,
   moveWorkItem,
   getProjectWorkflow,
@@ -335,13 +343,23 @@ export {
   unbindProjectWorkflow,
   addArtifact,
   removeArtifact,
+  aiDecomposeWorkItems,
+  batchCreateWorkItems,
+  resolveMerge,
   type WorkItemFilters,
+  type AIDecomposedItem,
+  type AIDecomposeResponse,
+  type BatchCreateWorkItemsPayload,
+  type BatchCreateWorkItemsResponse,
+  type ResolveMergeParams,
+  type ResolveMergeResponse,
 } from "./api/work-items";
 export {
   useWorkItemBoard,
   useWorkItems,
   useWorkItem,
   useWorkItemTransitions,
+  useWorkItemCrossRepoResults,
   useCreateWorkItem,
   useUpdateWorkItem,
   useDeleteWorkItem,
@@ -351,6 +369,9 @@ export {
   useUnbindProjectWorkflow,
   useAddArtifact,
   useRemoveArtifact,
+  useAIDecompose,
+  useBatchCreateWorkItems,
+  useResolveMerge,
 } from "./hooks/use-work-items";
 
 // Versions
@@ -468,3 +489,161 @@ export {
   useUpdateProjectMember,
   useRemoveProjectMember,
 } from "./hooks/use-project-members";
+
+// Project groups (cross-repo project grouping)
+export {
+  listProjectGroups,
+  getProjectGroup,
+  createProjectGroup,
+  updateProjectGroup,
+  deleteProjectGroup,
+  addGroupMember,
+  removeGroupMember,
+  getGroupConversations,
+  getGroupTasks,
+  getGroupVersions,
+  getGroupWorkflow,
+  setGroupWorkflow,
+  deleteGroupWorkflow,
+} from "./api/project-groups";
+export type {
+  ProjectGroupSummary,
+  ProjectGroupDetail,
+  ProjectGroupMember,
+  ListProjectGroupsResponse,
+  CreateProjectGroupInput,
+  UpdateProjectGroupInput,
+  AddGroupMemberInput,
+  GroupConversationItem,
+  GroupTaskItem,
+  GroupVersionItem,
+  GroupWorkflowBinding,
+  PaginatedResponse,
+} from "./api/project-groups";
+export {
+  useProjectGroups,
+  useProjectGroup,
+  useCreateProjectGroup,
+  useUpdateProjectGroup,
+  useDeleteProjectGroup,
+  useAddGroupMember,
+  useRemoveGroupMember,
+  useGroupConversations,
+  useGroupTasks,
+  useGroupVersions,
+  useGroupWorkflow,
+  useSetGroupWorkflow,
+  useDeleteGroupWorkflow,
+} from "./hooks/use-project-groups";
+
+// Project group user members (与项目成员对称的项目组用户成员)
+export {
+  listGroupUserMembers,
+  addGroupUserMember,
+  updateGroupUserMember,
+  removeGroupUserMember,
+} from "./api/project-group-members";
+export type {
+  GroupUserMember,
+  ListGroupUserMembersResponse,
+  AddGroupUserMemberInput,
+  UpdateGroupUserMemberInput,
+} from "./api/project-group-members";
+export {
+  useGroupUserMembers,
+  useAddGroupUserMember,
+  useUpdateGroupUserMember,
+  useRemoveGroupUserMember,
+} from "./hooks/use-project-group-members";
+
+// Knowledge graph (repo knowledge base, scope = project | group)
+export {
+  listKnowledgeFiles,
+  getKnowledgeFile,
+  saveKnowledgeFile,
+  deleteKnowledgeFile,
+  triggerKnowledgeGenerate,
+  getKnowledgeStatus,
+  getKnowledgeExportUrl,
+  downloadKnowledgeExport,
+} from "./api/knowledge";
+export type {
+  KnowledgeScope,
+  KnowledgeGraphType,
+  KnowledgeJobStatus,
+  KnowledgeFileEntry,
+  KnowledgeMeta,
+  KnowledgeRepoFiles,
+  KnowledgeFilesResponse,
+  KnowledgeFileDetail,
+  KnowledgeJob,
+  KnowledgeJobRepo,
+  KnowledgeJobLog,
+} from "./api/knowledge";
+export {
+  useKnowledgeFiles,
+  useKnowledgeFile,
+  useSaveKnowledgeFile,
+  useDeleteKnowledgeFile,
+  useTriggerKnowledgeGenerate,
+  useKnowledgeStatus,
+} from "./hooks/use-knowledge";
+
+// Git audit
+export {
+  getGitCommits,
+  getGitChanges,
+  getGitBranches,
+  getCommitDiff,
+  getGitUncommitted,
+  gitCommit,
+  gitDiscard,
+  gitIgnore,
+} from "./api/git-audit";
+export type {
+  GitCommit,
+  GitCommitFile,
+  GitUncommittedFile,
+  GitChangeGroup,
+  GitCommitsParams,
+  GitChangesParams,
+} from "./api/git-audit";
+export {
+  useGitCommits,
+  useGitChanges,
+  useGitBranches,
+  useCommitDiff,
+  useGitUncommitted,
+  useGitCommitMutation,
+  useGitDiscardMutation,
+  useGitIgnoreMutation,
+} from "./hooks/use-git-audit";
+
+// Files (code editor)
+export {
+  listDirectory,
+  getFileContent,
+  saveFileContent,
+  getFileDiff,
+  getConflictDetail,
+  resolveFileConflict,
+  aiResolveConflict,
+} from "./api/files";
+export type {
+  FileTreeNode,
+  FileTreeResponse,
+  SaveFileResponse,
+  ConflictDetail,
+  ResolveConflictResponse,
+  AIResolveConflictParams,
+  AIResolveConflictResponse,
+} from "./api/files";
+export {
+  useFileTree,
+  useFileContent,
+  useSaveFile,
+  useFileDiff,
+  useConflictDetail,
+  useResolveConflict,
+  useAIResolveConflict,
+} from "./hooks/use-files";

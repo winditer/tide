@@ -1,7 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { Tabs, TabsList, TabsTrigger } from "@tide/ui";
+import {
+  Tabs,
+  TabsList,
+  TabsTrigger,
+} from "@tide/ui";
 import { ProjectBoard, SessionBoard, AgentBoard } from "@tide/views";
 
 type TabKey = "projects" | "sessions" | "agents";
@@ -17,11 +21,13 @@ export default function KanbanPage() {
 
   return (
     <div className="space-y-8">
-      <header className="space-y-1">
-        <h1 className="text-2xl font-semibold tracking-tight">看板</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          按项目、会话与 Agent 维度可视化地查看任务流转。
-        </p>
+      <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div className="space-y-1">
+          <h1 className="text-2xl font-semibold tracking-tight">看板</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            按项目、会话与 Agent 维度可视化地查看任务流转。
+          </p>
+        </div>
       </header>
 
       {/* Tab bar */}

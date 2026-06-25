@@ -1,0 +1,4842 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-06-24T02:53:15Z",
+  "routers": [
+    {
+      "id": "admin",
+      "prefix": "/api/admin",
+      "tags": [
+        "admin"
+      ],
+      "file": "backend/api/admin.py",
+      "service": "backend.services.auth_service",
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/users",
+          "function": "list_users",
+          "is_async": true,
+          "params": [
+            {
+              "name": "q",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "page",
+              "type": "int",
+              "default": "Query(None)"
+            },
+            {
+              "name": "page_size",
+              "type": "int",
+              "default": "Query(None)"
+            },
+            {
+              "name": "current_user",
+              "type": "dict",
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "列出所有用户，支持搜索 + 分页。"
+        },
+        {
+          "method": "POST",
+          "path": "/users",
+          "function": "create_user",
+          "is_async": true,
+          "params": [
+            {
+              "name": "body",
+              "type": "UserCreateRequest",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": "dict",
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "创建新用户。"
+        },
+        {
+          "method": "GET",
+          "path": "/users/{user_id}",
+          "function": "get_user",
+          "is_async": true,
+          "params": [
+            {
+              "name": "user_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": "dict",
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "获取单个用户详情。"
+        },
+        {
+          "method": "PUT",
+          "path": "/users/{user_id}",
+          "function": "update_user",
+          "is_async": true,
+          "params": [
+            {
+              "name": "user_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "UserUpdateRequest",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": "dict",
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "更新用户信息（不允许修改自己的 role/status，避免锁死）。"
+        },
+        {
+          "method": "DELETE",
+          "path": "/users/{user_id}",
+          "function": "delete_user",
+          "is_async": true,
+          "params": [
+            {
+              "name": "user_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": "dict",
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "删除用户（级联清理 user_sessions / project_members）。"
+        },
+        {
+          "method": "POST",
+          "path": "/users/{user_id}/reset-password",
+          "function": "reset_password",
+          "is_async": true,
+          "params": [
+            {
+              "name": "user_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "ResetPasswordRequest",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": "dict",
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "重置用户密码并吊销该用户全部活跃会话。"
+        },
+        {
+          "method": "GET",
+          "path": "/users/{user_id}/projects",
+          "function": "list_user_projects",
+          "is_async": true,
+          "params": [
+            {
+              "name": "user_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": "dict",
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "查看用户可访问的项目列表（admin 用户返回 ['*']）。"
+        }
+      ]
+    },
+    {
+      "id": "agents",
+      "prefix": "/api/agents",
+      "tags": [
+        "agents"
+      ],
+      "file": "backend/api/agents.py",
+      "service": null,
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "",
+          "function": "list_agents",
+          "is_async": true,
+          "params": [
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "返回可用 Agent 列表 + 运行时状态（含远程 A2A Agent）"
+        }
+      ]
+    },
+    {
+      "id": "approvals",
+      "prefix": "/api/approvals",
+      "tags": [
+        "approvals"
+      ],
+      "file": "backend/api/approvals.py",
+      "service": "backend.services.approval_service",
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "",
+          "function": "list_approvals",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workspace_id",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "status",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "limit",
+              "type": "int",
+              "default": "Query(50)"
+            },
+            {
+              "name": "offset",
+              "type": "int",
+              "default": "Query(0)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "列表查询审批记录"
+        },
+        {
+          "method": "GET",
+          "path": "/{approval_id}",
+          "function": "get_approval",
+          "is_async": true,
+          "params": [
+            {
+              "name": "approval_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "获取单条审批详情"
+        },
+        {
+          "method": "POST",
+          "path": "/{approval_id}/approve",
+          "function": "approve",
+          "is_async": true,
+          "params": [
+            {
+              "name": "approval_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "Optional[ApprovalActionBody]",
+              "default": "None"
+            },
+            {
+              "name": "operator_id",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "审批通过。可选 body: { operator_id, comment }"
+        },
+        {
+          "method": "POST",
+          "path": "/{approval_id}/reject",
+          "function": "reject",
+          "is_async": true,
+          "params": [
+            {
+              "name": "approval_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "Optional[ApprovalActionBody]",
+              "default": "None"
+            },
+            {
+              "name": "operator_id",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "审批拒绝。可选 body: { operator_id, comment }（拒绝时建议必填）"
+        }
+      ]
+    },
+    {
+      "id": "auth",
+      "prefix": "/api/auth",
+      "tags": [
+        "auth"
+      ],
+      "file": "backend/api/auth.py",
+      "service": "backend.services.auth_service",
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/login",
+          "function": "login",
+          "is_async": true,
+          "params": [
+            {
+              "name": "body",
+              "type": "LoginRequest",
+              "default": null
+            },
+            {
+              "name": "request",
+              "type": "Request",
+              "default": null
+            }
+          ],
+          "response_model": "LoginResponse",
+          "description": "用户名/密码登录。"
+        },
+        {
+          "method": "GET",
+          "path": "/lark/authorize",
+          "function": "lark_authorize",
+          "is_async": true,
+          "params": [
+            {
+              "name": "request",
+              "type": "Request",
+              "default": null
+            }
+          ],
+          "response_model": null,
+          "description": "构造 Lark OAuth 授权 URL 并 302 跳转。"
+        },
+        {
+          "method": "GET",
+          "path": "/lark/callback",
+          "function": "lark_callback",
+          "is_async": true,
+          "params": [
+            {
+              "name": "request",
+              "type": "Request",
+              "default": null
+            },
+            {
+              "name": "code",
+              "type": "Optional[str]",
+              "default": "None"
+            },
+            {
+              "name": "state",
+              "type": "Optional[str]",
+              "default": "None"
+            },
+            {
+              "name": "error",
+              "type": "Optional[str]",
+              "default": "None"
+            }
+          ],
+          "response_model": null,
+          "description": "Lark OAuth 回调：换取 user_info → 创建/更新用户 → 创建会话 → 重定向前端。"
+        },
+        {
+          "method": "POST",
+          "path": "/refresh",
+          "function": "refresh",
+          "is_async": true,
+          "params": [
+            {
+              "name": "body",
+              "type": "RefreshRequest",
+              "default": null
+            }
+          ],
+          "response_model": "TokenPair",
+          "description": "用 refresh_token 旋转出新的 access/refresh token。"
+        },
+        {
+          "method": "POST",
+          "path": "/logout",
+          "function": "logout",
+          "is_async": true,
+          "params": [
+            {
+              "name": "current_user",
+              "type": "dict",
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "登出：吊销当前用户的所有活跃会话。"
+        },
+        {
+          "method": "GET",
+          "path": "/me",
+          "function": "me",
+          "is_async": true,
+          "params": [
+            {
+              "name": "current_user",
+              "type": "dict",
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "UserPublic",
+          "description": "返回当前登录用户的公开信息。"
+        },
+        {
+          "method": "POST",
+          "path": "/change-password",
+          "function": "change_password",
+          "is_async": true,
+          "params": [
+            {
+              "name": "body",
+              "type": "ChangePasswordRequest",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": "dict",
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "修改当前用户密码。验证旧密码 → 写入新哈希 → 吊销其他会话。"
+        }
+      ]
+    },
+    {
+      "id": "conversations",
+      "prefix": "/conversations",
+      "tags": [
+        "conversations"
+      ],
+      "file": "backend/api/conversations.py",
+      "service": "backend.services.conversation_service",
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "",
+          "function": "list_conversations",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "Query(None)"
+            },
+            {
+              "name": "status",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "会话列表"
+        },
+        {
+          "method": "GET",
+          "path": "/{conversation_id}",
+          "function": "get_conversation",
+          "is_async": true,
+          "params": [
+            {
+              "name": "conversation_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "会话详情"
+        },
+        {
+          "method": "POST",
+          "path": "/{conversation_id}/close",
+          "function": "close_conversation",
+          "is_async": true,
+          "params": [
+            {
+              "name": "conversation_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "关闭会话"
+        },
+        {
+          "method": "PUT",
+          "path": "/{conversation_id}",
+          "function": "update_conversation",
+          "is_async": true,
+          "params": [
+            {
+              "name": "conversation_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "ConversationUpdate",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "更新设置（agent/model/cwd）"
+        }
+      ]
+    },
+    {
+      "id": "dashboard",
+      "prefix": "/api/dashboard",
+      "tags": [
+        "dashboard"
+      ],
+      "file": "backend/api/dashboard.py",
+      "service": "backend.services.project_group_service",
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/stats",
+          "function": "get_stats",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "default"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "统计数据：运行中 / 排队中 / 待审批 / 今日完成。"
+        },
+        {
+          "method": "GET",
+          "path": "/recent-tasks",
+          "function": "get_recent_tasks",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "default"
+            },
+            {
+              "name": "limit",
+              "type": "int",
+              "default": "Query(10)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "最近任务列表：合并 DB tasks 与本地 Agent 会话发现结果。"
+        },
+        {
+          "method": "GET",
+          "path": "/active-projects",
+          "function": "get_active_projects",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "default"
+            },
+            {
+              "name": "limit",
+              "type": "int",
+              "default": "Query(5)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "最近活跃项目列表。"
+        },
+        {
+          "method": "GET",
+          "path": "/activity-timeline",
+          "function": "get_activity_timeline",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "default"
+            },
+            {
+              "name": "limit",
+              "type": "int",
+              "default": "Query(15)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "最近系统活动事件时间线（按 task_events.created_at DESC）。"
+        },
+        {
+          "method": "GET",
+          "path": "/task-status-distribution",
+          "function": "get_task_status_distribution",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "default"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "任务状态分布。"
+        },
+        {
+          "method": "GET",
+          "path": "/upcoming-schedules",
+          "function": "get_upcoming_schedules",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "default"
+            },
+            {
+              "name": "limit",
+              "type": "int",
+              "default": "Query(5)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "即将执行的定时调度。"
+        },
+        {
+          "method": "GET",
+          "path": "/work-items",
+          "function": "get_my_work_items",
+          "is_async": true,
+          "params": [
+            {
+              "name": "limit",
+              "type": "int",
+              "default": "Query(10)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "获取当前用户的待办工作项（默认前 10 条）。"
+        },
+        {
+          "method": "GET",
+          "path": "/project-progress",
+          "function": "get_project_progress",
+          "is_async": true,
+          "params": [
+            {
+              "name": "limit",
+              "type": "int",
+              "default": "Query(8)"
+            },
+            {
+              "name": "group_id",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "获取各项目工作项进度（仅返回总数 > 0 的项目）。"
+        },
+        {
+          "method": "GET",
+          "path": "/group-progress",
+          "function": "get_group_progress",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "default"
+            },
+            {
+              "name": "limit",
+              "type": "int",
+              "default": "Query(8)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "项目组进度汇总：返回当前用户可访问的项目组，含组内工作项总数与已完成数。"
+        },
+        {
+          "method": "GET",
+          "path": "/cost-summary",
+          "function": "get_cost_summary",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "default"
+            },
+            {
+              "name": "period",
+              "type": "str",
+              "default": "Query('today')"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "返回当前 workspace 在指定 period 内的 token 成本汇总。"
+        },
+        {
+          "method": "GET",
+          "path": "/cost-by-dimension",
+          "function": "get_cost_by_dimension",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "default"
+            },
+            {
+              "name": "dimension",
+              "type": "str",
+              "default": "Query('agent')"
+            },
+            {
+              "name": "period",
+              "type": "str",
+              "default": "Query('today')"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "按维度（agent / model / project）聚合 token 成本。"
+        }
+      ]
+    },
+    {
+      "id": "events",
+      "prefix": "/api/events",
+      "tags": [
+        "events"
+      ],
+      "file": "backend/api/events.py",
+      "service": null,
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "",
+          "function": "get_events",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "Query('default')"
+            },
+            {
+              "name": "after",
+              "type": "str",
+              "default": "Query(None)"
+            },
+            {
+              "name": "limit",
+              "type": "int",
+              "default": "Query(50)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "获取事件列表（用于重连后补偿）"
+        }
+      ]
+    },
+    {
+      "id": "hooks",
+      "prefix": "/api/hooks",
+      "tags": [
+        "hooks"
+      ],
+      "file": "backend/api/hooks.py",
+      "service": "backend.services.hook_engine",
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "",
+          "function": "list_hooks",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "Query('default')"
+            },
+            {
+              "name": "event",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "enabled",
+              "type": "Optional[int]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "limit",
+              "type": "int",
+              "default": "Query(200)"
+            },
+            {
+              "name": "offset",
+              "type": "int",
+              "default": "Query(0)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "list[HookResponse]",
+          "description": ""
+        },
+        {
+          "method": "GET",
+          "path": "/{hook_id}",
+          "function": "get_hook",
+          "is_async": true,
+          "params": [
+            {
+              "name": "hook_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "Query('default')"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "HookResponse",
+          "description": ""
+        },
+        {
+          "method": "POST",
+          "path": "",
+          "function": "create_hook",
+          "is_async": true,
+          "params": [
+            {
+              "name": "body",
+              "type": "HookCreate",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "HookResponse",
+          "description": ""
+        },
+        {
+          "method": "PUT",
+          "path": "/{hook_id}",
+          "function": "update_hook",
+          "is_async": true,
+          "params": [
+            {
+              "name": "hook_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "HookUpdate",
+              "default": null
+            },
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "Query('default')"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "HookResponse",
+          "description": ""
+        },
+        {
+          "method": "DELETE",
+          "path": "/{hook_id}",
+          "function": "delete_hook",
+          "is_async": true,
+          "params": [
+            {
+              "name": "hook_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "Query('default')"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": ""
+        }
+      ]
+    },
+    {
+      "id": "kanban",
+      "prefix": "/api/kanban",
+      "tags": [
+        "kanban"
+      ],
+      "file": "backend/api/kanban.py",
+      "service": "backend.services.kanban_service",
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/projects",
+          "function": "get_project_board",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "default"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "项目看板：按项目状态分列。"
+        },
+        {
+          "method": "GET",
+          "path": "/sessions",
+          "function": "get_session_board",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "default"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "会话看板：按 Agent 分组，按任务状态分列。"
+        },
+        {
+          "method": "GET",
+          "path": "/agents",
+          "function": "get_agent_board",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "default"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "Agent 看板（泳道式）。"
+        },
+        {
+          "method": "GET",
+          "path": "/workflows",
+          "function": "get_workflow_board",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "default"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "工作流任务看板。"
+        },
+        {
+          "method": "POST",
+          "path": "/move",
+          "function": "move_card",
+          "is_async": true,
+          "params": [
+            {
+              "name": "card_type",
+              "type": "str",
+              "default": "Body(Ellipsis)"
+            },
+            {
+              "name": "card_id",
+              "type": "str",
+              "default": "Body(Ellipsis)"
+            },
+            {
+              "name": "new_status",
+              "type": "str",
+              "default": "Body(Ellipsis)"
+            },
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "Body('default')"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "拖拽更新状态。"
+        },
+        {
+          "method": "GET",
+          "path": "/work-items",
+          "function": "get_work_item_board",
+          "is_async": true,
+          "params": [
+            {
+              "name": "project_id",
+              "type": "str",
+              "default": "Query(Ellipsis)"
+            },
+            {
+              "name": "version_id",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "WorkItemKanbanResponse",
+          "description": "工作项看板：按 workflow 可见节点划列。"
+        },
+        {
+          "method": "POST",
+          "path": "/work-items/{item_id}/move",
+          "function": "move_work_item",
+          "is_async": true,
+          "params": [
+            {
+              "name": "item_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "WorkItemTransitionRequest",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "WorkItemTransitionResponse",
+          "description": "看板拖拽流转工作项。"
+        }
+      ]
+    },
+    {
+      "id": "knowledge",
+      "prefix": "/api/knowledge",
+      "tags": [
+        "knowledge"
+      ],
+      "file": "backend/api/knowledge.py",
+      "service": "backend.services.knowledge_service",
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/{scope}/{target_id}/files",
+          "function": "list_files",
+          "is_async": true,
+          "params": [
+            {
+              "name": "scope",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "target_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "project_id",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "列出仓库 ``.knowledge/`` 下的文件树。"
+        },
+        {
+          "method": "GET",
+          "path": "/{scope}/{target_id}/file",
+          "function": "read_file",
+          "is_async": true,
+          "params": [
+            {
+              "name": "scope",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "target_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "path",
+              "type": "str",
+              "default": "Query(Ellipsis)"
+            },
+            {
+              "name": "project_id",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": ""
+        },
+        {
+          "method": "PUT",
+          "path": "/{scope}/{target_id}/file",
+          "function": "write_file",
+          "is_async": true,
+          "params": [
+            {
+              "name": "scope",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "target_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "WriteFilePayload",
+              "default": null
+            },
+            {
+              "name": "path",
+              "type": "str",
+              "default": "Query(Ellipsis)"
+            },
+            {
+              "name": "project_id",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": ""
+        },
+        {
+          "method": "DELETE",
+          "path": "/{scope}/{target_id}/file",
+          "function": "delete_file",
+          "is_async": true,
+          "params": [
+            {
+              "name": "scope",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "target_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "path",
+              "type": "str",
+              "default": "Query(Ellipsis)"
+            },
+            {
+              "name": "project_id",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": ""
+        },
+        {
+          "method": "POST",
+          "path": "/{scope}/{target_id}/generate",
+          "function": "trigger_generate",
+          "is_async": true,
+          "params": [
+            {
+              "name": "scope",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "target_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "Optional[GenerateRequest]",
+              "default": "Body(None)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "触发异步生成任务。"
+        },
+        {
+          "method": "GET",
+          "path": "/{scope}/{target_id}/status",
+          "function": "get_status",
+          "is_async": true,
+          "params": [
+            {
+              "name": "scope",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "target_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": ""
+        },
+        {
+          "method": "GET",
+          "path": "/{scope}/{target_id}/export",
+          "function": "export_knowledge",
+          "is_async": true,
+          "params": [
+            {
+              "name": "scope",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "target_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "project_id",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "导出 .knowledge/ 目录为 zip 压缩包下载。"
+        }
+      ]
+    },
+    {
+      "id": "lark_bridge",
+      "prefix": "/api/lark",
+      "tags": [
+        "lark"
+      ],
+      "file": "backend/api/lark_bridge.py",
+      "service": "backend.services.lark_bridge",
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/notify",
+          "function": "lark_notify",
+          "is_async": true,
+          "params": [
+            {
+              "name": "payload",
+              "type": "LarkNotifyPayload",
+              "default": null
+            }
+          ],
+          "response_model": null,
+          "description": "tide_ws.py 在任务创建/状态变更后调用此接口。"
+        },
+        {
+          "method": "GET",
+          "path": "/status",
+          "function": "lark_status",
+          "is_async": true,
+          "params": [],
+          "response_model": "LarkBridgeStatus",
+          "description": "查询 Lark Bridge 连接状态。"
+        }
+      ]
+    },
+    {
+      "id": "lark_callback",
+      "prefix": "/api/lark",
+      "tags": [
+        "lark"
+      ],
+      "file": "backend/api/lark_callback.py",
+      "service": "backend.services.card_action_handler",
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/card-action",
+          "function": "lark_card_action",
+          "is_async": true,
+          "params": [
+            {
+              "name": "request",
+              "type": "Request",
+              "default": null
+            }
+          ],
+          "response_model": null,
+          "description": "Lark 卡片按钮回调 webhook。"
+        }
+      ]
+    },
+    {
+      "id": "plans",
+      "prefix": "/api/plans",
+      "tags": [
+        "plans"
+      ],
+      "file": "backend/api/plans.py",
+      "service": "backend.services.plan_service",
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "",
+          "function": "create_plan",
+          "is_async": true,
+          "params": [
+            {
+              "name": "body",
+              "type": "PlanCreate",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "PlanResponse",
+          "description": "创建 Plan"
+        },
+        {
+          "method": "GET",
+          "path": "",
+          "function": "list_plans",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "Query('default')"
+            },
+            {
+              "name": "status",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "project",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "session_id",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "group_id",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "limit",
+              "type": "int",
+              "default": "Query(50)"
+            },
+            {
+              "name": "offset",
+              "type": "int",
+              "default": "Query(0)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "list[PlanResponse]",
+          "description": "Plan 列表"
+        },
+        {
+          "method": "GET",
+          "path": "/{plan_id}",
+          "function": "get_plan",
+          "is_async": true,
+          "params": [
+            {
+              "name": "plan_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "PlanResponse",
+          "description": "Plan 详情"
+        },
+        {
+          "method": "POST",
+          "path": "/{plan_id}/stop",
+          "function": "stop_plan",
+          "is_async": true,
+          "params": [
+            {
+              "name": "plan_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "PlanResponse",
+          "description": "停止 Plan"
+        },
+        {
+          "method": "GET",
+          "path": "/{plan_id}/tasks",
+          "function": "get_plan_tasks",
+          "is_async": true,
+          "params": [
+            {
+              "name": "plan_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "list[PlanTaskResponse]",
+          "description": "Plan 子任务列表"
+        },
+        {
+          "method": "POST",
+          "path": "/{plan_id}/tasks/{task_id}/retry",
+          "function": "retry_plan_task",
+          "is_async": true,
+          "params": [
+            {
+              "name": "plan_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "task_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "重试子任务"
+        },
+        {
+          "method": "POST",
+          "path": "/{plan_id}/tasks/{task_id}/approve",
+          "function": "approve_plan_task",
+          "is_async": true,
+          "params": [
+            {
+              "name": "plan_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "task_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "审批子任务：使用 approved 模式重启。"
+        },
+        {
+          "method": "POST",
+          "path": "/{plan_id}/tasks/{task_id}/commit",
+          "function": "commit_plan_task",
+          "is_async": true,
+          "params": [
+            {
+              "name": "plan_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "task_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "CommitRequest",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "提交 / 跳过子任务的改动。"
+        },
+        {
+          "method": "POST",
+          "path": "/{plan_id}/tasks/{task_id}/merge",
+          "function": "merge_plan_task",
+          "is_async": true,
+          "params": [
+            {
+              "name": "plan_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "task_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "cherry-pick 合并单个已提交的子任务。"
+        },
+        {
+          "method": "POST",
+          "path": "/{plan_id}/merge-all",
+          "function": "merge_all_plan_tasks",
+          "is_async": true,
+          "params": [
+            {
+              "name": "plan_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "按依赖顺序合并所有 committed 子任务。"
+        },
+        {
+          "method": "GET",
+          "path": "/{plan_id}/dag",
+          "function": "get_plan_dag",
+          "is_async": true,
+          "params": [
+            {
+              "name": "plan_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "PlanDAGResponse",
+          "description": "Plan DAG 结构（React Flow 格式）"
+        },
+        {
+          "method": "GET",
+          "path": "/{plan_id}/timeline",
+          "function": "get_plan_timeline",
+          "is_async": true,
+          "params": [
+            {
+              "name": "plan_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "list[PlanTimelineItem]",
+          "description": "Plan Gantt 时间线数据"
+        }
+      ]
+    },
+    {
+      "id": "project_groups",
+      "prefix": "/api/project-groups",
+      "tags": [
+        "project-groups"
+      ],
+      "file": "backend/api/project_groups.py",
+      "service": "backend.services.project_group_service",
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "",
+          "function": "list_project_groups",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "Query(None)"
+            },
+            {
+              "name": "current_user",
+              "type": "Optional[dict]",
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "列出当前 workspace 的项目组（受用户成员过滤）。"
+        },
+        {
+          "method": "POST",
+          "path": "",
+          "function": "create_project_group",
+          "is_async": true,
+          "params": [
+            {
+              "name": "body",
+              "type": "ProjectGroupCreate",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": "Optional[dict]",
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "创建项目组。创建后自动将当前用户加为 owner。"
+        },
+        {
+          "method": "GET",
+          "path": "/{group_id}",
+          "function": "get_project_group",
+          "is_async": true,
+          "params": [
+            {
+              "name": "group_id",
+              "type": "str",
+              "default": null
+            }
+          ],
+          "response_model": null,
+          "description": "获取项目组详情（含成员列表）。"
+        },
+        {
+          "method": "PUT",
+          "path": "/{group_id}",
+          "function": "update_project_group",
+          "is_async": true,
+          "params": [
+            {
+              "name": "group_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "ProjectGroupUpdate",
+              "default": null
+            }
+          ],
+          "response_model": null,
+          "description": "更新项目组。"
+        },
+        {
+          "method": "DELETE",
+          "path": "/{group_id}",
+          "function": "delete_project_group",
+          "is_async": true,
+          "params": [
+            {
+              "name": "group_id",
+              "type": "str",
+              "default": null
+            }
+          ],
+          "response_model": null,
+          "description": "删除项目组。"
+        },
+        {
+          "method": "POST",
+          "path": "/{group_id}/members",
+          "function": "add_group_member",
+          "is_async": true,
+          "params": [
+            {
+              "name": "group_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "ProjectGroupMemberAdd",
+              "default": null
+            }
+          ],
+          "response_model": null,
+          "description": "添加成员项目到项目组。"
+        },
+        {
+          "method": "DELETE",
+          "path": "/{group_id}/members/{project_id}",
+          "function": "remove_group_member",
+          "is_async": true,
+          "params": [
+            {
+              "name": "group_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "project_id",
+              "type": "str",
+              "default": null
+            }
+          ],
+          "response_model": null,
+          "description": "从项目组移除成员项目。"
+        },
+        {
+          "method": "GET",
+          "path": "/{group_id}/conversations",
+          "function": "list_group_conversations",
+          "is_async": true,
+          "params": [
+            {
+              "name": "group_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "limit",
+              "type": "int",
+              "default": "Query(50)"
+            },
+            {
+              "name": "offset",
+              "type": "int",
+              "default": "Query(0)"
+            }
+          ],
+          "response_model": null,
+          "description": "聚合项目组内所有项目的会话（按 tasks.session_id 聚合）。"
+        },
+        {
+          "method": "GET",
+          "path": "/{group_id}/tasks",
+          "function": "list_group_tasks",
+          "is_async": true,
+          "params": [
+            {
+              "name": "group_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "status",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "limit",
+              "type": "int",
+              "default": "Query(50)"
+            },
+            {
+              "name": "offset",
+              "type": "int",
+              "default": "Query(0)"
+            }
+          ],
+          "response_model": null,
+          "description": "聚合项目组内所有项目的任务。"
+        },
+        {
+          "method": "GET",
+          "path": "/{group_id}/versions",
+          "function": "list_group_versions",
+          "is_async": true,
+          "params": [
+            {
+              "name": "group_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "limit",
+              "type": "int",
+              "default": "Query(100)"
+            },
+            {
+              "name": "offset",
+              "type": "int",
+              "default": "Query(0)"
+            }
+          ],
+          "response_model": null,
+          "description": "聚合项目组内所有项目的版本（按 created_at 倒序）。"
+        },
+        {
+          "method": "GET",
+          "path": "/{group_id}/workflow",
+          "function": "get_group_workflow",
+          "is_async": true,
+          "params": [
+            {
+              "name": "group_id",
+              "type": "str",
+              "default": null
+            }
+          ],
+          "response_model": null,
+          "description": "查询项目组绑定的工作流。返回绑定信息及工作流名称（若存在）。"
+        },
+        {
+          "method": "PUT",
+          "path": "/{group_id}/workflow",
+          "function": "set_group_workflow",
+          "is_async": true,
+          "params": [
+            {
+              "name": "group_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "dict",
+              "default": null
+            }
+          ],
+          "response_model": null,
+          "description": "设置项目组绑定的工作流。body: ``{\"workflow_id\": \"xxx\"}``。"
+        },
+        {
+          "method": "DELETE",
+          "path": "/{group_id}/workflow",
+          "function": "unset_group_workflow",
+          "is_async": true,
+          "params": [
+            {
+              "name": "group_id",
+              "type": "str",
+              "default": null
+            }
+          ],
+          "response_model": null,
+          "description": "解除项目组的工作流绑定。"
+        },
+        {
+          "method": "GET",
+          "path": "/{group_id}/users",
+          "function": "list_group_user_members",
+          "is_async": true,
+          "params": [
+            {
+              "name": "group_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": "Optional[dict]",
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "列出项目组用户成员（JOIN users 返回用户信息）。"
+        },
+        {
+          "method": "POST",
+          "path": "/{group_id}/users",
+          "function": "add_group_user_member",
+          "is_async": true,
+          "params": [
+            {
+              "name": "group_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "dict",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": "Optional[dict]",
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "添加用户成员。body: ``{user_id: str, role?: str}``。"
+        },
+        {
+          "method": "PUT",
+          "path": "/{group_id}/users/{user_id}",
+          "function": "update_group_user_member",
+          "is_async": true,
+          "params": [
+            {
+              "name": "group_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "user_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "dict",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": "Optional[dict]",
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "修改用户成员角色。body: ``{role: str}``。"
+        },
+        {
+          "method": "DELETE",
+          "path": "/{group_id}/users/{user_id}",
+          "function": "remove_group_user_member",
+          "is_async": true,
+          "params": [
+            {
+              "name": "group_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "user_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": "Optional[dict]",
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "从项目组中移除用户成员。"
+        }
+      ]
+    },
+    {
+      "id": "project_members",
+      "prefix": "/api/projects/{project_id}/members",
+      "tags": [
+        "project-members"
+      ],
+      "file": "backend/api/project_members.py",
+      "service": null,
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "",
+          "function": "list_members",
+          "is_async": true,
+          "params": [
+            {
+              "name": "project_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": "Optional[dict]",
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "列出项目成员（含用户信息 + 项目角色）。"
+        },
+        {
+          "method": "POST",
+          "path": "",
+          "function": "add_member",
+          "is_async": true,
+          "params": [
+            {
+              "name": "project_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "AddMemberRequest",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": "dict",
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "添加项目成员。"
+        },
+        {
+          "method": "PUT",
+          "path": "/{user_id}",
+          "function": "update_member_role",
+          "is_async": true,
+          "params": [
+            {
+              "name": "project_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "user_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "UpdateMemberRequest",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": "dict",
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "修改项目成员角色。"
+        },
+        {
+          "method": "DELETE",
+          "path": "/{user_id}",
+          "function": "remove_member",
+          "is_async": true,
+          "params": [
+            {
+              "name": "project_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "user_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": "dict",
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "从项目中移除成员。"
+        }
+      ]
+    },
+    {
+      "id": "projects",
+      "prefix": "/api/projects",
+      "tags": [
+        "projects"
+      ],
+      "file": "backend/api/projects.py",
+      "service": "backend.services",
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "",
+          "function": "list_projects",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "default"
+            },
+            {
+              "name": "show_archived",
+              "type": "Optional[bool]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "项目列表 — 文件发现 + DB 聚合 + 已注册项目合并。"
+        },
+        {
+          "method": "GET",
+          "path": "/roots",
+          "function": "get_project_roots",
+          "is_async": true,
+          "params": [
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "返回可选项目根目录。"
+        },
+        {
+          "method": "POST",
+          "path": "",
+          "function": "create_project",
+          "is_async": true,
+          "params": [
+            {
+              "name": "body",
+              "type": "ProjectCreate",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "创建项目（用户目录隔离 + 可选异步 clone）。"
+        },
+        {
+          "method": "GET",
+          "path": "/{project_id}",
+          "function": "get_project",
+          "is_async": true,
+          "params": [
+            {
+              "name": "project_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "default"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "项目详情。"
+        },
+        {
+          "method": "GET",
+          "path": "/{project_id}/sessions",
+          "function": "get_project_sessions",
+          "is_async": true,
+          "params": [
+            {
+              "name": "project_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "agent_id",
+              "type": "Optional[str]",
+              "default": "None"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "项目下的会话列表（按项目根/cwd 过滤文件扫描结果）。"
+        },
+        {
+          "method": "GET",
+          "path": "/{project_id}/chats",
+          "function": "get_project_chats",
+          "is_async": true,
+          "params": [
+            {
+              "name": "project_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "agent_id",
+              "type": "Optional[str]",
+              "default": "None"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "项目相关的普通对话（chats）— 不绑定项目但内容引用该项目的 chat。"
+        },
+        {
+          "method": "GET",
+          "path": "/{project_id}/tasks",
+          "function": "get_project_tasks",
+          "is_async": true,
+          "params": [
+            {
+              "name": "project_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "default"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "项目下的任务（DB tasks 表 + source=exec 的文件会话）。"
+        },
+        {
+          "method": "DELETE",
+          "path": "/{project_id}",
+          "function": "remove_project",
+          "is_async": true,
+          "params": [
+            {
+              "name": "project_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "从已注册列表中移除项目（不删除文件、不影响历史会话/任务）。"
+        },
+        {
+          "method": "POST",
+          "path": "/{project_id}/archive",
+          "function": "archive_project",
+          "is_async": true,
+          "params": [
+            {
+              "name": "project_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "归档项目（软操作，不删除任何文件/数据）。"
+        },
+        {
+          "method": "POST",
+          "path": "/{project_id}/unarchive",
+          "function": "unarchive_project",
+          "is_async": true,
+          "params": [
+            {
+              "name": "project_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "取消项目归档。"
+        },
+        {
+          "method": "PUT",
+          "path": "/{project_id}/workflow",
+          "function": "set_project_workflow",
+          "is_async": true,
+          "params": [
+            {
+              "name": "project_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "ProjectSettingsUpdate",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "ProjectSettingsResponse",
+          "description": "绑定项目到工作流。"
+        },
+        {
+          "method": "GET",
+          "path": "/{project_id}/workflow",
+          "function": "get_project_workflow",
+          "is_async": true,
+          "params": [
+            {
+              "name": "project_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "ProjectSettingsResponse",
+          "description": "获取项目的工作流绑定信息。"
+        },
+        {
+          "method": "DELETE",
+          "path": "/{project_id}/workflow",
+          "function": "remove_project_workflow",
+          "is_async": true,
+          "params": [
+            {
+              "name": "project_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "解绑项目工作流。"
+        },
+        {
+          "method": "PUT",
+          "path": "/{project_id}/git-config",
+          "function": "set_project_git_config",
+          "is_async": true,
+          "params": [
+            {
+              "name": "project_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "GitConfigUpdate",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "设置项目的 Git 仓库配置。写入 ``project_settings.metadata.git_config``。"
+        },
+        {
+          "method": "GET",
+          "path": "/{project_id}/git-config",
+          "function": "get_project_git_config",
+          "is_async": true,
+          "params": [
+            {
+              "name": "project_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "获取项目的 Git 仓库配置。未配置时返回空对象。"
+        }
+      ]
+    },
+    {
+      "id": "remote_agents",
+      "prefix": "/api/remote-agents",
+      "tags": [
+        "remote-agents"
+      ],
+      "file": "backend/api/remote_agents.py",
+      "service": null,
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/discover",
+          "function": "discover_agent_card",
+          "is_async": true,
+          "params": [
+            {
+              "name": "body",
+              "type": "DiscoverRequest",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "通过 Agent Card URL 发现远程 Agent 元信息。"
+        },
+        {
+          "method": "POST",
+          "path": "",
+          "function": "create_remote_agent",
+          "is_async": true,
+          "params": [
+            {
+              "name": "body",
+              "type": "RemoteAgentCreate",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "注册一个远程 Agent。"
+        },
+        {
+          "method": "GET",
+          "path": "",
+          "function": "list_remote_agents",
+          "is_async": true,
+          "params": [
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "列出所有已注册的远程 Agent。"
+        },
+        {
+          "method": "GET",
+          "path": "/{agent_id}",
+          "function": "get_remote_agent",
+          "is_async": true,
+          "params": [
+            {
+              "name": "agent_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "获取远程 Agent 详情。"
+        },
+        {
+          "method": "PUT",
+          "path": "/{agent_id}",
+          "function": "update_remote_agent",
+          "is_async": true,
+          "params": [
+            {
+              "name": "agent_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "RemoteAgentUpdate",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "更新远程 Agent 配置。"
+        },
+        {
+          "method": "DELETE",
+          "path": "/{agent_id}",
+          "function": "delete_remote_agent",
+          "is_async": true,
+          "params": [
+            {
+              "name": "agent_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "删除远程 Agent（同时移除 actors 中对应记录）。"
+        },
+        {
+          "method": "POST",
+          "path": "/{agent_id}/test",
+          "function": "test_remote_agent",
+          "is_async": true,
+          "params": [
+            {
+              "name": "agent_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "测试远程 Agent 连通性：GET 其 Agent Card URL。"
+        },
+        {
+          "method": "POST",
+          "path": "/{agent_id}/refresh",
+          "function": "refresh_remote_agent",
+          "is_async": true,
+          "params": [
+            {
+              "name": "agent_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "重新获取 Agent Card 并更新本地缓存。"
+        }
+      ]
+    },
+    {
+      "id": "rules",
+      "prefix": "/api/rules",
+      "tags": [
+        "rules"
+      ],
+      "file": "backend/api/rules.py",
+      "service": "backend.services.rule_service",
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "",
+          "function": "list_rules",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "Query('default')"
+            },
+            {
+              "name": "scope",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "project_id",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "limit",
+              "type": "int",
+              "default": "Query(200)"
+            },
+            {
+              "name": "offset",
+              "type": "int",
+              "default": "Query(0)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "list[RuleResponse]",
+          "description": ""
+        },
+        {
+          "method": "GET",
+          "path": "/{rule_id}",
+          "function": "get_rule",
+          "is_async": true,
+          "params": [
+            {
+              "name": "rule_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "Query('default')"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "RuleResponse",
+          "description": ""
+        },
+        {
+          "method": "POST",
+          "path": "",
+          "function": "create_rule",
+          "is_async": true,
+          "params": [
+            {
+              "name": "body",
+              "type": "RuleCreate",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "RuleResponse",
+          "description": ""
+        },
+        {
+          "method": "PUT",
+          "path": "/{rule_id}",
+          "function": "update_rule",
+          "is_async": true,
+          "params": [
+            {
+              "name": "rule_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "RuleUpdate",
+              "default": null
+            },
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "Query('default')"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "RuleResponse",
+          "description": ""
+        },
+        {
+          "method": "DELETE",
+          "path": "/{rule_id}",
+          "function": "delete_rule",
+          "is_async": true,
+          "params": [
+            {
+              "name": "rule_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "Query('default')"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": ""
+        }
+      ]
+    },
+    {
+      "id": "schedules",
+      "prefix": "/api/schedules",
+      "tags": [
+        "schedules"
+      ],
+      "file": "backend/api/schedules.py",
+      "service": "backend.services.schedule_service",
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "",
+          "function": "create_schedule",
+          "is_async": true,
+          "params": [
+            {
+              "name": "body",
+              "type": "ScheduleCreate",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "创建定时任务"
+        },
+        {
+          "method": "GET",
+          "path": "",
+          "function": "list_schedules",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "Query(None)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "列表查询"
+        },
+        {
+          "method": "GET",
+          "path": "/{schedule_id}",
+          "function": "get_schedule",
+          "is_async": true,
+          "params": [
+            {
+              "name": "schedule_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "详情"
+        },
+        {
+          "method": "PUT",
+          "path": "/{schedule_id}",
+          "function": "update_schedule",
+          "is_async": true,
+          "params": [
+            {
+              "name": "schedule_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "ScheduleUpdate",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "更新"
+        },
+        {
+          "method": "DELETE",
+          "path": "/{schedule_id}",
+          "function": "delete_schedule",
+          "is_async": true,
+          "params": [
+            {
+              "name": "schedule_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "删除"
+        },
+        {
+          "method": "POST",
+          "path": "/{schedule_id}/toggle",
+          "function": "toggle_schedule",
+          "is_async": true,
+          "params": [
+            {
+              "name": "schedule_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "启停切换"
+        },
+        {
+          "method": "POST",
+          "path": "/{schedule_id}/trigger",
+          "function": "trigger_schedule",
+          "is_async": true,
+          "params": [
+            {
+              "name": "schedule_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "手动触发"
+        },
+        {
+          "method": "GET",
+          "path": "/{schedule_id}/runs",
+          "function": "get_schedule_runs",
+          "is_async": true,
+          "params": [
+            {
+              "name": "schedule_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "limit",
+              "type": "int",
+              "default": "Query(None)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "执行历史"
+        }
+      ]
+    },
+    {
+      "id": "security",
+      "prefix": "/api/security",
+      "tags": [
+        "security"
+      ],
+      "file": "backend/api/security.py",
+      "service": "backend.services.security_scanner",
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/scan",
+          "function": "scan_text",
+          "is_async": true,
+          "params": [
+            {
+              "name": "body",
+              "type": "ScanRequest",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "list[ScanFindingResponse]",
+          "description": "手动触发安全扫描。"
+        },
+        {
+          "method": "GET",
+          "path": "/rules",
+          "function": "list_rules",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "Query('default')"
+            },
+            {
+              "name": "category",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "list[RuleResponse]",
+          "description": ""
+        },
+        {
+          "method": "GET",
+          "path": "/rules/{rule_id}",
+          "function": "get_rule",
+          "is_async": true,
+          "params": [
+            {
+              "name": "rule_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "Query('default')"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "RuleResponse",
+          "description": ""
+        },
+        {
+          "method": "POST",
+          "path": "/rules",
+          "function": "create_rule",
+          "is_async": true,
+          "params": [
+            {
+              "name": "body",
+              "type": "RuleCreate",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "RuleResponse",
+          "description": ""
+        },
+        {
+          "method": "PUT",
+          "path": "/rules/{rule_id}",
+          "function": "update_rule",
+          "is_async": true,
+          "params": [
+            {
+              "name": "rule_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "RuleUpdate",
+              "default": null
+            },
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "Query('default')"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "RuleResponse",
+          "description": ""
+        },
+        {
+          "method": "DELETE",
+          "path": "/rules/{rule_id}",
+          "function": "delete_rule",
+          "is_async": true,
+          "params": [
+            {
+              "name": "rule_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "Query('default')"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": ""
+        },
+        {
+          "method": "GET",
+          "path": "/findings",
+          "function": "list_findings",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "Query('default')"
+            },
+            {
+              "name": "task_id",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "status",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "list[FindingResponse]",
+          "description": ""
+        },
+        {
+          "method": "POST",
+          "path": "/findings/{finding_id}/dismiss",
+          "function": "dismiss_finding",
+          "is_async": true,
+          "params": [
+            {
+              "name": "finding_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "DismissRequest",
+              "default": "DismissRequest(None)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": ""
+        },
+        {
+          "method": "GET",
+          "path": "/findings/summary",
+          "function": "get_findings_summary",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "Query('default')"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "FindingsSummaryResponse",
+          "description": ""
+        }
+      ]
+    },
+    {
+      "id": "sessions",
+      "prefix": "/api/sessions",
+      "tags": [
+        "sessions"
+      ],
+      "file": "backend/api/sessions.py",
+      "service": "backend.services.archive_service",
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/list-for-project",
+          "function": "list_sessions_for_project",
+          "is_async": true,
+          "params": [
+            {
+              "name": "cwd",
+              "type": "str",
+              "default": "Query(Ellipsis)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "精简会话列表，供前端下拉框使用。"
+        },
+        {
+          "method": "GET",
+          "path": "/chats",
+          "function": "list_chats",
+          "is_async": true,
+          "params": [
+            {
+              "name": "agent_id",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "page",
+              "type": "int",
+              "default": "Query(1)"
+            },
+            {
+              "name": "page_size",
+              "type": "int",
+              "default": "Query(50)"
+            },
+            {
+              "name": "show_archived",
+              "type": "Optional[bool]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "普通对话列表（不绑定项目），等价于 type=chat 的快捷入口。"
+        },
+        {
+          "method": "GET",
+          "path": "",
+          "function": "list_sessions",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "Query('default')"
+            },
+            {
+              "name": "project",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "group_id",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "agent_id",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "type",
+              "type": "Optional[str]",
+              "default": "Query('all')"
+            },
+            {
+              "name": "page",
+              "type": "int",
+              "default": "Query(1)"
+            },
+            {
+              "name": "page_size",
+              "type": "int",
+              "default": "Query(50)"
+            },
+            {
+              "name": "show_archived",
+              "type": "Optional[bool]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "会话列表：DB 优先（按 session_id 聚合），文件扫描补充。支持 type 过滤。"
+        },
+        {
+          "method": "GET",
+          "path": "/{session_id}",
+          "function": "get_session",
+          "is_async": true,
+          "params": [
+            {
+              "name": "session_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "Query('default')"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "会话详情：返回会话元信息、对话消息流、关联任务。"
+        },
+        {
+          "method": "POST",
+          "path": "",
+          "function": "create_session",
+          "is_async": true,
+          "params": [
+            {
+              "name": "body",
+              "type": "SessionCreate",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "新建会话。"
+        },
+        {
+          "method": "POST",
+          "path": "/{session_id}/archive",
+          "function": "archive_session",
+          "is_async": true,
+          "params": [
+            {
+              "name": "session_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "归档会话（软操作，不删除任何文件/数据）。"
+        },
+        {
+          "method": "POST",
+          "path": "/{session_id}/unarchive",
+          "function": "unarchive_session",
+          "is_async": true,
+          "params": [
+            {
+              "name": "session_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "取消会话归档。"
+        },
+        {
+          "method": "GET",
+          "path": "/{session_id}/artifacts",
+          "function": "get_session_artifacts",
+          "is_async": true,
+          "params": [
+            {
+              "name": "session_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "Query('default')"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "汇总会话关联产物。"
+        }
+      ]
+    },
+    {
+      "id": "skills",
+      "prefix": "/api/skills",
+      "tags": [
+        "skills"
+      ],
+      "file": "backend/api/skills.py",
+      "service": "backend.services.skill_service",
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "",
+          "function": "list_skills",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "Query('default')"
+            },
+            {
+              "name": "category",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "enabled",
+              "type": "Optional[int]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "limit",
+              "type": "int",
+              "default": "Query(200)"
+            },
+            {
+              "name": "offset",
+              "type": "int",
+              "default": "Query(0)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "list[SkillResponse]",
+          "description": ""
+        },
+        {
+          "method": "GET",
+          "path": "/{skill_id}",
+          "function": "get_skill",
+          "is_async": true,
+          "params": [
+            {
+              "name": "skill_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "Query('default')"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "SkillResponse",
+          "description": ""
+        },
+        {
+          "method": "POST",
+          "path": "",
+          "function": "create_skill",
+          "is_async": true,
+          "params": [
+            {
+              "name": "body",
+              "type": "SkillCreate",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "SkillResponse",
+          "description": ""
+        },
+        {
+          "method": "PUT",
+          "path": "/{skill_id}",
+          "function": "update_skill",
+          "is_async": true,
+          "params": [
+            {
+              "name": "skill_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "SkillUpdate",
+              "default": null
+            },
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "Query('default')"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "SkillResponse",
+          "description": ""
+        },
+        {
+          "method": "DELETE",
+          "path": "/{skill_id}",
+          "function": "delete_skill",
+          "is_async": true,
+          "params": [
+            {
+              "name": "skill_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "Query('default')"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": ""
+        }
+      ]
+    },
+    {
+      "id": "tasks",
+      "prefix": "/api/tasks",
+      "tags": [
+        "tasks"
+      ],
+      "file": "backend/api/tasks.py",
+      "service": "backend.services.session_discovery",
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "",
+          "function": "create_task",
+          "is_async": true,
+          "params": [
+            {
+              "name": "body",
+              "type": "TaskCreate",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "TaskResponse",
+          "description": "创建任务"
+        },
+        {
+          "method": "POST",
+          "path": "/attachments",
+          "function": "upload_task_attachments",
+          "is_async": true,
+          "params": [
+            {
+              "name": "files",
+              "type": "list[UploadFile]",
+              "default": "File(Ellipsis)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "上传任务附件，返回可写入 TaskCreate.attachments 的本地路径列表。"
+        },
+        {
+          "method": "GET",
+          "path": "",
+          "function": "list_tasks",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "Query('default')"
+            },
+            {
+              "name": "status",
+              "type": "str",
+              "default": "Query(None)"
+            },
+            {
+              "name": "agent_id",
+              "type": "str",
+              "default": "Query(None)"
+            },
+            {
+              "name": "project",
+              "type": "str",
+              "default": "Query(None)"
+            },
+            {
+              "name": "group_id",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "session_id",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "created_after",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "created_before",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "page",
+              "type": "int",
+              "default": "Query(1)"
+            },
+            {
+              "name": "page_size",
+              "type": "int",
+              "default": "Query(20)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "TaskListResponse",
+          "description": "任务列表：合并 DB 任务 + 本地 Agent 会话文件扫描结果。"
+        },
+        {
+          "method": "GET",
+          "path": "/{task_id}",
+          "function": "get_task",
+          "is_async": true,
+          "params": [
+            {
+              "name": "task_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "Query('default')"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "TaskResponse",
+          "description": "任务详情。"
+        },
+        {
+          "method": "POST",
+          "path": "/{task_id}/stop",
+          "function": "stop_task",
+          "is_async": true,
+          "params": [
+            {
+              "name": "task_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "停止任务"
+        },
+        {
+          "method": "POST",
+          "path": "/{task_id}/approve",
+          "function": "approve_task",
+          "is_async": true,
+          "params": [
+            {
+              "name": "task_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "批准审批"
+        },
+        {
+          "method": "POST",
+          "path": "/{task_id}/reject",
+          "function": "reject_task",
+          "is_async": true,
+          "params": [
+            {
+              "name": "task_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "Optional[ApprovalAction]",
+              "default": "None"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "拒绝审批"
+        },
+        {
+          "method": "POST",
+          "path": "/{task_id}/retry",
+          "function": "retry_task",
+          "is_async": true,
+          "params": [
+            {
+              "name": "task_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "重试失败任务"
+        },
+        {
+          "method": "GET",
+          "path": "/{task_id}/output",
+          "function": "stream_task_output",
+          "is_async": true,
+          "params": [
+            {
+              "name": "task_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "SSE 流式输出任务结果"
+        }
+      ]
+    },
+    {
+      "id": "versions",
+      "prefix": "/api/versions",
+      "tags": [
+        "versions"
+      ],
+      "file": "backend/api/versions.py",
+      "service": null,
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "",
+          "function": "list_versions",
+          "is_async": true,
+          "params": [
+            {
+              "name": "project_id",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "list[VersionResponse]",
+          "description": "列出版本。"
+        },
+        {
+          "method": "POST",
+          "path": "",
+          "function": "create_version",
+          "is_async": true,
+          "params": [
+            {
+              "name": "body",
+              "type": "VersionCreate",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "VersionResponse",
+          "description": "创建版本。"
+        },
+        {
+          "method": "PATCH",
+          "path": "/{version_id}",
+          "function": "update_version",
+          "is_async": true,
+          "params": [
+            {
+              "name": "version_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "VersionUpdate",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "VersionResponse",
+          "description": "更新版本字段。"
+        },
+        {
+          "method": "DELETE",
+          "path": "/{version_id}",
+          "function": "delete_version",
+          "is_async": true,
+          "params": [
+            {
+              "name": "version_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "删除版本。"
+        }
+      ]
+    },
+    {
+      "id": "work_items",
+      "prefix": "/api/work-items",
+      "tags": [
+        "work-items"
+      ],
+      "file": "backend/api/work_items.py",
+      "service": "backend.services.ai_decompose_service",
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "",
+          "function": "create_work_item",
+          "is_async": true,
+          "params": [
+            {
+              "name": "body",
+              "type": "WorkItemCreate",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "WorkItemResponse",
+          "description": "创建工作项。"
+        },
+        {
+          "method": "GET",
+          "path": "",
+          "function": "list_work_items",
+          "is_async": true,
+          "params": [
+            {
+              "name": "project_id",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "group_id",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "status",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "search",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "assignee",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "version_id",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "list[WorkItemResponse]",
+          "description": "列出工作项。"
+        },
+        {
+          "method": "GET",
+          "path": "/{item_id}",
+          "function": "get_work_item",
+          "is_async": true,
+          "params": [
+            {
+              "name": "item_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "WorkItemResponse",
+          "description": "工作项详情。"
+        },
+        {
+          "method": "PATCH",
+          "path": "/{item_id}",
+          "function": "update_work_item",
+          "is_async": true,
+          "params": [
+            {
+              "name": "item_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "WorkItemUpdate",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "WorkItemResponse",
+          "description": "更新工作项基本信息。"
+        },
+        {
+          "method": "DELETE",
+          "path": "/{item_id}",
+          "function": "delete_work_item",
+          "is_async": true,
+          "params": [
+            {
+              "name": "item_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "删除工作项。"
+        },
+        {
+          "method": "POST",
+          "path": "/{item_id}/transition",
+          "function": "transition_work_item",
+          "is_async": true,
+          "params": [
+            {
+              "name": "item_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "WorkItemTransitionRequest",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "WorkItemTransitionResponse",
+          "description": "流转工作项到目标节点。"
+        },
+        {
+          "method": "GET",
+          "path": "/{item_id}/transitions",
+          "function": "get_transitions",
+          "is_async": true,
+          "params": [
+            {
+              "name": "item_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "list[WorkItemTransitionResponse]",
+          "description": "获取工作项流转历史。"
+        },
+        {
+          "method": "GET",
+          "path": "/{item_id}/cross-repo-results",
+          "function": "get_cross_repo_results",
+          "is_async": true,
+          "params": [
+            {
+              "name": "item_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "跨仓库执行结果聚合。"
+        },
+        {
+          "method": "POST",
+          "path": "/{item_id}/resolve-merge",
+          "function": "resolve_work_item_merge",
+          "is_async": true,
+          "params": [
+            {
+              "name": "item_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "MergeResolveRequest | None",
+              "default": "None"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "解决工作项 git_merge 节点冲突后推进。"
+        },
+        {
+          "method": "POST",
+          "path": "/{item_id}/artifacts",
+          "function": "add_artifact",
+          "is_async": true,
+          "params": [
+            {
+              "name": "item_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "ArtifactCreate",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "添加产物链接。"
+        },
+        {
+          "method": "DELETE",
+          "path": "/{item_id}/artifacts/{artifact_id}",
+          "function": "remove_artifact",
+          "is_async": true,
+          "params": [
+            {
+              "name": "item_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "artifact_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "删除产物链接。"
+        },
+        {
+          "method": "GET",
+          "path": "/{item_id}/artifacts/{artifact_id}/content",
+          "function": "get_artifact_content",
+          "is_async": true,
+          "params": [
+            {
+              "name": "item_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "artifact_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "获取产物文件内容，用于在线查看。"
+        },
+        {
+          "method": "POST",
+          "path": "/ai-decompose",
+          "function": "ai_decompose_work_items",
+          "is_async": true,
+          "params": [
+            {
+              "name": "text",
+              "type": "Optional[str]",
+              "default": "Form(None)"
+            },
+            {
+              "name": "links",
+              "type": "Optional[str]",
+              "default": "Form(None)"
+            },
+            {
+              "name": "project_id",
+              "type": "str",
+              "default": "Form(Ellipsis)"
+            },
+            {
+              "name": "group_id",
+              "type": "Optional[str]",
+              "default": "Form(None)"
+            },
+            {
+              "name": "agent_id",
+              "type": "Optional[str]",
+              "default": "Form(None)"
+            },
+            {
+              "name": "files",
+              "type": "Optional[list[UploadFile]]",
+              "default": "File(None)"
+            },
+            {
+              "name": "user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "AI 需求分解：将文本/文件/链接拆解为结构化工作项列表。"
+        },
+        {
+          "method": "POST",
+          "path": "/batch",
+          "function": "batch_create_work_items",
+          "is_async": true,
+          "params": [
+            {
+              "name": "payload",
+              "type": "dict",
+              "default": null
+            },
+            {
+              "name": "user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "批量创建工作项。"
+        }
+      ]
+    },
+    {
+      "id": "workflows",
+      "prefix": "/api/workflows",
+      "tags": [
+        "workflows"
+      ],
+      "file": "backend/api/workflows.py",
+      "service": "backend.services.workflow_engine",
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "",
+          "function": "create_workflow",
+          "is_async": true,
+          "params": [
+            {
+              "name": "body",
+              "type": "WorkflowCreate",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "WorkflowResponse",
+          "description": ""
+        },
+        {
+          "method": "GET",
+          "path": "",
+          "function": "list_workflows",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workspace_id",
+              "type": "str",
+              "default": "Query('default')"
+            },
+            {
+              "name": "limit",
+              "type": "int",
+              "default": "Query(50)"
+            },
+            {
+              "name": "offset",
+              "type": "int",
+              "default": "Query(0)"
+            },
+            {
+              "name": "enabled",
+              "type": "Optional[int]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "list[WorkflowResponse]",
+          "description": ""
+        },
+        {
+          "method": "GET",
+          "path": "/{workflow_id}",
+          "function": "get_workflow",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workflow_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "WorkflowResponse",
+          "description": ""
+        },
+        {
+          "method": "PUT",
+          "path": "/{workflow_id}",
+          "function": "update_workflow",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workflow_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "WorkflowUpdate",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "WorkflowResponse",
+          "description": ""
+        },
+        {
+          "method": "PATCH",
+          "path": "/{workflow_id}/toggle",
+          "function": "toggle_workflow",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workflow_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "WorkflowResponse",
+          "description": ""
+        },
+        {
+          "method": "DELETE",
+          "path": "/{workflow_id}",
+          "function": "delete_workflow",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workflow_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": ""
+        },
+        {
+          "method": "POST",
+          "path": "/{workflow_id}/run",
+          "function": "run_workflow",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workflow_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "WorkflowRunRequest | None",
+              "default": "None"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "WorkflowRunResponse",
+          "description": ""
+        },
+        {
+          "method": "GET",
+          "path": "/{workflow_id}/runs",
+          "function": "list_runs",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workflow_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "limit",
+              "type": "int",
+              "default": "Query(20)"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "list[WorkflowRunResponse]",
+          "description": ""
+        },
+        {
+          "method": "GET",
+          "path": "/{workflow_id}/runs/{run_id}",
+          "function": "get_run",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workflow_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "run_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "WorkflowRunResponse",
+          "description": ""
+        },
+        {
+          "method": "POST",
+          "path": "/{workflow_id}/runs/{run_id}/cancel",
+          "function": "cancel_run",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workflow_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "run_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "WorkflowRunResponse",
+          "description": ""
+        },
+        {
+          "method": "POST",
+          "path": "/{workflow_id}/runs/{run_id}/nodes/{node_id}/approve",
+          "function": "approve_node",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workflow_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "run_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "node_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "ApprovalDecision | None",
+              "default": "None"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "WorkflowRunResponse",
+          "description": ""
+        },
+        {
+          "method": "POST",
+          "path": "/{workflow_id}/runs/{run_id}/nodes/{node_id}/reject",
+          "function": "reject_node",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workflow_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "run_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "node_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "ApprovalDecision | None",
+              "default": "None"
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": "WorkflowRunResponse",
+          "description": ""
+        },
+        {
+          "method": "POST",
+          "path": "/{workflow_id}/runs/{run_id}/nodes/{node_id}/resolve-merge",
+          "function": "resolve_merge_node",
+          "is_async": true,
+          "params": [
+            {
+              "name": "workflow_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "run_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "node_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "resolved",
+              "type": "bool",
+              "default": true
+            },
+            {
+              "name": "message",
+              "type": "str",
+              "default": ""
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "手动解决 Git merge 冲突后的回调。"
+        }
+      ]
+    }
+  ],
+  "stats": {
+    "total_routers": 26,
+    "total_endpoints": 188,
+    "methods": {
+      "GET": 87,
+      "POST": 63,
+      "PUT": 16,
+      "DELETE": 19,
+      "PATCH": 3
+    }
+  }
+}

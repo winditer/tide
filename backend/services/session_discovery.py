@@ -28,6 +28,7 @@ from backend.services.project_discovery import (
     CODEX_SESSIONS_DIR,
     PEEK_MAX_LINES,
     PROJECT_DISCOVERY_TTL,
+    QODER_CACHE_DIR,
     QODER_PROJECTS_DIR,
     _list_jsonl,
     _normalize_path,
@@ -41,6 +42,59 @@ TITLE_MAX_LEN = 120
 
 # 测试/无意义会话标题集合（小写）
 # 这些通常是用户测试桥接链路时的随手输入，不构成有意义的工作会话
+# ---------- Qoder IDE 缓存 CWD 解析 ----------
+
+
+def _build_qoder_project_cwd_map() -> Dict[str, Path]:
+    """从 ~/.qoder/projects/ 目录名反推项目名→实际路径映射。
+
+    目录名编码规则：`/Users/haifeng/Documents/tide` → `-Users-haifeng-Documents-tide`
+    """
+    project_map: Dict[str, Path] = {}
+    if not QODER_PROJECTS_DIR.exists():
+        return project_map
+    try:
+        for entry in QODER_PROJECTS_DIR.iterdir():
+            if not entry.is_dir():
+                continue
+            # 解码：'-Users-haifeng-Documents-tide' → '/Users/haifeng/Documents/tide'
+            decoded = "/" + entry.name.lstrip("-").replace("-", "/")
+            p = Path(decoded)
+            try:
+                if p.exists() and p.is_dir():
+                    project_map[p.name] = p
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return project_map
+
+
+def _resolve_cache_project_cwd(
+    cache_path: Path, project_map: Dict[str, Path]
+) -> Optional[Path]:
+    """从 Qoder 缓存文件路径推导项目 CWD。
+
+    缓存路径结构：
+        ~/.qoder/cache/projects/<name>-<8hex>/conversation-history/<id>/<id>.jsonl
+    """
+    parts = cache_path.parts
+    for i, part in enumerate(parts):
+        if part == "conversation-history" and i > 0:
+            project_dir_name = parts[i - 1]  # e.g., 'tide-e1f17a2a'
+            # 移除 8 位 hex 后缀：'tide-e1f17a2a' → 'tide'
+            if (
+                len(project_dir_name) > 9
+                and project_dir_name[-9] == "-"
+                and all(c in "0123456789abcdef" for c in project_dir_name[-8:])
+            ):
+                project_name = project_dir_name[:-9]
+            else:
+                project_name = project_dir_name
+            return project_map.get(project_name)
+    return None
+
+
 _JUNK_TITLES = {
     "hi", "hello", "hey", "yo",
     "x", "y", "n", "a", "b", "c",
@@ -57,8 +111,15 @@ def _truncate(text: str, limit: int = TITLE_MAX_LEN) -> str:
     return text
 
 
-def _extract_text(content) -> str:
-    """从 Claude/Codex/Qoder 的 message.content 中抽取纯文本。"""
+def _extract_text(content, *, skip_tool_results: bool = False) -> str:
+    """从 Claude/Codex/Qoder 的 message.content 中抽取纯文本。
+
+    Args:
+        content: message.content 字段（可能是 str / list[dict] / dict）
+        skip_tool_results: 是否跳过 tool_result 类型的 content block。
+            设为 True 时，工具返回的中间结果（如文件列表、命令输出）不会被提取，
+            从而避免 tool_result 被当作 "user" 消息显示的噪音问题。
+    """
     if content is None:
         return ""
     if isinstance(content, str):
@@ -67,6 +128,11 @@ def _extract_text(content) -> str:
         parts: List[str] = []
         for item in content:
             if isinstance(item, dict):
+                # 跳过 tool_result / tool_use / thinking 等非文本 block
+                if skip_tool_results:
+                    block_type = item.get("type", "")
+                    if block_type in ("tool_result", "tool_use", "thinking", "redacted_thinking"):
+                        continue
                 t = item.get("text") or item.get("content")
                 if isinstance(t, str):
                     parts.append(t)
@@ -173,6 +239,20 @@ def _peek_session_meta(
                             text = _extract_text(obj.get("content") or obj.get("message"))
                             if text and not text.startswith("<"):
                                 title = _truncate(text)
+                        elif obj.get("role") == "user":
+                            # Qoder IDE 缓存格式：{role, message: {content}}
+                            msg_data = obj.get("message")
+                            if isinstance(msg_data, dict):
+                                text = _extract_text(msg_data.get("content"))
+                            else:
+                                text = _extract_text(msg_data)
+                            if text:
+                                # 提取 <user_query> 标签中的实际用户输入
+                                uq = re.search(r"<user_query>(.*?)</user_query>", text, re.DOTALL)
+                                if uq:
+                                    title = _truncate(uq.group(1).strip())
+                                elif not text.startswith("<"):
+                                    title = _truncate(text)
 
                 if cwd and session_id and title:
                     break
@@ -217,10 +297,14 @@ def _scan_all() -> List[Dict]:
     """扫描所有 Agent 的会话文件，返回会话字典列表（未过滤）。"""
     results: List[Dict] = []
 
+    # 构建 Qoder 项目名→CWD 映射（用于缓存目录 CWD 解析）
+    _qoder_project_cwds = _build_qoder_project_cwd_map()
+
     scan_targets = (
         ("codex", CODEX_SESSIONS_DIR),
         ("claude", CLAUDE_PROJECTS_DIR),
         ("qoder", QODER_PROJECTS_DIR),
+        ("qoder", QODER_CACHE_DIR),  # Qoder IDE 客户端缓存对话
     )
 
     for agent_id, directory in scan_targets:
@@ -235,6 +319,9 @@ def _scan_all() -> List[Dict]:
             mtime = stat.st_mtime
             ctime = stat.st_ctime
             cwd, sid, title, created_at_iso, is_sub, session_source = _peek_session_meta(path, agent_id)
+            # 对 Qoder 缓存文件，文件内无 cwd 字段，从目录结构推导
+            if not cwd and directory == QODER_CACHE_DIR:
+                cwd = _resolve_cache_project_cwd(path, _qoder_project_cwds)
             # 跳过子会话（codex exec/subagent）
             if is_sub:
                 continue
@@ -498,18 +585,44 @@ def _parse_codex_line(obj: Dict) -> Optional[Dict]:
 def _parse_claude_line(obj: Dict) -> Optional[Dict]:
     if obj.get("isMeta"):
         return None
+    # 跳过非消息类型的行（文件快照、last-prompt 等）
+    line_type = obj.get("type", "")
+    if line_type in ("file-history-snapshot", "last-prompt"):
+        return None
     ts = obj.get("timestamp") or obj.get("created_at")
     msg = obj.get("message")
     if isinstance(msg, dict):
         role = msg.get("role")
-        content = _extract_text(msg.get("content"))
+        # 对 user 角色的消息跳过 tool_result 块，避免工具输出显示为 "用户" 消息
+        skip_tools = (role == "user")
+        content = _extract_text(msg.get("content"), skip_tool_results=skip_tools)
         if content and role in ("user", "assistant", "system") and not content.startswith("<"):
             return {"role": role, "content": content, "timestamp": _coerce_iso(ts)}
     typ = obj.get("type")
     if typ in ("user", "assistant", "system"):
-        content = _extract_text(obj.get("content") or obj.get("message"))
+        skip_tools = (typ == "user")
+        content = _extract_text(obj.get("content") or obj.get("message"), skip_tool_results=skip_tools)
         if content and not content.startswith("<"):
             return {"role": typ, "content": content, "timestamp": _coerce_iso(ts)}
+    # Qoder IDE 缓存格式：{role: "user"|"assistant", message: {content: [...]}}
+    role_field = obj.get("role")
+    if role_field in ("user", "assistant", "system"):
+        msg_data = obj.get("message")
+        if isinstance(msg_data, dict):
+            skip_tools = (role_field == "user")
+            raw = _extract_text(msg_data.get("content"), skip_tool_results=skip_tools)
+        else:
+            raw = _extract_text(msg_data)
+        if raw:
+            # 对 user 消息提取 <user_query> 内容，跳过系统提示
+            if role_field == "user":
+                uq = re.search(r"<user_query>(.*?)</user_query>", raw, re.DOTALL)
+                if uq:
+                    raw = uq.group(1).strip()
+                elif raw.startswith("<"):
+                    return None  # 纯系统提示，跳过
+            if raw and not raw.startswith("<"):
+                return {"role": role_field, "content": raw, "timestamp": _coerce_iso(ts)}
     return None
 
 

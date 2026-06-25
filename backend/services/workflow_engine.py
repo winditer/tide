@@ -33,9 +33,14 @@ from typing import Optional
 from sqlalchemy import text
 
 from backend.db.engine import async_session_factory
-from backend.runtime.adapters import AGENT_ADAPTERS
+from backend.runtime.adapters import (
+    AGENT_ADAPTERS,
+    _build_prompt_with_rules,
+    _build_prompt_with_skills,
+)
 from backend.runtime.executor import agent_executor
 from backend.services.event_emitter import event_emitter
+from backend.services.hook_engine import hook_engine
 from backend.services.ws_hub import ws_hub
 
 logger = logging.getLogger("tide.workflow_engine")
@@ -230,6 +235,14 @@ class WorkflowEngine:
                     "node_id": node_id,
                     "node_type": node_type,
                 },
+            )
+
+            # 触发 workflow.node.pre Hook（异步非阻塞）
+            self._fire_hook(
+                "workflow.node.pre",
+                run_id,
+                node_id=node_id,
+                node_type=node_type,
             )
 
             if node_type == "start":
@@ -472,6 +485,42 @@ class WorkflowEngine:
         prompt = self._render_template(prompt_template, context)
         cwd = data.get("cwd") or str(Path.cwd())
 
+        run_info = self._runs.get(run_id) or {}
+        workspace_id = run_info.get("workspace_id") or self._get_workspace_id(run_id)
+
+        # Rules 注入（强制约束）：在 Skills 之前注入，作为 prompt 顶部前缀。
+        # 异常静默回退，不阻塞主流程。
+        project_id = (
+            context.get("project_id", "")
+            or context.get("start", {}).get("input", {}).get("project_id", "")
+        ) or None
+        try:
+            prompt = await _build_prompt_with_rules(
+                prompt, workspace_id, cwd, project_id
+            )
+        except Exception as e:
+            logger.warning("Rules injection failed: %s", e)
+
+        # Skills 注入：读取 node.data.skills（slug 列表）并将 Skill 内容作为
+        # prompt 前缀拼接。支持 list[str] 或逗号分隔的字符串。
+        skills_field = data.get("skills") or []
+        if isinstance(skills_field, str):
+            skill_slugs = [s.strip() for s in skills_field.split(",") if s.strip()]
+        elif isinstance(skills_field, list):
+            skill_slugs = [str(s).strip() for s in skills_field if str(s).strip()]
+        else:
+            skill_slugs = []
+        if skill_slugs:
+            try:
+                prompt = await _build_prompt_with_skills(
+                    prompt, skill_slugs, workspace_id=workspace_id
+                )
+            except Exception:
+                logger.exception(
+                    "[workflow] inject skills failed run=%s node=%s slugs=%s",
+                    run_id, node_id, skill_slugs,
+                )
+
         # 远程 A2A Agent：若 prompt 模板未引用上游节点，自动附加上游输出
         if agent_id.startswith("a2a:"):
             upstream_outputs = self._collect_upstream_outputs(run_id, node_id, context)
@@ -482,9 +531,6 @@ class WorkflowEngine:
                     for uid, out in upstream_outputs
                 )
                 prompt = f"{prompt}\n\n## 上游节点上下文\n{ctx_block}".strip()
-
-        run_info = self._runs.get(run_id) or {}
-        workspace_id = run_info.get("workspace_id") or self._get_workspace_id(run_id)
 
         # 创建 task 记录（绑定 workflow_run_id / workflow_node_id）
         task_id = str(uuid.uuid4())
@@ -960,6 +1006,16 @@ class WorkflowEngine:
             )
             await session.commit()
 
+        # 节点进入“完成”状态时触发 workflow.node.post Hook
+        if status == "completed":
+            node_type = self._lookup_node_type(run_id, node_id)
+            self._fire_hook(
+                "workflow.node.post",
+                run_id,
+                node_id=node_id,
+                node_type=node_type,
+            )
+
     async def _update_run_context(
         self, run_id: str, node_id: str, node_data: dict
     ) -> dict:
@@ -1020,6 +1076,9 @@ class WorkflowEngine:
             "workflows",
             {"type": "workflow.run.completed", "run_id": run_id},
         )
+
+        # 触发 workflow.run.completed Hook（异步非阻塞）
+        self._fire_hook("workflow.run.completed", run_id)
 
     async def _fail_run(self, run_id: str, error: str):
         async with async_session_factory() as session:
@@ -1101,6 +1160,40 @@ class WorkflowEngine:
 
     def _get_workspace_id(self, run_id: str) -> str:
         return (self._runs.get(run_id) or {}).get("workspace_id") or "default"
+
+    def _lookup_node_type(self, run_id: str, node_id: str) -> Optional[str]:
+        run_info = self._runs.get(run_id) or {}
+        nodes = run_info.get("definition", {}).get("nodes", [])
+        for n in nodes:
+            if n.get("id") == node_id:
+                return n.get("type")
+        return None
+
+    def _fire_hook(
+        self,
+        event: str,
+        run_id: str,
+        node_id: Optional[str] = None,
+        node_type: Optional[str] = None,
+        extra: Optional[dict] = None,
+    ) -> None:
+        """异步触发工作流 Hook，失败不阻塞主流程。"""
+        try:
+            workspace_id = self._get_workspace_id(run_id)
+            payload: dict = {
+                "event": event,
+                "run_id": run_id,
+                "workspace_id": workspace_id,
+            }
+            if node_id is not None:
+                payload["node_id"] = node_id
+            if node_type is not None:
+                payload["node_type"] = node_type
+            if extra:
+                payload.update(extra)
+            asyncio.create_task(hook_engine.trigger(event, workspace_id, payload))
+        except Exception:
+            logger.debug("workflow hook trigger dispatch failed", exc_info=True)
 
     def _collect_upstream_outputs(
         self, run_id: str, node_id: str, context: dict

@@ -1,9 +1,18 @@
 import { useQuery, useMutation, useQueryClient, } from "@tanstack/react-query";
-import { fetchWorkflows, fetchWorkflow, createWorkflow, updateWorkflow, deleteWorkflow, runWorkflow, fetchWorkflowRuns, fetchWorkflowRun, cancelRun, approveNode, rejectNode, } from "../api/workflows";
+import { fetchWorkflows, fetchWorkflow, createWorkflow, updateWorkflow, deleteWorkflow, toggleWorkflow, runWorkflow, fetchWorkflowRuns, fetchWorkflowRun, cancelRun, approveNode, rejectNode, } from "../api/workflows";
+function normaliseWorkflows(data) {
+    var _a;
+    if (!data)
+        return [];
+    if (Array.isArray(data))
+        return data;
+    return (_a = data.items) !== null && _a !== void 0 ? _a : [];
+}
 export function useWorkflows() {
     return useQuery({
         queryKey: ["workflows"],
         queryFn: () => fetchWorkflows(),
+        select: normaliseWorkflows,
     });
 }
 export function useWorkflow(id) {
@@ -38,6 +47,16 @@ export function useDeleteWorkflow() {
         mutationFn: (id) => deleteWorkflow(id),
         onSuccess: () => {
             qc.invalidateQueries({ queryKey: ["workflows"] });
+        },
+    });
+}
+export function useToggleWorkflow() {
+    const qc = useQueryClient();
+    return useMutation({
+        mutationFn: (id) => toggleWorkflow(id),
+        onSuccess: (_data, id) => {
+            qc.invalidateQueries({ queryKey: ["workflows"] });
+            qc.invalidateQueries({ queryKey: ["workflow", id] });
         },
     });
 }

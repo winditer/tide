@@ -31,6 +31,15 @@ async def init_db():
             await db.execute("ALTER TABLE tasks ADD COLUMN commit_message TEXT")
         if "merge_status" not in task_columns:
             await db.execute("ALTER TABLE tasks ADD COLUMN merge_status TEXT")
+        if "token_input" not in task_columns:
+            await db.execute("ALTER TABLE tasks ADD COLUMN token_input INTEGER DEFAULT 0")
+        if "token_output" not in task_columns:
+            await db.execute("ALTER TABLE tasks ADD COLUMN token_output INTEGER DEFAULT 0")
+        if "estimated_cost_usd" not in task_columns:
+            await db.execute("ALTER TABLE tasks ADD COLUMN estimated_cost_usd REAL DEFAULT 0")
+        if "group_id" not in task_columns:
+            await db.execute("ALTER TABLE tasks ADD COLUMN group_id TEXT")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_group ON tasks(group_id)")
 
         # approvals 表升级（兑容旧版 schema）
         cursor = await db.execute("PRAGMA table_info(approvals)")
@@ -81,5 +90,80 @@ async def init_db():
 
         # 确保 version_id 索引存在（迁移后安全创建）
         await db.execute("CREATE INDEX IF NOT EXISTS idx_work_items_version ON work_items(version_id)")
+
+        # work_items 补列 group_id（项目组关联）
+        if wi_columns and "group_id" not in wi_columns:
+            await db.execute("ALTER TABLE work_items ADD COLUMN group_id TEXT")
+
+        # plans 补列 group_id（项目组关联，与 work_items.group_id 模式一致）
+        cursor = await db.execute("PRAGMA table_info(plans)")
+        plan_columns = {row[1] for row in await cursor.fetchall()}
+        if plan_columns and "group_id" not in plan_columns:
+            await db.execute("ALTER TABLE plans ADD COLUMN group_id TEXT")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_plans_group ON plans(group_id)")
+
+        # project_groups 表兼容性迁移
+        cursor = await db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='project_groups'"
+        )
+        if not await cursor.fetchone():
+            await db.execute("""
+                CREATE TABLE project_groups (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    created_by TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(workspace_id, name)
+                )
+            """)
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_project_groups_workspace ON project_groups(workspace_id)"
+            )
+
+        cursor = await db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='project_group_members'"
+        )
+        if not await cursor.fetchone():
+            await db.execute("""
+                CREATE TABLE project_group_members (
+                    id TEXT PRIMARY KEY,
+                    group_id TEXT NOT NULL REFERENCES project_groups(id) ON DELETE CASCADE,
+                    project_id TEXT NOT NULL,
+                    role TEXT DEFAULT 'member',
+                    display_order INTEGER DEFAULT 0,
+                    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(group_id, project_id)
+                )
+            """)
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_pgm_group ON project_group_members(group_id)"
+            )
+
+        # project_groups 补列：workflow_id（项目组绑定的工作流模板）
+        cursor = await db.execute("PRAGMA table_info(project_groups)")
+        pg_columns = {row[1] for row in await cursor.fetchall()}
+        if pg_columns and "workflow_id" not in pg_columns:
+            await db.execute("ALTER TABLE project_groups ADD COLUMN workflow_id TEXT")
+
+        # project_group_user_members 表（与 project_members 对称的用户级成员）
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS project_group_user_members (
+                id TEXT PRIMARY KEY,
+                group_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                role TEXT DEFAULT 'member',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(group_id, user_id)
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pgum_user ON project_group_user_members(user_id)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pgum_group ON project_group_user_members(group_id)"
+        )
 
         await db.commit()

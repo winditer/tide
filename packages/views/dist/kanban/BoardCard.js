@@ -78,10 +78,10 @@ export function BoardCard({ card, index }) {
     };
     return (_jsx(Draggable, { draggableId: card.id, index: index, children: (provided, snapshot) => {
             var _a;
-            return (_jsxs("div", Object.assign({ ref: provided.innerRef }, provided.draggableProps, provided.dragHandleProps, { onClick: handleClick, role: href ? "button" : undefined, tabIndex: href ? 0 : undefined, className: `group rounded-lg border bg-card p-3 shadow-sm transition-all ${snapshot.isDragging
-                    ? "shadow-md ring-2 ring-primary/20"
+            return (_jsxs("div", Object.assign({ ref: provided.innerRef }, provided.draggableProps, provided.dragHandleProps, { style: provided.draggableProps.style, onClick: handleClick, role: href ? "button" : undefined, tabIndex: href ? 0 : undefined, className: `group rounded-lg border border-border/50 bg-card p-3 shadow-card transition-smooth ${snapshot.isDragging
+                    ? "shadow-card-hover ring-2 ring-primary/30 -rotate-1"
                     : href
-                        ? "cursor-pointer hover:border-primary/40 hover:shadow-md"
+                        ? "cursor-pointer hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-card-hover"
                         : ""}`, children: [_jsx("div", { className: "mb-1.5 line-clamp-2 text-sm font-medium leading-snug text-foreground", children: card.title || "(无标题)" }), _jsxs("div", { className: "flex flex-wrap items-center gap-1.5", children: [_jsx(Badge, { variant: (_a = STATUS_VARIANT[card.status]) !== null && _a !== void 0 ? _a : "outline", className: "text-[10px] uppercase tracking-wide", children: card.status }), agentId && (_jsx(Badge, { variant: "outline", className: "text-[10px]", children: agentId })), meta.workflow_name && (_jsx(Badge, { variant: "outline", className: "text-[10px]", children: meta.workflow_name }))] }), (cwd || card.updated_at) && (_jsxs("div", { className: "mt-2 flex items-center justify-between gap-2 text-[11px] text-muted-foreground", children: [cwd ? (_jsx("span", { className: "truncate", title: meta.cwd, children: cwd })) : (_jsx("span", {})), card.updated_at && (_jsx("span", { className: "shrink-0", children: formatTime(card.updated_at) }))] })), meta.error && (_jsx("div", { className: "mt-2 truncate rounded bg-destructive/10 px-2 py-1 text-[11px] text-destructive", title: String(meta.error), children: String(meta.error) }))] })));
         } }));
 }

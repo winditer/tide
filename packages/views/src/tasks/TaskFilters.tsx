@@ -1,12 +1,16 @@
 "use client";
 
-import { Button, Select, Input } from "@tide/ui";
-import { useAgents, useProjects, useSessions } from "@tide/core";
+import { useMemo } from "react";
+import { Button, Select, Input, type SelectOptionGroup } from "@tide/ui";
+import { useAgents, useProjects, useProjectGroups, useSessions } from "@tide/core";
 
 export interface TaskFiltersValue {
   status?: string;
   agent_id?: string;
+  /** 项目 cwd（与 group_id 互斥） */
   project?: string;
+  /** 项目组 id（与 project 互斥） */
+  group_id?: string;
   session_id?: string;
   created_after?: string;
   created_before?: string;
@@ -28,6 +32,9 @@ const STATUS_OPTIONS = [
   { label: "已停止", value: "stopped" },
 ];
 
+const SCOPE_PROJECT_PREFIX = "project:";
+const SCOPE_GROUP_PREFIX = "group:";
+
 function shortSession(id: string | null | undefined) {
   if (!id) return "";
   return id.length > 12 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id;
@@ -39,20 +46,51 @@ function projectName(cwd: string) {
 
 export function TaskFilters({ value, onChange, onReset }: TaskFiltersProps) {
   const { data: projectsData } = useProjects();
+  const { data: groupsData } = useProjectGroups();
   const { data: agentsData } = useAgents();
   const { data: sessionsData } = useSessions({
     project: value.project || undefined,
+    group_id: value.group_id || undefined,
     agent_id: value.agent_id || undefined,
     page_size: 200,
   });
 
-  const projectOptions = [
-    { label: "全部项目", value: "" },
-    ...(projectsData?.projects ?? []).map((p) => ({
-      label: `${p.name}${p.cwd && p.cwd !== p.name ? `  (${p.cwd})` : ""}`,
-      value: p.cwd,
-    })),
-  ];
+  const projects = projectsData?.projects ?? [];
+  const groups = groupsData?.groups ?? [];
+
+  // 统一项目/项目组选择器编码值
+  const scopeValue = value.group_id
+    ? `${SCOPE_GROUP_PREFIX}${value.group_id}`
+    : value.project
+      ? `${SCOPE_PROJECT_PREFIX}${value.project}`
+      : "";
+
+  const scopeFlatOptions = useMemo(
+    () => [{ label: "全部", value: "" }],
+    [],
+  );
+  const scopeGroups = useMemo<SelectOptionGroup[]>(() => {
+    const out: SelectOptionGroup[] = [];
+    if (projects.length > 0) {
+      out.push({
+        label: "项目",
+        options: projects.map((p) => ({
+          value: `${SCOPE_PROJECT_PREFIX}${p.cwd}`,
+          label: `${p.name}${p.cwd && p.cwd !== p.name ? `  (${p.cwd})` : ""}`,
+        })),
+      });
+    }
+    if (groups.length > 0) {
+      out.push({
+        label: "项目组",
+        options: groups.map((g) => ({
+          value: `${SCOPE_GROUP_PREFIX}${g.id}`,
+          label: `${g.name} (${g.member_count})`,
+        })),
+      });
+    }
+    return out;
+  }, [projects, groups]);
 
   const agentOptions = [
     { label: "全部 Agent", value: "" },
@@ -76,10 +114,37 @@ export function TaskFilters({ value, onChange, onReset }: TaskFiltersProps) {
     onChange({ ...value, ...patch });
   };
 
+  const handleScopeChange = (next: string) => {
+    if (!next) {
+      // 切换到“全部”时清除 project/group_id，并重置 session 过滤
+      update({ project: undefined, group_id: undefined, session_id: undefined });
+      return;
+    }
+    if (next.startsWith(SCOPE_PROJECT_PREFIX)) {
+      const cwd = next.slice(SCOPE_PROJECT_PREFIX.length);
+      update({
+        project: cwd || undefined,
+        group_id: undefined,
+        // 切换归属后清空会话过滤，避免脏数据
+        session_id: undefined,
+      });
+      return;
+    }
+    if (next.startsWith(SCOPE_GROUP_PREFIX)) {
+      const gid = next.slice(SCOPE_GROUP_PREFIX.length);
+      update({
+        project: undefined,
+        group_id: gid || undefined,
+        session_id: undefined,
+      });
+    }
+  };
+
   const hasActive =
     !!value.status ||
     !!value.agent_id ||
     !!value.project ||
+    !!value.group_id ||
     !!value.session_id ||
     !!value.created_after ||
     !!value.created_before;
@@ -87,11 +152,15 @@ export function TaskFilters({ value, onChange, onReset }: TaskFiltersProps) {
   return (
     <div className="mb-4 rounded-lg border bg-card/40 p-3">
       <div className="flex flex-wrap items-end gap-3">
-        <FilterField label="项目" className="min-w-[150px] flex-1 basis-[160px] max-w-[180px]">
+        <FilterField
+          label="项目 / 项目组"
+          className="min-w-[180px] flex-1 basis-[200px] max-w-[240px]"
+        >
           <Select
-            options={projectOptions}
-            value={value.project ?? ""}
-            onChange={(e) => update({ project: e.target.value || undefined })}
+            options={scopeFlatOptions}
+            groups={scopeGroups}
+            value={scopeValue}
+            onChange={(e) => handleScopeChange(e.target.value)}
           />
         </FilterField>
 

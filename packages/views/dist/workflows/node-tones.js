@@ -85,4 +85,50 @@ export const STATUS_LABEL = {
     skipped: "已跳过",
     cancelled: "已取消",
 };
+const STAGE_CATEGORY_TONES = {
+    todo: {
+        accent: "bg-zinc-700",
+        surface: "bg-zinc-50",
+        swatch: "bg-zinc-700",
+        label: "待办",
+    },
+    in_progress: {
+        accent: "bg-sky-600",
+        surface: "bg-sky-50",
+        swatch: "bg-sky-600",
+        label: "进行中",
+    },
+    review: {
+        accent: "bg-amber-500",
+        surface: "bg-amber-50",
+        swatch: "bg-amber-500",
+        label: "评审",
+    },
+    done: {
+        accent: "bg-emerald-600",
+        surface: "bg-emerald-50",
+        swatch: "bg-emerald-600",
+        label: "已完成",
+    },
+    custom: {
+        accent: "bg-violet-600",
+        surface: "bg-violet-50",
+        swatch: "bg-violet-600",
+        label: "自定义",
+    },
+};
+/** 根据 stage 节点 category 返回视觉色调；未知 category 回退为 custom。 */
+export function stageCategoryTone(category) {
+    var _a;
+    if (!category)
+        return STAGE_CATEGORY_TONES.custom;
+    return (_a = STAGE_CATEGORY_TONES[category]) !== null && _a !== void 0 ? _a : STAGE_CATEGORY_TONES.custom;
+}
+export const STAGE_CATEGORY_OPTIONS = [
+    { label: "待办 (TODO)", value: "todo" },
+    { label: "进行中 (IN PROGRESS)", value: "in_progress" },
+    { label: "评审 (REVIEW)", value: "review" },
+    { label: "已完成 (DONE)", value: "done" },
+    { label: "自定义 (CUSTOM)", value: "custom" },
+];
 //# sourceMappingURL=node-tones.js.map

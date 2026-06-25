@@ -10,6 +10,7 @@ export { AgentPanel } from "./dashboard/AgentPanel";
 export { QuickInput } from "./dashboard/QuickInput";
 export { FloatingChat } from "./dashboard/FloatingChat";
 export { ChatMessageList } from "./dashboard/ChatMessageList";
+export { ChatArtifactPanel } from "./dashboard/ChatArtifactPanel";
 export { QuickActions } from "./dashboard/QuickActions";
 export { ActiveProjects } from "./dashboard/ActiveProjects";
 export { ActivityTimeline } from "./dashboard/ActivityTimeline";
@@ -17,6 +18,7 @@ export { TaskStatusChart } from "./dashboard/TaskStatusChart";
 export { UpcomingSchedules } from "./dashboard/UpcomingSchedules";
 export { MyWorkItems } from "./dashboard/MyWorkItems";
 export { ProjectProgress } from "./dashboard/ProjectProgress";
+export { CostOverview } from "./dashboard/CostOverview";
 export {
   formatRelativeTime,
   formatAbsoluteTime,
@@ -57,6 +59,26 @@ export { WorkItemCard } from "./work-items/WorkItemCard";
 export { WorkItemCreateDialog } from "./work-items/WorkItemCreateDialog";
 export { WorkItemDetailPanel } from "./work-items/WorkItemDetailPanel";
 export { WorkItemListView } from "./work-items/WorkItemListView";
+export {
+  AIDecomposeDialog,
+  type AIDecomposeDialogProps,
+} from "./work-items/AIDecomposeDialog";
+
+// Project groups
+export {
+  ProjectGroupCard,
+  ProjectGroupCreateDialog,
+  ProjectGroupList,
+} from "./project-groups";
+export type {
+  ProjectGroupCardProps,
+  ProjectGroupCreateDialogProps,
+  ProjectGroupListProps,
+} from "./project-groups";
+
+// Knowledge graph
+export { KnowledgeGraphCard } from "./knowledge";
+export type { KnowledgeGraphCardProps } from "./knowledge";
 
 // Workflow views
 export { WorkflowCanvas } from "./workflows/WorkflowCanvas";
@@ -78,3 +100,19 @@ export {
   DelayNode,
   workflowNodeTypes,
 } from "./workflows/nodes";
+
+// Code editor
+export { FileTree } from "./code-editor/FileTree";
+export { CodeEditor } from "./code-editor/CodeEditor";
+export { FileTabs, type FileTab } from "./code-editor/FileTabs";
+export { DiffViewer as CodeDiffViewer } from "./code-editor/DiffViewer";
+export { ConflictEditor } from "./code-editor/ConflictEditor";
+
+// Git audit
+export {
+  GitAuditPage,
+  CommitList,
+  FileChangeList,
+  GitChangeSummary,
+  DiffPanel,
+} from "./git-audit";

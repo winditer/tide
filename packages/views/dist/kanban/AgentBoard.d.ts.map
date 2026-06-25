@@ -1,1 +1,1 @@
-{"version":3,"file":"AgentBoard.d.ts","sourceRoot":"","sources":["../../src/kanban/AgentBoard.tsx"],"names":[],"mappings":"AAYA,wBAAgB,UAAU,gCAoIzB"}
+{"version":3,"file":"AgentBoard.d.ts","sourceRoot":"","sources":["../../src/kanban/AgentBoard.tsx"],"names":[],"mappings":"AAYA,MAAM,WAAW,eAAe;IAC9B,OAAO,CAAC,EAAE,MAAM,CAAC;IACjB,SAAS,CAAC,EAAE,MAAM,CAAC;CACpB;AAED,wBAAgB,UAAU,CAAC,EAAE,OAAO,EAAE,SAAS,EAAE,GAAE,eAAoB,+BA2ItE"}

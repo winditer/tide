@@ -1,7 +1,8 @@
 "use client";
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+import { useMemo } from "react";
 import { Button, Select, Input } from "@tide/ui";
-import { useAgents, useProjects, useSessions } from "@tide/core";
+import { useAgents, useProjects, useProjectGroups, useSessions } from "@tide/core";
 const STATUS_OPTIONS = [
     { label: "全部状态", value: "" },
     { label: "排队中", value: "queued" },
@@ -11,6 +12,8 @@ const STATUS_OPTIONS = [
     { label: "失败", value: "failed" },
     { label: "已停止", value: "stopped" },
 ];
+const SCOPE_PROJECT_PREFIX = "project:";
+const SCOPE_GROUP_PREFIX = "group:";
 function shortSession(id) {
     if (!id)
         return "";
@@ -22,29 +25,55 @@ function projectName(cwd) {
 export function TaskFilters({ value, onChange, onReset }) {
     var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l;
     const { data: projectsData } = useProjects();
+    const { data: groupsData } = useProjectGroups();
     const { data: agentsData } = useAgents();
     const { data: sessionsData } = useSessions({
         project: value.project || undefined,
+        group_id: value.group_id || undefined,
         agent_id: value.agent_id || undefined,
         page_size: 200,
     });
-    const projectOptions = [
-        { label: "全部项目", value: "" },
-        ...((_a = projectsData === null || projectsData === void 0 ? void 0 : projectsData.projects) !== null && _a !== void 0 ? _a : []).map((p) => ({
-            label: `${p.name}${p.cwd && p.cwd !== p.name ? `  (${p.cwd})` : ""}`,
-            value: p.cwd,
-        })),
-    ];
+    const projects = (_a = projectsData === null || projectsData === void 0 ? void 0 : projectsData.projects) !== null && _a !== void 0 ? _a : [];
+    const groups = (_b = groupsData === null || groupsData === void 0 ? void 0 : groupsData.groups) !== null && _b !== void 0 ? _b : [];
+    // 统一项目/项目组选择器编码值
+    const scopeValue = value.group_id
+        ? `${SCOPE_GROUP_PREFIX}${value.group_id}`
+        : value.project
+            ? `${SCOPE_PROJECT_PREFIX}${value.project}`
+            : "";
+    const scopeFlatOptions = useMemo(() => [{ label: "全部", value: "" }], []);
+    const scopeGroups = useMemo(() => {
+        const out = [];
+        if (projects.length > 0) {
+            out.push({
+                label: "项目",
+                options: projects.map((p) => ({
+                    value: `${SCOPE_PROJECT_PREFIX}${p.cwd}`,
+                    label: `${p.name}${p.cwd && p.cwd !== p.name ? `  (${p.cwd})` : ""}`,
+                })),
+            });
+        }
+        if (groups.length > 0) {
+            out.push({
+                label: "项目组",
+                options: groups.map((g) => ({
+                    value: `${SCOPE_GROUP_PREFIX}${g.id}`,
+                    label: `${g.name} (${g.member_count})`,
+                })),
+            });
+        }
+        return out;
+    }, [projects, groups]);
     const agentOptions = [
         { label: "全部 Agent", value: "" },
-        ...((_b = agentsData === null || agentsData === void 0 ? void 0 : agentsData.agents) !== null && _b !== void 0 ? _b : []).map((a) => ({
+        ...((_c = agentsData === null || agentsData === void 0 ? void 0 : agentsData.agents) !== null && _c !== void 0 ? _c : []).map((a) => ({
             label: a.name || a.id,
             value: a.id,
         })),
     ];
     const sessionOptions = [
         { label: "全部会话", value: "" },
-        ...((_c = sessionsData === null || sessionsData === void 0 ? void 0 : sessionsData.sessions) !== null && _c !== void 0 ? _c : [])
+        ...((_d = sessionsData === null || sessionsData === void 0 ? void 0 : sessionsData.sessions) !== null && _d !== void 0 ? _d : [])
             .filter((s) => !!s.session_id)
             .map((s) => ({
             label: `${shortSession(s.session_id)}${s.cwd ? ` · ${projectName(s.cwd)}` : ""}${s.agent_id ? ` · ${s.agent_id}` : ""}`,
@@ -54,13 +83,39 @@ export function TaskFilters({ value, onChange, onReset }) {
     const update = (patch) => {
         onChange(Object.assign(Object.assign({}, value), patch));
     };
+    const handleScopeChange = (next) => {
+        if (!next) {
+            // 切换到“全部”时清除 project/group_id，并重置 session 过滤
+            update({ project: undefined, group_id: undefined, session_id: undefined });
+            return;
+        }
+        if (next.startsWith(SCOPE_PROJECT_PREFIX)) {
+            const cwd = next.slice(SCOPE_PROJECT_PREFIX.length);
+            update({
+                project: cwd || undefined,
+                group_id: undefined,
+                // 切换归属后清空会话过滤，避免脏数据
+                session_id: undefined,
+            });
+            return;
+        }
+        if (next.startsWith(SCOPE_GROUP_PREFIX)) {
+            const gid = next.slice(SCOPE_GROUP_PREFIX.length);
+            update({
+                project: undefined,
+                group_id: gid || undefined,
+                session_id: undefined,
+            });
+        }
+    };
     const hasActive = !!value.status ||
         !!value.agent_id ||
         !!value.project ||
+        !!value.group_id ||
         !!value.session_id ||
         !!value.created_after ||
         !!value.created_before;
-    return (_jsx("div", { className: "mb-4 rounded-lg border bg-card/40 p-3", children: _jsxs("div", { className: "flex flex-wrap items-end gap-3", children: [_jsx(FilterField, { label: "\u9879\u76EE", className: "min-w-[150px] flex-1 basis-[160px] max-w-[240px]", children: _jsx(Select, { options: projectOptions, value: (_d = value.project) !== null && _d !== void 0 ? _d : "", onChange: (e) => update({ project: e.target.value || undefined }) }) }), _jsx(FilterField, { label: "\u4F1A\u8BDD", className: "min-w-[150px] flex-1 basis-[160px] max-w-[240px]", children: _jsx(Select, { options: sessionOptions, value: (_e = value.session_id) !== null && _e !== void 0 ? _e : "", onChange: (e) => update({ session_id: e.target.value || undefined }) }) }), _jsx(FilterField, { label: "Agent", className: "w-[120px] flex-shrink-0", children: _jsx(Select, { options: agentOptions, value: (_f = value.agent_id) !== null && _f !== void 0 ? _f : "", onChange: (e) => update({ agent_id: e.target.value || undefined }) }) }), _jsx(FilterField, { label: "\u72B6\u6001", className: "w-[110px] flex-shrink-0", children: _jsx(Select, { options: STATUS_OPTIONS, value: (_g = value.status) !== null && _g !== void 0 ? _g : "", onChange: (e) => update({ status: e.target.value || undefined }) }) }), _jsx(FilterField, { label: "\u521B\u5EFA\u65F6\u95F4", className: "flex-1 min-w-[220px] basis-[240px]", children: _jsxs("div", { className: "flex items-center gap-2", children: [_jsx(Input, { type: "date", className: "min-w-0 flex-1", value: (_j = (_h = value.created_after) === null || _h === void 0 ? void 0 : _h.slice(0, 10)) !== null && _j !== void 0 ? _j : "", onChange: (e) => update({
+    return (_jsx("div", { className: "mb-4 rounded-lg border bg-card/40 p-3", children: _jsxs("div", { className: "flex flex-wrap items-end gap-3", children: [_jsx(FilterField, { label: "\u9879\u76EE / \u9879\u76EE\u7EC4", className: "min-w-[180px] flex-1 basis-[200px] max-w-[240px]", children: _jsx(Select, { options: scopeFlatOptions, groups: scopeGroups, value: scopeValue, onChange: (e) => handleScopeChange(e.target.value) }) }), _jsx(FilterField, { label: "\u4F1A\u8BDD", className: "min-w-[150px] flex-1 basis-[160px] max-w-[180px]", children: _jsx(Select, { options: sessionOptions, value: (_e = value.session_id) !== null && _e !== void 0 ? _e : "", onChange: (e) => update({ session_id: e.target.value || undefined }) }) }), _jsx(FilterField, { label: "Agent", className: "w-[120px] flex-shrink-0", children: _jsx(Select, { options: agentOptions, value: (_f = value.agent_id) !== null && _f !== void 0 ? _f : "", onChange: (e) => update({ agent_id: e.target.value || undefined }) }) }), _jsx(FilterField, { label: "\u72B6\u6001", className: "w-[110px] flex-shrink-0", children: _jsx(Select, { options: STATUS_OPTIONS, value: (_g = value.status) !== null && _g !== void 0 ? _g : "", onChange: (e) => update({ status: e.target.value || undefined }) }) }), _jsx(FilterField, { label: "\u521B\u5EFA\u65F6\u95F4", className: "flex-1 min-w-[280px] basis-[280px]", children: _jsxs("div", { className: "flex items-center gap-2", children: [_jsx(Input, { type: "date", className: "min-w-0 flex-1", value: (_j = (_h = value.created_after) === null || _h === void 0 ? void 0 : _h.slice(0, 10)) !== null && _j !== void 0 ? _j : "", onChange: (e) => update({
                                     created_after: e.target.value
                                         ? `${e.target.value}T00:00:00`
                                         : undefined,
@@ -68,7 +123,7 @@ export function TaskFilters({ value, onChange, onReset }) {
                                     created_before: e.target.value
                                         ? `${e.target.value}T23:59:59`
                                         : undefined,
-                                }) })] }) }), _jsx(Button, { variant: "outline", size: "sm", disabled: !hasActive, onClick: onReset, className: "ml-auto flex-shrink-0 whitespace-nowrap", children: "\u6E05\u9664\u7B5B\u9009" })] }) }));
+                                }) })] }) }), _jsx(Button, { variant: "outline", size: "sm", disabled: !hasActive, onClick: onReset, className: "ml-auto shrink-0 whitespace-nowrap", children: "\u6E05\u9664\u7B5B\u9009" })] }) }));
 }
 function FilterField({ label, children, className, }) {
     return (_jsxs("div", { className: className, children: [_jsx("label", { className: "mb-1 block text-xs font-medium text-muted-foreground", children: label }), children] }));

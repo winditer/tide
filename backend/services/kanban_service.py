@@ -148,6 +148,7 @@ class KanbanService:
                 "id": str(proj.get("id") or cwd),
                 "name": proj.get("name") or cwd.rstrip("/").split("/")[-1] or cwd,
                 "cwd": cwd,
+                "type": "project",
                 "task_count": 0,
                 "active_count": 0,
                 "completed_count": 0,
@@ -167,6 +168,7 @@ class KanbanService:
                     "id": cwd,
                     "name": cwd.rstrip("/").split("/")[-1] or cwd,
                     "cwd": cwd,
+                    "type": "project",
                     "task_count": 0,
                     "active_count": 0,
                     "completed_count": 0,
@@ -221,7 +223,134 @@ class KanbanService:
             all_projects.extend(col)
         await self._enrich_project_cards(all_projects)
 
+        # 7) 合入项目组（与项目平级展示，全部归入 active 列）
+        try:
+            group_cards = await self._build_project_group_cards(workspace_id)
+        except Exception:
+            group_cards = []
+        if group_cards:
+            columns["active"] = group_cards + columns.get("active", [])
+
         return {"columns": columns}
+
+    # ── 项目组卡片构建 ─────────────────────────────────────
+
+    async def _build_project_group_cards(self, workspace_id: str) -> list[dict]:
+        """查询项目组及其成员项目，聚合任务统计后输出为看板卡片。
+
+        项目组无 status 字段，全部归入 active 列；通过 ``type="group"`` 与项目区分。
+        """
+        async with async_session_factory() as session:
+            try:
+                groups_result = await session.execute(
+                    text(
+                        """
+                        SELECT g.id, g.name, g.description, g.created_at, g.updated_at,
+                               COUNT(m.id) AS member_count
+                        FROM project_groups g
+                        LEFT JOIN project_group_members m ON m.group_id = g.id
+                        WHERE g.workspace_id = :ws
+                        GROUP BY g.id
+                        ORDER BY g.created_at DESC
+                        """
+                    ),
+                    {"ws": workspace_id},
+                )
+                group_rows = [dict(r._mapping) for r in groups_result.fetchall()]
+            except OperationalError:
+                return []
+            if not group_rows:
+                return []
+
+            try:
+                members_result = await session.execute(
+                    text(
+                        "SELECT group_id, project_id FROM project_group_members"
+                    )
+                )
+                member_rows = [dict(r._mapping) for r in members_result.fetchall()]
+            except OperationalError:
+                member_rows = []
+
+        # 组 → 成员 project_id 列表
+        group_member_ids: dict[str, list[str]] = {}
+        for r in member_rows:
+            group_member_ids.setdefault(r["group_id"], []).append(r["project_id"])
+
+        # 解码成员 project_id 为 cwd，用于聚合 tasks
+        import base64
+
+        def _decode_pid(pid: str) -> Optional[str]:
+            if not pid:
+                return None
+            try:
+                padded = pid + "=" * (-len(pid) % 4)
+                return base64.urlsafe_b64decode(padded).decode()
+            except Exception:
+                return None
+
+        cards: list[dict] = []
+        for g in group_rows:
+            gid = g["id"]
+            member_pids = group_member_ids.get(gid, [])
+            member_cwds = [c for c in (_decode_pid(p) for p in member_pids) if c]
+
+            agg = {"task_count": 0, "active_count": 0, "completed_count": 0}
+            last_active_dt: Optional[datetime] = None
+            if member_cwds:
+                async with async_session_factory() as session:
+                    agg_result = await session.execute(
+                        text(
+                            f"""
+                            SELECT COUNT(*) AS task_count,
+                                   SUM(CASE WHEN status IN ('running','queued','review') THEN 1 ELSE 0 END) AS active_count,
+                                   SUM(CASE WHEN status IN ('completed','failed','stopped','rejected','approved') THEN 1 ELSE 0 END) AS done_count,
+                                   MAX(created_at) AS last_active_at
+                            FROM tasks
+                            WHERE workspace_id = :ws
+                              AND cwd IN ({','.join(f':c{i}' for i in range(len(member_cwds)))})
+                            """
+                        ),
+                        {"ws": workspace_id, **{f"c{i}": c for i, c in enumerate(member_cwds)}},
+                    )
+                    arow = agg_result.fetchone()
+                    if arow:
+                        amap = dict(arow._mapping)
+                        agg["task_count"] = int(amap.get("task_count") or 0)
+                        agg["active_count"] = int(amap.get("active_count") or 0)
+                        agg["completed_count"] = int(amap.get("done_count") or 0)
+                        last_active_dt = _parse_iso(amap.get("last_active_at"))
+
+            updated_dt = _parse_iso(g.get("updated_at")) or _parse_iso(g.get("created_at"))
+            effective_last = _max_dt(last_active_dt, updated_dt)
+
+            cards.append({
+                "id": gid,
+                "name": g.get("name") or gid,
+                "cwd": None,
+                "type": "group",
+                "status": "active",
+                "archived": False,
+                "description": g.get("description"),
+                "member_count": int(g.get("member_count") or 0),
+                "member_project_ids": member_pids,
+                "task_count": agg["task_count"],
+                "active_count": agg["active_count"],
+                "completed_count": agg["completed_count"],
+                "session_count": 0,
+                "agents": [],
+                "last_active_at": _to_iso(effective_last),
+                "last_activity": _to_iso(effective_last),
+                "work_item_stats": {"total": 0, "completed": 0, "stale_count": 0},
+                "members": [],
+                "workflow_name": None,
+                "versions_count": 0,
+                "active_version": None,
+                "health": "green",
+            })
+
+        cards.sort(key=lambda c: c.get("last_active_at") or "", reverse=True)
+        return cards
 
     # ── 项目卡片数据丰富化 ─────────────────────────────────────
 

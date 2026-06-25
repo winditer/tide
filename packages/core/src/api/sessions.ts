@@ -6,6 +6,8 @@ export type SessionType = "all" | "project" | "chat";
 export interface ListSessionsParams {
   workspace_id?: string;
   project?: string;
+  /** 项目组 id；仅返回属于该项目组的会话 */
+  group_id?: string;
   agent_id?: string;
   type?: SessionType;
   page?: number;
@@ -63,6 +65,8 @@ export interface CreateSessionInput {
   workspace_id?: string;
   /** 会话类型：convo=项目会话，chat=普通对话；可以仅凭 cwd 推断 */
   session_type?: "convo" | "chat";
+  /** 项目组 id；选中项目组时由后端注入多仓库上下文 */
+  group_id?: string;
 }
 
 export interface CreateSessionResult {
@@ -92,6 +96,7 @@ function buildQuery(params?: ListSessionsParams): string {
   const search = new URLSearchParams();
   if (params.workspace_id) search.set("workspace_id", params.workspace_id);
   if (params.project) search.set("project", params.project);
+  if (params.group_id) search.set("group_id", params.group_id);
   if (params.agent_id) search.set("agent_id", params.agent_id);
   if (params.type && params.type !== "all") search.set("type", params.type);
   if (params.page) search.set("page", String(params.page));

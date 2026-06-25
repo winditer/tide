@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { useProjectBoard, useMoveCard } from "@tide/core";
 import type { KanbanColumn, KanbanCard } from "@tide/core";
 import { useQueryClient } from "@tanstack/react-query";
@@ -11,9 +11,20 @@ import { KanbanFilters } from "./KanbanFilters";
 import { EmptyState } from "./EmptyState";
 import { ProjectCard } from "./ProjectCard";
 
-export function ProjectBoard() {
+export interface ProjectBoardProps {
+  /** 按项目组过滤：仅展示组内项目。 */
+  groupId?: string;
+  /** 按单项目过滤：仅展示该项目。 */
+  projectId?: string;
+}
+
+export function ProjectBoard({ groupId, projectId }: ProjectBoardProps = {}) {
   const [search, setSearch] = useState("");
-  const { data, isLoading } = useProjectBoard();
+  const queryParams = useMemo(
+    () => ({ group_id: groupId, project_id: projectId }),
+    [groupId, projectId],
+  );
+  const { data, isLoading } = useProjectBoard(queryParams);
   const moveMutation = useMoveCard();
   const queryClient = useQueryClient();
 
@@ -36,7 +47,7 @@ export function ProjectBoard() {
 
       // Optimistic update
       queryClient.setQueryData(
-        ["kanban", "projects", undefined],
+        ["kanban", "projects", queryParams],
         (old: any) => {
           if (!old?.columns) return old;
           const columns = old.columns.map((col: KanbanColumn) => ({
@@ -75,7 +86,7 @@ export function ProjectBoard() {
         }
       );
     },
-    [moveMutation, queryClient]
+    [moveMutation, queryClient, queryParams]
   );
 
   if (isLoading) {

@@ -1,8 +1,8 @@
 "use client";
-var _a;
 import { jsx as _jsx } from "react/jsx-runtime";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { getAccessToken } from "../stores/auth-store";
 const WsContext = createContext(null);
 export function useWs() {
     const ctx = useContext(WsContext);
@@ -12,7 +12,27 @@ export function useWs() {
     return ctx;
 }
 export { WsContext };
-const WS_URL = (_a = process.env.NEXT_PUBLIC_WS_URL) !== null && _a !== void 0 ? _a : "ws://localhost:8000/ws";
+function getWsBaseUrl() {
+    if (process.env.NEXT_PUBLIC_WS_URL) {
+        return process.env.NEXT_PUBLIC_WS_URL;
+    }
+    if (typeof window === "undefined") {
+        return "";
+    }
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
+    return `${protocol}//${window.location.host}${basePath}/ws`;
+}
+function getWsUrl() {
+    const base = getWsBaseUrl();
+    if (!base)
+        return "";
+    const token = getAccessToken();
+    if (!token)
+        return base;
+    const separator = base.includes("?") ? "&" : "?";
+    return `${base}${separator}token=${encodeURIComponent(token)}`;
+}
 const HEARTBEAT_INTERVAL = 30000;
 const HEARTBEAT_TIMEOUT = 10000;
 const MAX_RECONNECT_DELAY = 30000;
@@ -39,6 +59,10 @@ function handleWsEvent(event, queryClient) {
             queryClient.invalidateQueries({ queryKey: ["tasks"] });
             queryClient.invalidateQueries({ queryKey: ["approvals"] });
             queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+            break;
+        case "security.alert":
+            queryClient.invalidateQueries({ queryKey: ["security-findings"] });
+            queryClient.invalidateQueries({ queryKey: ["security-summary"] });
             break;
         default:
             // Unknown event type — no invalidation
@@ -86,7 +110,10 @@ export function WsProvider({ children }) {
     const connect = useCallback(() => {
         if (!mountedRef.current)
             return;
-        const ws = new WebSocket(WS_URL);
+        const wsUrl = getWsUrl();
+        if (!wsUrl)
+            return;
+        const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
         setStatus("connecting");
         ws.onopen = () => {

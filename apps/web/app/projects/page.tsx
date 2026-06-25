@@ -10,12 +10,15 @@ import {
   useDeleteProject,
   useArchiveProject,
   useUnarchiveProject,
+  useProjectGroups,
   type ProjectInfo,
   type CreateProjectInput,
 } from "@tide/core";
+import { ProjectGroupList, ProjectGroupCreateDialog } from "@tide/views";
 import { useQueryClient } from "@tanstack/react-query";
 
 type DialogMode = "new" | "clone";
+type ViewTab = "projects" | "groups";
 
 function formatTime(iso: string | null) {
   if (!iso) return "—";
@@ -60,13 +63,20 @@ function ProjectsPageContent() {
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const [showArchived, setShowArchived] = useState(false);
+  const [tab, setTab] = useState<ViewTab>(() => {
+    const v = searchParams.get("tab");
+    return v === "groups" ? "groups" : "projects";
+  });
   const { data, isLoading, isError } = useProjects({ show_archived: showArchived });
+  const { data: groupsData } = useProjectGroups();
+  const groupsTotal = groupsData?.groups?.length ?? 0;
   const createMutation = useCreateProject();
   const deleteMutation = useDeleteProject();
   const archiveMutation = useArchiveProject();
   const unarchiveMutation = useUnarchiveProject();
 
   const [dialog, setDialog] = useState<DialogMode | null>(null);
+  const [groupDialogOpen, setGroupDialogOpen] = useState(false);
   const [pendingRemoveId, setPendingRemoveId] = useState<string | null>(null);
   const [pendingArchiveId, setPendingArchiveId] = useState<string | null>(null);
   const handledActionRef = useRef(false);
@@ -118,23 +128,61 @@ function ProjectsPageContent() {
           <div className="min-w-0 flex-1">
             <h1 className="text-2xl font-semibold tracking-tight">项目</h1>
             <p className="text-sm text-muted-foreground mt-1">
-              关注的目录，按活跃排序 · 共 {total} 个项目，{registeredCount} 个已注册
-              {showArchived && archivedCount > 0 ? ` · ${archivedCount} 已归档` : ""}
+              {tab === "projects"
+                ? `关注的目录，按活跃排序 · 共 ${total} 个项目，${registeredCount} 个已注册${
+                    showArchived && archivedCount > 0
+                      ? ` · ${archivedCount} 已归档`
+                      : ""
+                  }`
+                : "将多个仓库聚合为项目组，便于跨仓库工作项编排"}
             </p>
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-2">
-            <Button variant="outline" onClick={() => setShowArchived((v) => !v)}>
-              {showArchived ? "隐藏归档" : "显示归档"}
-            </Button>
-            <Button variant="outline" onClick={() => setDialog("clone")}>
-              ＋ 添加已有
-            </Button>
-            <Button onClick={() => setDialog("new")}>＋ 新建项目</Button>
+            {tab === "projects" ? (
+              <>
+                <Button
+                  variant="outline"
+                  onClick={() => setShowArchived((v) => !v)}
+                >
+                  {showArchived ? "隐藏归档" : "显示归档"}
+                </Button>
+                <Button variant="outline" onClick={() => setDialog("clone")}>
+                  ＋ 添加已有
+                </Button>
+                <Button onClick={() => setDialog("new")}>＋ 新建项目</Button>
+              </>
+            ) : (
+              <Button onClick={() => setGroupDialogOpen(true)}>＋ 新建项目组</Button>
+            )}
           </div>
+        </div>
+
+        {/* Tabs */}
+        <div className="mt-5 flex items-center gap-1 border-b border-border/60">
+          <TabButton
+            active={tab === "projects"}
+            onClick={() => setTab("projects")}
+          >
+            所有项目
+            <span className="ml-2 text-xs text-muted-foreground">{total}</span>
+          </TabButton>
+          <TabButton
+            active={tab === "groups"}
+            onClick={() => setTab("groups")}
+          >
+            项目组
+            <span className="ml-2 text-xs text-muted-foreground">{groupsTotal}</span>
+          </TabButton>
         </div>
       </header>
 
-      {isLoading ? (
+      {tab === "groups" ? (
+        <ProjectGroupList
+          projects={projects}
+          onRequestCreate={() => setGroupDialogOpen(true)}
+          onSelectGroup={(g) => router.push(`/projects/groups/${g.id}`)}
+        />
+      ) : isLoading ? (
         <div className="py-16 text-center text-sm text-muted-foreground">
           加载中…
         </div>
@@ -196,6 +244,13 @@ function ProjectsPageContent() {
             await createMutation.mutateAsync(input);
             setDialog(null);
           }}
+        />
+      )}
+
+      {groupDialogOpen && (
+        <ProjectGroupCreateDialog
+          projects={projects}
+          onClose={() => setGroupDialogOpen(false)}
         />
       )}
     </main>
@@ -541,5 +596,33 @@ function Field({
       </span>
       {children}
     </label>
+  );
+}
+
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        "relative px-4 py-2 text-sm font-medium transition-colors " +
+        (active
+          ? "text-foreground"
+          : "text-muted-foreground hover:text-foreground")
+      }
+    >
+      {children}
+      {active && (
+        <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-foreground" />
+      )}
+    </button>
   );
 }

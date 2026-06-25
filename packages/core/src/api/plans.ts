@@ -14,6 +14,8 @@ export interface ListPlansParams {
   project?: string;
   /** 按关联子任务的 session_id 筛选 */
   session_id?: string;
+  /** 按 plans.group_id 精确筛选项目组 */
+  group_id?: string;
   limit?: number;
   offset?: number;
 }
@@ -23,6 +25,8 @@ export interface CreatePlanParams {
   workspace_id?: string;
   cwd?: string;
   model?: string;
+  /** 项目组工作区 ID：提供后默认 cwd 使用组 primary 项目路径 */
+  group_id?: string;
 }
 
 export function getPlans(params?: ListPlansParams): Promise<Plan[]> {
@@ -31,6 +35,7 @@ export function getPlans(params?: ListPlansParams): Promise<Plan[]> {
   if (params?.status) search.set("status", params.status);
   if (params?.project) search.set("project", params.project);
   if (params?.session_id) search.set("session_id", params.session_id);
+  if (params?.group_id) search.set("group_id", params.group_id);
   if (params?.limit != null) search.set("limit", String(params.limit));
   if (params?.offset != null) search.set("offset", String(params.offset));
   const q = search.toString();

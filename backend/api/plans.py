@@ -78,14 +78,36 @@ async def create_plan(
 ):
     """创建 Plan"""
     _ensure_not_viewer(current_user)
-    await check_cwd_write_permission(body.cwd, current_user)
+    # 项目组模式下未显式传 cwd 时，查出 primary 项目路径作为写入权限检查与 member 同步的默认 cwd
+    effective_cwd: Optional[str] = body.cwd
+    if body.group_id and not effective_cwd:
+        try:
+            from backend.services.project_group_service import (
+                project_group_service,
+            )
+
+            group_projects = await project_group_service.get_group_projects(
+                body.group_id
+            )
+            if group_projects:
+                primary = next(
+                    (p for p in group_projects if p.get("role") == "primary"),
+                    group_projects[0],
+                )
+                primary_cwd = (primary or {}).get("cwd")
+                if primary_cwd:
+                    effective_cwd = primary_cwd
+        except Exception:  # noqa: BLE001
+            effective_cwd = body.cwd
+    await check_cwd_write_permission(effective_cwd, current_user)
     # 确保 member 在 project_members 中存在对应项目的成员记录，避免列表过滤把自己刚创建的 Plan 过滤掉
-    await _ensure_project_membership(body.cwd, current_user)
+    await _ensure_project_membership(effective_cwd, current_user)
     result = await plan_service.create_plan(
         workspace_id=body.workspace_id,
         definition_json=body.definition.model_dump(),
         cwd=body.cwd,
         model=body.model,
+        group_id=body.group_id,
     )
     if not result:
         raise HTTPException(status_code=500, detail="Failed to create plan")
@@ -98,6 +120,7 @@ async def list_plans(
     status: Optional[str] = Query(None),
     project: Optional[str] = Query(None, description="按 cwd 精确筛选"),
     session_id: Optional[str] = Query(None, description="按关联 session 筛选（通过 plan_tasks.tasks.session_id）"),
+    group_id: Optional[str] = Query(None, description="按 plans.group_id 精确筛选项目组"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     current_user=Depends(get_optional_user),
@@ -106,6 +129,7 @@ async def list_plans(
 
     - `project`: 按 cwd 精确匹配（值通常来自 /api/projects 的 cwd 字段）
     - `session_id`: 按 plan 关联子任务的 session_id 筛选
+    - `group_id`: 按 plan.group_id 精确匹配（项目组工作区）
     """
     accessible_pids = await get_accessible_project_ids(current_user)
     items = await plan_service.list_plans(
@@ -113,6 +137,7 @@ async def list_plans(
         status=status,
         project=project,
         session_id=session_id,
+        group_id=group_id,
         limit=limit,
         offset=offset,
     )

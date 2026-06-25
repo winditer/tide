@@ -1,0 +1,3853 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-06-24T02:53:15Z",
+  "source_file": "backend/db/init.sql",
+  "tables": [
+    {
+      "name": "actors",
+      "description": "actors 统一身份表",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "pk": true,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "type",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": "type IN ('member', 'agent', 'lark_user'"
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "avatar_url",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "metadata",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        }
+      ],
+      "indexes": [],
+      "fks": []
+    },
+    {
+      "name": "workspaces",
+      "description": "workspaces 工作空间",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "pk": true,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "slug",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "owner_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": "actors(id)",
+          "check": null
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        }
+      ],
+      "indexes": [],
+      "fks": [
+        {
+          "column": "owner_id",
+          "ref_table": "actors",
+          "ref_column": "id"
+        }
+      ]
+    },
+    {
+      "name": "tasks",
+      "description": "tasks 统一任务表",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "pk": true,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": "workspaces(id)",
+          "check": null
+        },
+        {
+          "name": "plan_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "workflow_run_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "workflow_node_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "assignee_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": "actors(id)",
+          "check": null
+        },
+        {
+          "name": "assignee_type",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": "'agent'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "chat_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "parent_task_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": "tasks(id)",
+          "check": null
+        },
+        {
+          "name": "prompt",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "cwd",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "group_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "model",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "agent_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "session_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": "'queued'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "result",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "attachments",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "output_path",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "worktree_path",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "branch_name",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "diff_summary",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "test_result",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "commit_hash",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "commit_message",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "merge_status",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "priority",
+          "type": "INTEGER",
+          "pk": false,
+          "not_null": false,
+          "default": "0",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "labels",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "started_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "completed_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "duration_ms",
+          "type": "INTEGER",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "token_input",
+          "type": "INTEGER",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null,
+          "source": "engine.py:ALTER"
+        },
+        {
+          "name": "token_output",
+          "type": "INTEGER",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null,
+          "source": "engine.py:ALTER"
+        },
+        {
+          "name": "estimated_cost_usd",
+          "type": "REAL",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null,
+          "source": "engine.py:ALTER"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_tasks_workspace",
+          "columns": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "idx_tasks_status",
+          "columns": [
+            "workspace_id",
+            "status"
+          ]
+        },
+        {
+          "name": "idx_tasks_plan",
+          "columns": [
+            "plan_id"
+          ]
+        },
+        {
+          "name": "idx_tasks_assignee",
+          "columns": [
+            "assignee_id"
+          ]
+        }
+      ],
+      "fks": [
+        {
+          "column": "workspace_id",
+          "ref_table": "workspaces",
+          "ref_column": "id"
+        },
+        {
+          "column": "assignee_id",
+          "ref_table": "actors",
+          "ref_column": "id"
+        },
+        {
+          "column": "parent_task_id",
+          "ref_table": "tasks",
+          "ref_column": "id"
+        }
+      ]
+    },
+    {
+      "name": "task_events",
+      "description": "task_events 任务事件日志",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "pk": true,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "task_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": "tasks(id)",
+          "check": null
+        },
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": "workspaces(id)",
+          "check": null
+        },
+        {
+          "name": "actor_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": "actors(id)",
+          "check": null
+        },
+        {
+          "name": "event_type",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "payload",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_events_task",
+          "columns": [
+            "task_id"
+          ]
+        },
+        {
+          "name": "idx_events_time",
+          "columns": [
+            "workspace_id",
+            "created_at"
+          ]
+        }
+      ],
+      "fks": [
+        {
+          "column": "task_id",
+          "ref_table": "tasks",
+          "ref_column": "id"
+        },
+        {
+          "column": "workspace_id",
+          "ref_table": "workspaces",
+          "ref_column": "id"
+        },
+        {
+          "column": "actor_id",
+          "ref_table": "actors",
+          "ref_column": "id"
+        }
+      ]
+    },
+    {
+      "name": "plans",
+      "description": "plans Plan定义",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "pk": true,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": "workspaces(id)",
+          "check": null
+        },
+        {
+          "name": "chat_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "cwd",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "model",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": "'active'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "max_parallel",
+          "type": "INTEGER",
+          "pk": false,
+          "not_null": false,
+          "default": "3",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "definition",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "group_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "completed_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        }
+      ],
+      "indexes": [],
+      "fks": [
+        {
+          "column": "workspace_id",
+          "ref_table": "workspaces",
+          "ref_column": "id"
+        }
+      ]
+    },
+    {
+      "name": "plan_tasks",
+      "description": "plan_tasks Plan子任务关联",
+      "columns": [
+        {
+          "name": "plan_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": "plans(id)",
+          "check": null
+        },
+        {
+          "name": "task_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": "tasks(id)",
+          "check": null
+        },
+        {
+          "name": "task_index",
+          "type": "INTEGER",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "phase",
+          "type": "INTEGER",
+          "pk": false,
+          "not_null": false,
+          "default": "0",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "depends_on",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        }
+      ],
+      "indexes": [],
+      "fks": [
+        {
+          "column": "plan_id",
+          "ref_table": "plans",
+          "ref_column": "id"
+        },
+        {
+          "column": "task_id",
+          "ref_table": "tasks",
+          "ref_column": "id"
+        }
+      ]
+    },
+    {
+      "name": "approvals",
+      "description": "approvals 审批",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "pk": true,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "task_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": "tasks(id)",
+          "check": null
+        },
+        {
+          "name": "plan_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": "workspaces(id)",
+          "check": null
+        },
+        {
+          "name": "chat_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "type",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": "'unknown'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "detail",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": "'{}'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": "'pending'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "operator_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "created_at",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": "(datetime('now'))",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "resolved_at",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_approvals_task",
+          "columns": [
+            "task_id"
+          ]
+        },
+        {
+          "name": "idx_approvals_workspace_status",
+          "columns": [
+            "workspace_id",
+            "status"
+          ]
+        }
+      ],
+      "fks": [
+        {
+          "column": "task_id",
+          "ref_table": "tasks",
+          "ref_column": "id"
+        },
+        {
+          "column": "workspace_id",
+          "ref_table": "workspaces",
+          "ref_column": "id"
+        },
+        {
+          "column": "task_id",
+          "ref_table": "tasks",
+          "ref_column": "id"
+        }
+      ]
+    },
+    {
+      "name": "schedules",
+      "description": "schedules 定时任务",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "pk": true,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": "workspaces(id)",
+          "check": null
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "description",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "trigger_type",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": "trigger_type IN ('cron', 'interval', 'date'"
+        },
+        {
+          "name": "trigger_config",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "task_type",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": "task_type IN ('agent', 'plan', 'workflow', 'status', 'custom'"
+        },
+        {
+          "name": "task_config",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "enabled",
+          "type": "INTEGER",
+          "pk": false,
+          "not_null": false,
+          "default": "1",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "last_run_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "next_run_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "run_count",
+          "type": "INTEGER",
+          "pk": false,
+          "not_null": false,
+          "default": "0",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "updated_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        }
+      ],
+      "indexes": [],
+      "fks": [
+        {
+          "column": "workspace_id",
+          "ref_table": "workspaces",
+          "ref_column": "id"
+        }
+      ]
+    },
+    {
+      "name": "schedule_runs",
+      "description": "schedule_runs 定时任务执行记录",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "pk": true,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "schedule_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": "schedules(id)",
+          "check": null
+        },
+        {
+          "name": "task_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": "tasks(id)",
+          "check": null
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": "'running'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "trigger_type",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "started_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "completed_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "result",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "error",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        }
+      ],
+      "indexes": [],
+      "fks": [
+        {
+          "column": "schedule_id",
+          "ref_table": "schedules",
+          "ref_column": "id"
+        },
+        {
+          "column": "task_id",
+          "ref_table": "tasks",
+          "ref_column": "id"
+        }
+      ]
+    },
+    {
+      "name": "workflows",
+      "description": "workflows 工作流定义",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "pk": true,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": "workspaces(id)",
+          "check": null
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "description",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "definition",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "version",
+          "type": "INTEGER",
+          "pk": false,
+          "not_null": false,
+          "default": "1",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "enabled",
+          "type": "INTEGER",
+          "pk": false,
+          "not_null": false,
+          "default": "1",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "updated_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        }
+      ],
+      "indexes": [],
+      "fks": [
+        {
+          "column": "workspace_id",
+          "ref_table": "workspaces",
+          "ref_column": "id"
+        }
+      ]
+    },
+    {
+      "name": "workflow_runs",
+      "description": "workflow_runs 工作流运行实例",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "pk": true,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "workflow_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": "workflows(id)",
+          "check": null
+        },
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": "workspaces(id)",
+          "check": null
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": "'running'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "current_node_ids",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "context",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "trigger_type",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": "'manual'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "started_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "completed_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        }
+      ],
+      "indexes": [],
+      "fks": [
+        {
+          "column": "workflow_id",
+          "ref_table": "workflows",
+          "ref_column": "id"
+        },
+        {
+          "column": "workspace_id",
+          "ref_table": "workspaces",
+          "ref_column": "id"
+        }
+      ]
+    },
+    {
+      "name": "workflow_node_runs",
+      "description": "workflow_node_runs 工作流节点执行记录",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "pk": true,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "run_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": "workflow_runs(id)",
+          "check": null
+        },
+        {
+          "name": "node_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "task_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": "tasks(id)",
+          "check": null
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": "'pending'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "started_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "completed_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "output",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "error",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        }
+      ],
+      "indexes": [],
+      "fks": [
+        {
+          "column": "run_id",
+          "ref_table": "workflow_runs",
+          "ref_column": "id"
+        },
+        {
+          "column": "task_id",
+          "ref_table": "tasks",
+          "ref_column": "id"
+        }
+      ]
+    },
+    {
+      "name": "conversations",
+      "description": "conversations 会话管理",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "pk": true,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "chat_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "--",
+          "type": "Lark",
+          "pk": false,
+          "not_null": false,
+          "default": "'codex'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "--",
+          "type": "当前使用的",
+          "pk": false,
+          "not_null": false,
+          "default": "''",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "--",
+          "type": "当前使用的模型",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "--",
+          "type": "最近一次",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "--",
+          "type": "工作目录",
+          "pk": false,
+          "not_null": false,
+          "default": "'active'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "--",
+          "type": "active",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "closed",
+          "type": "last_active_at",
+          "pk": false,
+          "not_null": false,
+          "default": "(datetime('now'))",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "created_at",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": "(datetime('now'))",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "metadata",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": "'{}'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "cwd",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null,
+          "source": "engine.py:ALTER"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_conversations_workspace",
+          "columns": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "idx_conversations_chat",
+          "columns": [
+            "chat_id"
+          ]
+        },
+        {
+          "name": "idx_conversations_status",
+          "columns": [
+            "workspace_id",
+            "status"
+          ]
+        }
+      ],
+      "fks": []
+    },
+    {
+      "name": "project_settings",
+      "description": "project_settings 项目设置（存储项目绑定的工作流等配置）",
+      "columns": [
+        {
+          "name": "project_id",
+          "type": "TEXT",
+          "pk": true,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "workflow_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "default_assignee",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "metadata",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "updated_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        }
+      ],
+      "indexes": [],
+      "fks": []
+    },
+    {
+      "name": "versions",
+      "description": "versions 版本（项目级版本管理）",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "pk": true,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "project_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "description",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": "'active'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "--",
+          "type": "active",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "updated_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_versions_project",
+          "columns": [
+            "project_id"
+          ]
+        }
+      ],
+      "fks": []
+    },
+    {
+      "name": "work_items",
+      "description": "work_items 工作项",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "pk": true,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "project_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "workflow_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "current_node_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "title",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "description",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "priority",
+          "type": "INTEGER",
+          "pk": false,
+          "not_null": false,
+          "default": "0",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "assignee",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "tags",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "source_type",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": "'manual'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "source_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "metadata",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "version_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": "versions(id)",
+          "check": null
+        },
+        {
+          "name": "started_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "completed_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "updated_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "group_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null,
+          "source": "engine.py:ALTER"
+        }
+      ],
+      "indexes": [],
+      "fks": [
+        {
+          "column": "version_id",
+          "ref_table": "versions",
+          "ref_column": "id"
+        }
+      ]
+    },
+    {
+      "name": "work_item_transitions",
+      "description": "work_item_transitions 工作项流转记录",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "pk": true,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "work_item_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": "work_items(id)",
+          "check": null
+        },
+        {
+          "name": "from_node_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "to_node_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "trigger_type",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": "'manual'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "task_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "operator",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "output",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        }
+      ],
+      "indexes": [],
+      "fks": [
+        {
+          "column": "work_item_id",
+          "ref_table": "work_items",
+          "ref_column": "id"
+        }
+      ]
+    },
+    {
+      "name": "users",
+      "description": "用户表",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "pk": true,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "username",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "email",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "password_hash",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "--",
+          "type": "Lark",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "avatar_url",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "role",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": "'member'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "--",
+          "type": "admin",
+          "pk": false,
+          "not_null": false,
+          "default": "'active'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "--",
+          "type": "active",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "lark_union_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": "'default'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "last_login_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "updated_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_users_lark_open_id",
+          "columns": [
+            "lark_open_id"
+          ]
+        }
+      ],
+      "fks": []
+    },
+    {
+      "name": "user_sessions",
+      "description": "用户会话表（管理 refresh token）",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "pk": true,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "user_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": "users(id)",
+          "check": null
+        },
+        {
+          "name": "refresh_token_hash",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "ip_address",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "user_agent",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "is_active",
+          "type": "INTEGER",
+          "pk": false,
+          "not_null": false,
+          "default": "1",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "expires_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "last_used_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_user_sessions_user_id",
+          "columns": [
+            "user_id"
+          ]
+        },
+        {
+          "name": "idx_user_sessions_active",
+          "columns": [
+            "is_active",
+            "expires_at"
+          ]
+        }
+      ],
+      "fks": [
+        {
+          "column": "user_id",
+          "ref_table": "users",
+          "ref_column": "id"
+        }
+      ]
+    },
+    {
+      "name": "project_members",
+      "description": "项目成员表（项目级隔离）",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "pk": true,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "project_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "user_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": "users(id)",
+          "check": null
+        },
+        {
+          "name": "role",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": "'member'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "--",
+          "type": "owner",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_project_members_user",
+          "columns": [
+            "user_id"
+          ]
+        },
+        {
+          "name": "idx_project_members_project",
+          "columns": [
+            "project_id"
+          ]
+        }
+      ],
+      "fks": [
+        {
+          "column": "user_id",
+          "ref_table": "users",
+          "ref_column": "id"
+        }
+      ]
+    },
+    {
+      "name": "remote_agents",
+      "description": "A2A Remote Agent Support",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "pk": true,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "description",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "agent_card_url",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "agent_card_json",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "endpoint_url",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "protocol_binding",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": "'JSONRPC'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "protocol_version",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": "'1.0'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "auth_type",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": "'bearer'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "auth_credentials",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "auth_header_name",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "capabilities_streaming",
+          "type": "BOOLEAN",
+          "pk": false,
+          "not_null": false,
+          "default": "FALSE",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "capabilities_push_notifications",
+          "type": "BOOLEAN",
+          "pk": false,
+          "not_null": false,
+          "default": "FALSE",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "skills_json",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "approval_required",
+          "type": "BOOLEAN",
+          "pk": false,
+          "not_null": false,
+          "default": "TRUE",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "approval_policy",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": "'on-request'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "timeout_ms",
+          "type": "INTEGER",
+          "pk": false,
+          "not_null": false,
+          "default": "300000",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "max_retries",
+          "type": "INTEGER",
+          "pk": false,
+          "not_null": false,
+          "default": "2",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": "'active'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "last_health_check",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "last_error",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "created_by",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "updated_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        }
+      ],
+      "indexes": [],
+      "fks": []
+    },
+    {
+      "name": "a2a_task_mapping",
+      "description": "",
+      "columns": [
+        {
+          "name": "local_task_id",
+          "type": "TEXT",
+          "pk": true,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "remote_task_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "remote_context_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "agent_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        }
+      ],
+      "indexes": [],
+      "fks": []
+    },
+    {
+      "name": "skills",
+      "description": "Skills 知识库",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "pk": true,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": "workspaces(id)",
+          "check": null
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "slug",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "description",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "category",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": "'general'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "tags",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "content",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "version",
+          "type": "INTEGER",
+          "pk": false,
+          "not_null": false,
+          "default": "1",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "enabled",
+          "type": "INTEGER",
+          "pk": false,
+          "not_null": false,
+          "default": "1",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "source",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": "'custom'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "updated_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_skills_workspace",
+          "columns": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "idx_skills_category",
+          "columns": [
+            "workspace_id",
+            "category"
+          ]
+        }
+      ],
+      "fks": [
+        {
+          "column": "workspace_id",
+          "ref_table": "workspaces",
+          "ref_column": "id"
+        }
+      ]
+    },
+    {
+      "name": "rules",
+      "description": "Rules 规则引擎",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "pk": true,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": "workspaces(id)",
+          "check": null
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "scope",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": "'global'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "scope_value",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "project_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "content",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "priority",
+          "type": "INTEGER",
+          "pk": false,
+          "not_null": false,
+          "default": "0",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "enabled",
+          "type": "INTEGER",
+          "pk": false,
+          "not_null": false,
+          "default": "1",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "source",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": "'custom'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "updated_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_rules_workspace",
+          "columns": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "idx_rules_scope",
+          "columns": [
+            "workspace_id",
+            "scope"
+          ]
+        }
+      ],
+      "fks": [
+        {
+          "column": "workspace_id",
+          "ref_table": "workspaces",
+          "ref_column": "id"
+        }
+      ]
+    },
+    {
+      "name": "hooks",
+      "description": "Hooks 事件驱动",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "pk": true,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": "workspaces(id)",
+          "check": null
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "event",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "action_type",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "action_config",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "conditions",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "priority",
+          "type": "INTEGER",
+          "pk": false,
+          "not_null": false,
+          "default": "0",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "enabled",
+          "type": "INTEGER",
+          "pk": false,
+          "not_null": false,
+          "default": "1",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "updated_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_hooks_event",
+          "columns": [
+            "workspace_id",
+            "event"
+          ]
+        }
+      ],
+      "fks": [
+        {
+          "column": "workspace_id",
+          "ref_table": "workspaces",
+          "ref_column": "id"
+        }
+      ]
+    },
+    {
+      "name": "security_rules",
+      "description": "Security 安全审查",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "pk": true,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": "workspaces(id)",
+          "check": null
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "category",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "pattern",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "severity",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": "'medium'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "description",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "remediation",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "enabled",
+          "type": "INTEGER",
+          "pk": false,
+          "not_null": false,
+          "default": "1",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_security_rules_workspace",
+          "columns": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "idx_security_rules_category",
+          "columns": [
+            "workspace_id",
+            "category"
+          ]
+        }
+      ],
+      "fks": [
+        {
+          "column": "workspace_id",
+          "ref_table": "workspaces",
+          "ref_column": "id"
+        }
+      ]
+    },
+    {
+      "name": "security_findings",
+      "description": "",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "pk": true,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": "workspaces(id)",
+          "check": null
+        },
+        {
+          "name": "task_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": "tasks(id)",
+          "check": null
+        },
+        {
+          "name": "rule_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": "security_rules(id)",
+          "check": null
+        },
+        {
+          "name": "category",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "severity",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "snippet",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "location",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "description",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "remediation",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": "'open'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "dismissed_by",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "dismissed_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_security_findings_task",
+          "columns": [
+            "task_id"
+          ]
+        },
+        {
+          "name": "idx_security_findings_workspace",
+          "columns": [
+            "workspace_id",
+            "status"
+          ]
+        }
+      ],
+      "fks": [
+        {
+          "column": "workspace_id",
+          "ref_table": "workspaces",
+          "ref_column": "id"
+        },
+        {
+          "column": "task_id",
+          "ref_table": "tasks",
+          "ref_column": "id"
+        },
+        {
+          "column": "rule_id",
+          "ref_table": "security_rules",
+          "ref_column": "id"
+        }
+      ]
+    },
+    {
+      "name": "project_groups",
+      "description": "项目组定义",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "pk": true,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": "workspaces(id)",
+          "check": null
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "description",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "created_by",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "updated_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "workflow_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null,
+          "source": "engine.py:ALTER"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_project_groups_workspace",
+          "columns": [
+            "workspace_id"
+          ]
+        }
+      ],
+      "fks": [
+        {
+          "column": "workspace_id",
+          "ref_table": "workspaces",
+          "ref_column": "id"
+        }
+      ]
+    },
+    {
+      "name": "project_group_members",
+      "description": "项目组成员（关联项目）",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "pk": true,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "group_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": "project_groups(id)",
+          "check": null
+        },
+        {
+          "name": "project_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "role",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": "'member'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "display_order",
+          "type": "INTEGER",
+          "pk": false,
+          "not_null": false,
+          "default": "0",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "added_at",
+          "type": "TIMESTAMP",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_pgm_group",
+          "columns": [
+            "group_id"
+          ]
+        }
+      ],
+      "fks": [
+        {
+          "column": "group_id",
+          "ref_table": "project_groups",
+          "ref_column": "id"
+        }
+      ]
+    },
+    {
+      "name": "project_group_user_members",
+      "description": "项目组用户成员（关联用户，与 project_members 对称）",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "pk": true,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "group_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "user_id",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": true,
+          "default": null,
+          "fk": "users(id)",
+          "check": null
+        },
+        {
+          "name": "role",
+          "type": "TEXT",
+          "pk": false,
+          "not_null": false,
+          "default": "'member'",
+          "fk": null,
+          "check": null
+        },
+        {
+          "name": "--",
+          "type": "owner",
+          "pk": false,
+          "not_null": false,
+          "default": "CURRENT_TIMESTAMP",
+          "fk": null,
+          "check": null
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_pgum_user",
+          "columns": [
+            "user_id"
+          ]
+        },
+        {
+          "name": "idx_pgum_group",
+          "columns": [
+            "group_id"
+          ]
+        }
+      ],
+      "fks": [
+        {
+          "column": "user_id",
+          "ref_table": "users",
+          "ref_column": "id"
+        }
+      ]
+    }
+  ],
+  "foreign_keys": [
+    {
+      "from_table": "workspaces",
+      "from_column": "owner_id",
+      "to_table": "actors",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "tasks",
+      "from_column": "workspace_id",
+      "to_table": "workspaces",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "tasks",
+      "from_column": "assignee_id",
+      "to_table": "actors",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "tasks",
+      "from_column": "parent_task_id",
+      "to_table": "tasks",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "task_events",
+      "from_column": "task_id",
+      "to_table": "tasks",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "task_events",
+      "from_column": "workspace_id",
+      "to_table": "workspaces",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "task_events",
+      "from_column": "actor_id",
+      "to_table": "actors",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "plans",
+      "from_column": "workspace_id",
+      "to_table": "workspaces",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "plan_tasks",
+      "from_column": "plan_id",
+      "to_table": "plans",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "plan_tasks",
+      "from_column": "task_id",
+      "to_table": "tasks",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "approvals",
+      "from_column": "task_id",
+      "to_table": "tasks",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "approvals",
+      "from_column": "workspace_id",
+      "to_table": "workspaces",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "approvals",
+      "from_column": "task_id",
+      "to_table": "tasks",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "schedules",
+      "from_column": "workspace_id",
+      "to_table": "workspaces",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "schedule_runs",
+      "from_column": "schedule_id",
+      "to_table": "schedules",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "schedule_runs",
+      "from_column": "task_id",
+      "to_table": "tasks",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "workflows",
+      "from_column": "workspace_id",
+      "to_table": "workspaces",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "workflow_runs",
+      "from_column": "workflow_id",
+      "to_table": "workflows",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "workflow_runs",
+      "from_column": "workspace_id",
+      "to_table": "workspaces",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "workflow_node_runs",
+      "from_column": "run_id",
+      "to_table": "workflow_runs",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "workflow_node_runs",
+      "from_column": "task_id",
+      "to_table": "tasks",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "work_items",
+      "from_column": "version_id",
+      "to_table": "versions",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "work_item_transitions",
+      "from_column": "work_item_id",
+      "to_table": "work_items",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "user_sessions",
+      "from_column": "user_id",
+      "to_table": "users",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "project_members",
+      "from_column": "user_id",
+      "to_table": "users",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "skills",
+      "from_column": "workspace_id",
+      "to_table": "workspaces",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "rules",
+      "from_column": "workspace_id",
+      "to_table": "workspaces",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "hooks",
+      "from_column": "workspace_id",
+      "to_table": "workspaces",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "security_rules",
+      "from_column": "workspace_id",
+      "to_table": "workspaces",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "security_findings",
+      "from_column": "workspace_id",
+      "to_table": "workspaces",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "security_findings",
+      "from_column": "task_id",
+      "to_table": "tasks",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "security_findings",
+      "from_column": "rule_id",
+      "to_table": "security_rules",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "project_groups",
+      "from_column": "workspace_id",
+      "to_table": "workspaces",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "project_group_members",
+      "from_column": "group_id",
+      "to_table": "project_groups",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    },
+    {
+      "from_table": "project_group_user_members",
+      "from_column": "user_id",
+      "to_table": "users",
+      "to_column": "id",
+      "relationship": "many-to-one"
+    }
+  ],
+  "entity_groups": [
+    {
+      "name": "核心实体",
+      "tables": [
+        "actors",
+        "workspaces",
+        "tasks",
+        "task_events",
+        "plans",
+        "plan_tasks",
+        "approvals",
+        "schedules",
+        "schedule_runs",
+        "workflows",
+        "workflow_runs",
+        "workflow_node_runs",
+        "conversations",
+        "project_settings",
+        "versions",
+        "work_items",
+        "work_item_transitions"
+      ]
+    },
+    {
+      "name": "认证与权限",
+      "tables": [
+        "users",
+        "user_sessions",
+        "project_members"
+      ]
+    },
+    {
+      "name": "A2A Remote Agent Support",
+      "tables": [
+        "remote_agents",
+        "a2a_task_mapping"
+      ]
+    },
+    {
+      "name": "Skills 知识库",
+      "tables": [
+        "skills"
+      ]
+    },
+    {
+      "name": "Rules 规则引擎",
+      "tables": [
+        "rules"
+      ]
+    },
+    {
+      "name": "Hooks 事件驱动",
+      "tables": [
+        "hooks"
+      ]
+    },
+    {
+      "name": "Security 安全审查",
+      "tables": [
+        "security_rules",
+        "security_findings"
+      ]
+    },
+    {
+      "name": "项目组（Project Groups）",
+      "tables": [
+        "project_groups",
+        "project_group_members",
+        "project_group_user_members"
+      ]
+    }
+  ],
+  "stats": {
+    "total_tables": 30,
+    "total_columns": 319,
+    "total_foreign_keys": 35,
+    "total_indexes": 30
+  }
+}

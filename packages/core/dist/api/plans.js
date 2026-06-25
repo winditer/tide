@@ -5,6 +5,12 @@ export function getPlans(params) {
         search.set("workspace_id", params.workspace_id);
     if (params === null || params === void 0 ? void 0 : params.status)
         search.set("status", params.status);
+    if (params === null || params === void 0 ? void 0 : params.project)
+        search.set("project", params.project);
+    if (params === null || params === void 0 ? void 0 : params.session_id)
+        search.set("session_id", params.session_id);
+    if (params === null || params === void 0 ? void 0 : params.group_id)
+        search.set("group_id", params.group_id);
     if ((params === null || params === void 0 ? void 0 : params.limit) != null)
         search.set("limit", String(params.limit));
     if ((params === null || params === void 0 ? void 0 : params.offset) != null)

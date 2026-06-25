@@ -2,8 +2,8 @@
 
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Button, Select } from "@tide/ui";
-import { usePlans, useProjects } from "@tide/core";
+import { Button, Select, type SelectOptionGroup } from "@tide/ui";
+import { usePlans, useProjects, useProjectGroups } from "@tide/core";
 import { PlanList, PlanCreateForm } from "@tide/views";
 
 const STATUS_FILTERS = [
@@ -13,12 +13,16 @@ const STATUS_FILTERS = [
   { label: "Stopped", value: "stopped" },
 ];
 
+const SCOPE_PROJECT_PREFIX = "project:";
+const SCOPE_GROUP_PREFIX = "group:";
+const SCOPE_ALL = "";
+
 function PlansPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
   const [status, setStatus] = useState("");
-  const [project, setProject] = useState("");
+  const [scopeValue, setScopeValue] = useState<string>(SCOPE_ALL);
   const [showCreate, setShowCreate] = useState(false);
 
   // Auto-open create dialog when ?action=create is present
@@ -31,26 +35,58 @@ function PlansPageInner() {
   }, [searchParams, router]);
 
   const { data: projectsData } = useProjects();
-  const projectOptions = useMemo(() => {
-    return [
-      { label: "全部项目", value: "" },
-      ...(projectsData?.projects ?? []).map((p) => ({
-        label: p.name === p.cwd ? p.cwd : `${p.name}  ·  ${p.cwd}`,
-        value: p.cwd,
-      })),
-    ];
-  }, [projectsData]);
+  const { data: groupsData } = useProjectGroups();
+  const projects = useMemo(
+    () => projectsData?.projects ?? [],
+    [projectsData],
+  );
+  const groups = useMemo(() => groupsData?.groups ?? [], [groupsData]);
+
+  const scopeFlatOptions = useMemo(
+    () => [{ label: "全部", value: SCOPE_ALL }],
+    [],
+  );
+  const scopeGroupsOptions = useMemo<SelectOptionGroup[]>(() => {
+    const out: SelectOptionGroup[] = [];
+    if (projects.length > 0) {
+      out.push({
+        label: "项目",
+        options: projects.map((p) => ({
+          value: `${SCOPE_PROJECT_PREFIX}${p.cwd}`,
+          label: p.name === p.cwd ? p.cwd : `${p.name}  ·  ${p.cwd}`,
+        })),
+      });
+    }
+    if (groups.length > 0) {
+      out.push({
+        label: "项目组",
+        options: groups.map((g) => ({
+          value: `${SCOPE_GROUP_PREFIX}${g.id}`,
+          label: `${g.name} (${g.member_count})`,
+        })),
+      });
+    }
+    return out;
+  }, [projects, groups]);
+
+  const project = scopeValue.startsWith(SCOPE_PROJECT_PREFIX)
+    ? scopeValue.slice(SCOPE_PROJECT_PREFIX.length)
+    : "";
+  const groupId = scopeValue.startsWith(SCOPE_GROUP_PREFIX)
+    ? scopeValue.slice(SCOPE_GROUP_PREFIX.length)
+    : "";
 
   const { data, isLoading, isError } = usePlans({
     status: status || undefined,
     project: project || undefined,
+    group_id: groupId || undefined,
     limit: 50,
   });
 
-  const hasActiveFilter = !!status || !!project;
+  const hasActiveFilter = !!status || !!scopeValue;
   const handleReset = () => {
     setStatus("");
-    setProject("");
+    setScopeValue(SCOPE_ALL);
   };
 
   return (
@@ -95,13 +131,16 @@ function PlansPageInner() {
             </div>
           </div>
 
-          {/* Project filter — Select */}
+          {/* Project / Group filter — Select */}
           <div className="min-w-[260px] flex-1 max-w-md">
-            <div className="mb-2 text-xs font-medium text-muted-foreground">项目</div>
+            <div className="mb-2 text-xs font-medium text-muted-foreground">
+              项目 / 项目组
+            </div>
             <Select
-              options={projectOptions}
-              value={project}
-              onChange={(e) => setProject(e.target.value)}
+              options={scopeFlatOptions}
+              groups={scopeGroupsOptions}
+              value={scopeValue}
+              onChange={(e) => setScopeValue(e.target.value)}
               className="h-9"
             />
           </div>
@@ -156,6 +195,7 @@ function PlansPageInner() {
             </div>
             <div className="p-6">
               <PlanCreateForm
+                initialScopeValue={scopeValue || undefined}
                 onSuccess={(planId) => {
                   setShowCreate(false);
                   window.location.href = `${process.env.NEXT_PUBLIC_BASE_PATH || ""}/plans/${planId}`;

@@ -1,0 +1,540 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-06-24T02:53:15Z",
+  "concepts": [
+    {
+      "id": "actors",
+      "name": "执行者 (Actor)",
+      "description": "actors 统一身份表",
+      "db_tables": [
+        "actors"
+      ],
+      "api_routers": [],
+      "services": [],
+      "status_flow": [],
+      "related_concepts": [
+        "tasks",
+        "workspaces"
+      ]
+    },
+    {
+      "id": "workspaces",
+      "name": "工作空间 (Workspace)",
+      "description": "workspaces 工作空间",
+      "db_tables": [
+        "workspaces"
+      ],
+      "api_routers": [],
+      "services": [],
+      "status_flow": [],
+      "related_concepts": [
+        "actors",
+        "approvals",
+        "hooks",
+        "plans",
+        "project_groups",
+        "rules",
+        "schedules",
+        "security_rules",
+        "skills",
+        "tasks",
+        "workflows"
+      ]
+    },
+    {
+      "id": "tasks",
+      "name": "任务 (Task)",
+      "description": "tasks 统一任务表",
+      "db_tables": [
+        "tasks",
+        "task_events"
+      ],
+      "api_routers": [
+        "/api/tasks"
+      ],
+      "services": [
+        "backend.services.task_service"
+      ],
+      "status_flow": [],
+      "related_concepts": [
+        "actors",
+        "approvals",
+        "plans",
+        "schedules",
+        "workflows",
+        "workspaces"
+      ]
+    },
+    {
+      "id": "plans",
+      "name": "计划 (Plan)",
+      "description": "plans Plan定义",
+      "db_tables": [
+        "plans",
+        "plan_tasks"
+      ],
+      "api_routers": [
+        "/api/plans"
+      ],
+      "services": [
+        "backend.services.plan_executor",
+        "backend.services.plan_service"
+      ],
+      "status_flow": [],
+      "related_concepts": [
+        "tasks",
+        "workspaces"
+      ]
+    },
+    {
+      "id": "approvals",
+      "name": "审批 (Approval)",
+      "description": "approvals 审批",
+      "db_tables": [
+        "approvals"
+      ],
+      "api_routers": [
+        "/api/approvals"
+      ],
+      "services": [
+        "backend.services.approval_service"
+      ],
+      "status_flow": [],
+      "related_concepts": [
+        "tasks",
+        "workspaces"
+      ]
+    },
+    {
+      "id": "schedules",
+      "name": "定时任务 (Schedule)",
+      "description": "schedules 定时任务",
+      "db_tables": [
+        "schedules",
+        "schedule_runs"
+      ],
+      "api_routers": [
+        "/api/schedules"
+      ],
+      "services": [
+        "backend.services.schedule_service"
+      ],
+      "status_flow": [],
+      "related_concepts": [
+        "tasks",
+        "workspaces"
+      ]
+    },
+    {
+      "id": "workflows",
+      "name": "工作流 (Workflow)",
+      "description": "workflows 工作流定义",
+      "db_tables": [
+        "workflows",
+        "workflow_runs",
+        "workflow_node_runs"
+      ],
+      "api_routers": [
+        "/api/workflows"
+      ],
+      "services": [
+        "backend.services.workflow_engine",
+        "backend.services.workflow_service"
+      ],
+      "status_flow": [],
+      "related_concepts": [
+        "tasks",
+        "workspaces"
+      ]
+    },
+    {
+      "id": "conversations",
+      "name": "会话 (Conversation)",
+      "description": "conversations 会话管理",
+      "db_tables": [
+        "conversations"
+      ],
+      "api_routers": [
+        "/conversations"
+      ],
+      "services": [
+        "backend.services.conversation_service"
+      ],
+      "status_flow": [],
+      "related_concepts": []
+    },
+    {
+      "id": "versions",
+      "name": "版本 (Version)",
+      "description": "versions 版本（项目级版本管理）",
+      "db_tables": [
+        "versions"
+      ],
+      "api_routers": [
+        "/api/versions"
+      ],
+      "services": [],
+      "status_flow": [],
+      "related_concepts": [
+        "work_items"
+      ]
+    },
+    {
+      "id": "work_items",
+      "name": "工作项 (Work Item)",
+      "description": "work_items 工作项",
+      "db_tables": [
+        "work_items",
+        "work_item_transitions"
+      ],
+      "api_routers": [
+        "/api/work-items"
+      ],
+      "services": [
+        "backend.services.work_item_service"
+      ],
+      "status_flow": [],
+      "related_concepts": [
+        "versions"
+      ]
+    },
+    {
+      "id": "users",
+      "name": "用户 (User)",
+      "description": "用户表",
+      "db_tables": [
+        "users",
+        "user_sessions"
+      ],
+      "api_routers": [],
+      "services": [],
+      "status_flow": [],
+      "related_concepts": [
+        "project_groups"
+      ]
+    },
+    {
+      "id": "remote_agents",
+      "name": "远程 Agent (Remote Agent)",
+      "description": "A2A Remote Agent Support",
+      "db_tables": [
+        "remote_agents"
+      ],
+      "api_routers": [
+        "/api/remote-agents"
+      ],
+      "services": [],
+      "status_flow": [],
+      "related_concepts": []
+    },
+    {
+      "id": "skills",
+      "name": "技能 (Skill)",
+      "description": "Skills 知识库",
+      "db_tables": [
+        "skills"
+      ],
+      "api_routers": [
+        "/api/skills"
+      ],
+      "services": [
+        "backend.services.skill_service"
+      ],
+      "status_flow": [],
+      "related_concepts": [
+        "workspaces"
+      ]
+    },
+    {
+      "id": "rules",
+      "name": "规则 (Rule)",
+      "description": "Rules 规则引擎",
+      "db_tables": [
+        "rules"
+      ],
+      "api_routers": [
+        "/api/rules"
+      ],
+      "services": [
+        "backend.services.rule_service"
+      ],
+      "status_flow": [],
+      "related_concepts": [
+        "workspaces"
+      ]
+    },
+    {
+      "id": "hooks",
+      "name": "钩子 (Hook)",
+      "description": "Hooks 事件驱动",
+      "db_tables": [
+        "hooks"
+      ],
+      "api_routers": [
+        "/api/hooks"
+      ],
+      "services": [
+        "backend.services.hook_engine"
+      ],
+      "status_flow": [],
+      "related_concepts": [
+        "workspaces"
+      ]
+    },
+    {
+      "id": "security_rules",
+      "name": "安全规则 (Security Rule)",
+      "description": "Security 安全审查",
+      "db_tables": [
+        "security_rules"
+      ],
+      "api_routers": [],
+      "services": [],
+      "status_flow": [],
+      "related_concepts": [
+        "workspaces"
+      ]
+    },
+    {
+      "id": "project_groups",
+      "name": "项目组 (Project Group)",
+      "description": "项目组定义",
+      "db_tables": [
+        "project_groups",
+        "project_group_members",
+        "project_group_user_members"
+      ],
+      "api_routers": [
+        "/api/project-groups"
+      ],
+      "services": [
+        "backend.services.project_group_service"
+      ],
+      "status_flow": [],
+      "related_concepts": [
+        "users",
+        "workspaces"
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "from": "workspaces",
+      "to": "actors",
+      "type": "references",
+      "description": "workspaces.owner_id → actors.id",
+      "cardinality": "many-to-one"
+    },
+    {
+      "from": "tasks",
+      "to": "workspaces",
+      "type": "references",
+      "description": "tasks.workspace_id → workspaces.id",
+      "cardinality": "many-to-one"
+    },
+    {
+      "from": "tasks",
+      "to": "actors",
+      "type": "references",
+      "description": "tasks.assignee_id → actors.id",
+      "cardinality": "many-to-one"
+    },
+    {
+      "from": "tasks",
+      "to": "workspaces",
+      "type": "references",
+      "description": "task_events.workspace_id → workspaces.id",
+      "cardinality": "many-to-one"
+    },
+    {
+      "from": "tasks",
+      "to": "actors",
+      "type": "references",
+      "description": "task_events.actor_id → actors.id",
+      "cardinality": "many-to-one"
+    },
+    {
+      "from": "plans",
+      "to": "workspaces",
+      "type": "references",
+      "description": "plans.workspace_id → workspaces.id",
+      "cardinality": "many-to-one"
+    },
+    {
+      "from": "plans",
+      "to": "tasks",
+      "type": "references",
+      "description": "plan_tasks.task_id → tasks.id",
+      "cardinality": "many-to-one"
+    },
+    {
+      "from": "approvals",
+      "to": "tasks",
+      "type": "references",
+      "description": "approvals.task_id → tasks.id",
+      "cardinality": "many-to-one"
+    },
+    {
+      "from": "approvals",
+      "to": "workspaces",
+      "type": "references",
+      "description": "approvals.workspace_id → workspaces.id",
+      "cardinality": "many-to-one"
+    },
+    {
+      "from": "approvals",
+      "to": "tasks",
+      "type": "references",
+      "description": "approvals.task_id → tasks.id",
+      "cardinality": "many-to-one"
+    },
+    {
+      "from": "schedules",
+      "to": "workspaces",
+      "type": "references",
+      "description": "schedules.workspace_id → workspaces.id",
+      "cardinality": "many-to-one"
+    },
+    {
+      "from": "schedules",
+      "to": "tasks",
+      "type": "references",
+      "description": "schedule_runs.task_id → tasks.id",
+      "cardinality": "many-to-one"
+    },
+    {
+      "from": "workflows",
+      "to": "workspaces",
+      "type": "references",
+      "description": "workflows.workspace_id → workspaces.id",
+      "cardinality": "many-to-one"
+    },
+    {
+      "from": "workflows",
+      "to": "workspaces",
+      "type": "references",
+      "description": "workflow_runs.workspace_id → workspaces.id",
+      "cardinality": "many-to-one"
+    },
+    {
+      "from": "workflows",
+      "to": "tasks",
+      "type": "references",
+      "description": "workflow_node_runs.task_id → tasks.id",
+      "cardinality": "many-to-one"
+    },
+    {
+      "from": "work_items",
+      "to": "versions",
+      "type": "references",
+      "description": "work_items.version_id → versions.id",
+      "cardinality": "many-to-one"
+    },
+    {
+      "from": "skills",
+      "to": "workspaces",
+      "type": "references",
+      "description": "skills.workspace_id → workspaces.id",
+      "cardinality": "many-to-one"
+    },
+    {
+      "from": "rules",
+      "to": "workspaces",
+      "type": "references",
+      "description": "rules.workspace_id → workspaces.id",
+      "cardinality": "many-to-one"
+    },
+    {
+      "from": "hooks",
+      "to": "workspaces",
+      "type": "references",
+      "description": "hooks.workspace_id → workspaces.id",
+      "cardinality": "many-to-one"
+    },
+    {
+      "from": "security_rules",
+      "to": "workspaces",
+      "type": "references",
+      "description": "security_rules.workspace_id → workspaces.id",
+      "cardinality": "many-to-one"
+    },
+    {
+      "from": "project_groups",
+      "to": "workspaces",
+      "type": "references",
+      "description": "project_groups.workspace_id → workspaces.id",
+      "cardinality": "many-to-one"
+    },
+    {
+      "from": "project_groups",
+      "to": "users",
+      "type": "references",
+      "description": "project_group_user_members.user_id → users.id",
+      "cardinality": "many-to-one"
+    }
+  ],
+  "domains": [
+    {
+      "name": "核心实体",
+      "concepts": [
+        "actors",
+        "approvals",
+        "conversations",
+        "plans",
+        "schedules",
+        "tasks",
+        "versions",
+        "work_items",
+        "workflows",
+        "workspaces"
+      ]
+    },
+    {
+      "name": "认证与权限",
+      "concepts": [
+        "users"
+      ]
+    },
+    {
+      "name": "A2A Remote Agent Support",
+      "concepts": [
+        "remote_agents"
+      ]
+    },
+    {
+      "name": "Skills 知识库",
+      "concepts": [
+        "skills"
+      ]
+    },
+    {
+      "name": "Rules 规则引擎",
+      "concepts": [
+        "rules"
+      ]
+    },
+    {
+      "name": "Hooks 事件驱动",
+      "concepts": [
+        "hooks"
+      ]
+    },
+    {
+      "name": "Security 安全审查",
+      "concepts": [
+        "security_rules"
+      ]
+    },
+    {
+      "name": "项目组（Project Groups）",
+      "concepts": [
+        "project_groups"
+      ]
+    }
+  ],
+  "stats": {
+    "total_concepts": 17,
+    "total_relationships": 22,
+    "total_domains": 8
+  }
+}

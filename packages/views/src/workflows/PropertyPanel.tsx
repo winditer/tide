@@ -5,6 +5,7 @@ import { Button, Input, Select } from "@tide/ui";
 import {
   useProjectMembers,
   getAgents,
+  apiClient,
   type AgentInfo,
   type AgentSkill,
   type WorkflowNode,
@@ -98,6 +99,28 @@ export function PropertyPanel({
       cancelled = true;
     };
   }, []);
+
+  // 可用 Skills 列表
+  interface SkillOption { id: string; slug: string; name: string; category?: string; description?: string }
+  const [availableSkills, setAvailableSkills] = useState<SkillOption[]>([]);
+  const [skillSearch, setSkillSearch] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    apiClient.get<SkillOption[]>("/api/skills?workspace_id=default&limit=500")
+      .then((data) => {
+        if (!cancelled && Array.isArray(data)) setAvailableSkills(data);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+  const filteredSkills = (() => {
+    const q = skillSearch.trim().toLowerCase();
+    if (!q) return availableSkills;
+    return availableSkills.filter((skill) =>
+      [skill.name, skill.description, skill.id, skill.slug, skill.category]
+        .some((field) => typeof field === "string" && field.toLowerCase().includes(q)),
+    );
+  })();
   if (!node) {
     return (
       <div className="flex h-full w-[300px] flex-col border-l border-border/50 bg-card">
@@ -190,6 +213,74 @@ export function PropertyPanel({
                 {isRemote && (
                   <FormGroup label="Skills">
                     <RemoteAgentSkills agent={selectedRemote} />
+                  </FormGroup>
+                )}
+                {!isRemote && availableSkills.length > 0 && (
+                  <FormGroup label="技能注入">
+                    <div className="relative mb-1.5">
+                      <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[11px] text-muted-foreground/70">⌕</span>
+                      <input
+                        type="text"
+                        value={skillSearch}
+                        onChange={(e) => setSkillSearch(e.target.value)}
+                        disabled={readOnly}
+                        placeholder="搜索 Skill（名称 / 描述 / 分类）"
+                        className="flex h-7 w-full rounded-md border border-input bg-background pl-7 pr-7 text-[12px] text-foreground placeholder:text-muted-foreground/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+                      />
+                      {skillSearch && (
+                        <button
+                          type="button"
+                          onClick={() => setSkillSearch("")}
+                          disabled={readOnly}
+                          aria-label="清除搜索"
+                          className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-[11px] leading-none text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                    <div className="max-h-[160px] overflow-y-auto rounded-lg border border-input bg-background p-2 space-y-1">
+                      {filteredSkills.map((skill) => {
+                        const currentSkills: string[] = Array.isArray(data.skills) ? data.skills : [];
+                        const checked = currentSkills.includes(skill.slug);
+                        return (
+                          <label
+                            key={skill.id}
+                            className={`flex items-center gap-2 rounded px-2 py-1.5 text-[12px] transition-colors ${
+                              readOnly ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:bg-muted/40"
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              className="h-3.5 w-3.5 accent-primary"
+                              checked={checked}
+                              disabled={readOnly}
+                              onChange={() => {
+                                const next = checked
+                                  ? currentSkills.filter((s) => s !== skill.slug)
+                                  : [...currentSkills, skill.slug];
+                                update({ skills: next });
+                              }}
+                            />
+                            <span className="font-medium text-foreground">{skill.name}</span>
+                            {skill.category && (
+                              <span className="ml-auto text-[10px] text-muted-foreground">{skill.category}</span>
+                            )}
+                          </label>
+                        );
+                      })}
+                      {filteredSkills.length === 0 && (
+                        <p className="py-3 text-center text-[11px] text-muted-foreground">
+                          {skillSearch ? "无匹配的 Skill" : "暂无可用 Skill"}
+                        </p>
+                      )}
+                    </div>
+                    <div className="mt-1 flex items-center justify-between text-[10px] text-muted-foreground">
+                      <span>选中的技能内容将作为 Agent Prompt 前缀注入</span>
+                      {skillSearch && (
+                        <span className="font-mono tabular-nums">{filteredSkills.length}/{availableSkills.length}</span>
+                      )}
+                    </div>
                   </FormGroup>
                 )}
                 <FormGroup label="Prompt">

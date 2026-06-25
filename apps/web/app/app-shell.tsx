@@ -5,7 +5,8 @@ import { usePathname, useRouter } from "next/navigation";
 import { Header } from "@tide/views/layout/Header";
 import { Sidebar } from "@tide/views/layout/Sidebar";
 import { FloatingChat } from "@tide/views/dashboard/FloatingChat";
-import { useAuth } from "@tide/core";
+import { useAuth, useWs } from "@tide/core";
+import { toast } from "@tide/ui";
 
 /**
  * Top-level shell.
@@ -23,6 +24,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, hydrated, authRequired, user } = useAuth();
 
   const isAuthRoute = pathname.startsWith("/auth");
+  const { subscribe } = useWs();
 
   useEffect(() => {
     if (!hydrated) return;
@@ -32,6 +34,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     const redirect = encodeURIComponent(pathname);
     router.replace(`/auth/login?redirect=${redirect}`);
   }, [hydrated, authRequired, isAuthenticated, isAuthRoute, pathname, router]);
+
+  // Surface security.alert WS events as global toasts so users notice high-severity
+  // findings immediately, even when the Security page is not open.
+  useEffect(() => {
+    return subscribe((event) => {
+      if (event.type !== "security.alert") return;
+      const evt = event as unknown as { task_id?: string; count?: number };
+      const count = evt.count ?? 0;
+      const taskId = evt.task_id ?? "";
+      toast({
+        title: `安全告警：发现 ${count} 个高危问题`,
+        description: taskId
+          ? `任务 ${taskId.slice(0, 8)}… 的输出触发了安全规则`
+          : "Agent 输出触发了安全规则",
+        variant: "destructive",
+      });
+    });
+  }, [subscribe]);
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);

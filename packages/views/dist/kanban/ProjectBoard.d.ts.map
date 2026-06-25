@@ -1,1 +1,1 @@
-{"version":3,"file":"ProjectBoard.d.ts","sourceRoot":"","sources":["../../src/kanban/ProjectBoard.tsx"],"names":[],"mappings":"AAWA,wBAAgB,YAAY,gCAuF3B"}
+{"version":3,"file":"ProjectBoard.d.ts","sourceRoot":"","sources":["../../src/kanban/ProjectBoard.tsx"],"names":[],"mappings":"AAaA,MAAM,WAAW,iBAAiB;IAChC,sBAAsB;IACtB,OAAO,CAAC,EAAE,MAAM,CAAC;IACjB,qBAAqB;IACrB,SAAS,CAAC,EAAE,MAAM,CAAC;CACpB;AAED,wBAAgB,YAAY,CAAC,EAAE,OAAO,EAAE,SAAS,EAAE,GAAE,iBAAsB,+BAqI1E"}

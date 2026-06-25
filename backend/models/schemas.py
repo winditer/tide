@@ -16,6 +16,7 @@ class TaskCreate(BaseModel):
     session_id: Optional[str] = None  # 续写已有会话的 ID（不填则新建会话）
     attachments: list[str] = Field(default_factory=list)
     workspace_id: str = "default"
+    group_id: Optional[str] = None
 
 
 class TaskUpdate(BaseModel):
@@ -90,6 +91,8 @@ class PlanTaskDef(BaseModel):
     agent_id: str = "codex"
     depends_on: list[int] = []
     phase: int = 0
+    project_id: Optional[str] = None   # 新增：目标项目 ID（base64 编码的 cwd）
+    cwd: Optional[str] = None           # 新增：直接指定工作目录
 
 
 class PlanDefinition(BaseModel):
@@ -102,6 +105,7 @@ class PlanCreate(BaseModel):
     workspace_id: str = "default"
     cwd: Optional[str] = None
     model: Optional[str] = None
+    group_id: Optional[str] = None  # 项目组关联：提供后默认 cwd 使用组 primary 项目路径
 
 
 class PlanResponse(BaseModel):
@@ -113,8 +117,29 @@ class PlanResponse(BaseModel):
     chat_id: Optional[str] = None
     cwd: Optional[str] = None
     model: Optional[str] = None
+    group_id: Optional[str] = None
     created_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
+
+
+# ── Project Group ─────────────────────
+
+class ProjectGroupCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    workspace_id: str = "default"
+    created_by: Optional[str] = None
+    project_ids: list[str] = Field(default_factory=list)
+
+
+class ProjectGroupUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+
+class ProjectGroupMemberAdd(BaseModel):
+    project_id: str
+    role: str = "member"
 
 
 class PlanDAGNode(BaseModel):
@@ -306,6 +331,9 @@ class WorkItemCreate(BaseModel):
     source_id: Optional[str] = None
     metadata: Optional[dict] = None
     version_id: Optional[str] = None
+    # 项目组 id：当工作项归属一个跨仓库项目组时填充，
+    # 后端在 Agent 节点触发时会注入多仓库上下文。
+    group_id: Optional[str] = None
 
 
 class WorkItemUpdate(BaseModel):

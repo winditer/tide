@@ -11,6 +11,7 @@ import {
   fetchUpcomingSchedules,
   getMyWorkItems,
   getProjectProgress,
+  getGroupProgress,
 } from "../api/dashboard";
 import type { GetSessionsParams } from "../api/dashboard";
 
@@ -90,10 +91,18 @@ export function useMyWorkItems(limit = 10) {
   });
 }
 
-export function useProjectProgress(limit = 8) {
+export function useProjectProgress(limit = 8, groupId?: string) {
   return useQuery({
-    queryKey: ["dashboard", "project-progress", limit],
-    queryFn: () => getProjectProgress(limit),
+    queryKey: ["dashboard", "project-progress", limit, groupId ?? null],
+    queryFn: () => getProjectProgress(limit, groupId),
+    refetchInterval: 30000,
+  });
+}
+
+export function useGroupProgress(limit = 8) {
+  return useQuery({
+    queryKey: ["dashboard", "group-progress", limit],
+    queryFn: () => getGroupProgress(limit),
     refetchInterval: 30000,
   });
 }

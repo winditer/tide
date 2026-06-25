@@ -5,6 +5,10 @@ export interface PlanTaskDef {
     agent_id?: string;
     depends_on?: number[];
     phase?: number;
+    /** 子任务级项目覆盖：base64 编码的 cwd */
+    project_id?: string;
+    /** 子任务级工作目录覆盖（优先级高于 project_id） */
+    cwd?: string;
 }
 export interface PlanDefinition {
     tasks: PlanTaskDef[];
@@ -19,6 +23,8 @@ export interface Plan {
     chat_id?: string | null;
     cwd?: string | null;
     model?: string | null;
+    /** 项目组工作区 ID（可选）：为空表示单仓库 Plan */
+    group_id?: string | null;
     created_at?: string | null;
     completed_at?: string | null;
 }

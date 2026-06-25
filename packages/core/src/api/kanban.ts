@@ -9,11 +9,15 @@ import type {
 
 export interface KanbanQueryParams {
   workspace_id?: string;
+  group_id?: string;
+  project_id?: string;
 }
 
 function buildQuery(params?: KanbanQueryParams): string {
   const searchParams = new URLSearchParams();
   if (params?.workspace_id) searchParams.set("workspace_id", params.workspace_id);
+  if (params?.group_id) searchParams.set("group_id", params.group_id);
+  if (params?.project_id) searchParams.set("project_id", params.project_id);
   const q = searchParams.toString();
   return q ? `?${q}` : "";
 }

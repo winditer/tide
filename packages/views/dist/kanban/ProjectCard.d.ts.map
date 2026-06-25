@@ -1,0 +1,1 @@
+{"version":3,"file":"ProjectCard.d.ts","sourceRoot":"","sources":["../../src/kanban/ProjectCard.tsx"],"names":[],"mappings":"AAMA,OAAO,KAAK,EAAE,UAAU,EAAE,MAAM,YAAY,CAAC;AAsD7C,UAAU,gBAAgB;IACxB,IAAI,EAAE,UAAU,CAAC;IACjB,KAAK,EAAE,MAAM,CAAC;CACf;AAED,wBAAgB,WAAW,CAAC,EAAE,IAAI,EAAE,KAAK,EAAE,EAAE,gBAAgB,+BA6I5D"}

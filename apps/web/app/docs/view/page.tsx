@@ -13,12 +13,74 @@ type LoadState =
   | { kind: "ready"; content: string }
   | { kind: "error"; message: string };
 
+type DocKind = "markdown" | "json" | "code" | "image" | "text";
+
+const CODE_EXTENSIONS = new Set([
+  "js",
+  "jsx",
+  "ts",
+  "tsx",
+  "py",
+  "yaml",
+  "yml",
+  "toml",
+  "sh",
+  "bash",
+  "zsh",
+  "sql",
+  "css",
+  "scss",
+  "html",
+  "xml",
+  "java",
+  "go",
+  "rs",
+  "rb",
+  "php",
+  "c",
+  "cpp",
+  "h",
+  "hpp",
+  "kt",
+  "swift",
+]);
+const IMAGE_EXTENSIONS = new Set([
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "svg",
+  "webp",
+  "bmp",
+]);
+const MARKDOWN_EXTENSIONS = new Set(["md", "markdown"]);
+const JSON_EXTENSIONS = new Set(["json"]);
+
+function detectExtension(...candidates: string[]): string {
+  for (const c of candidates) {
+    const m = c?.match(/\.([a-z0-9]+)(?:[?#].*)?$/i);
+    if (m) return m[1].toLowerCase();
+  }
+  return "";
+}
+
+function detectKind(ext: string): DocKind {
+  if (IMAGE_EXTENSIONS.has(ext)) return "image";
+  if (MARKDOWN_EXTENSIONS.has(ext) || ext === "") return "markdown";
+  if (JSON_EXTENSIONS.has(ext)) return "json";
+  if (CODE_EXTENSIONS.has(ext)) return "code";
+  return "text";
+}
+
 function MarkdownViewer() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
   const url = searchParams.get("url") || "";
   const title = searchParams.get("title") || "未命名文档";
+
+  const ext = useMemo(() => detectExtension(title, url), [title, url]);
+  const kind = useMemo<DocKind>(() => detectKind(ext), [ext]);
 
   const [state, setState] = useState<LoadState>({ kind: "idle" });
 
@@ -30,12 +92,25 @@ function MarkdownViewer() {
       });
       return;
     }
-    // Only allow internal API URLs to prevent open-redirect-style fetches.
-    if (!url.startsWith("/api/")) {
+    const isExternal = /^https?:\/\//i.test(url);
+    const isInternal = url.startsWith("/api/");
+    if (!isExternal && !isInternal) {
       setState({
         kind: "error",
-        message: "非法的文档地址。仅允许加载 /api/ 下的产物内容。",
+        message: "非法的文档地址。仅允许加载 /api/ 下的产物或 http(s) 外链。",
       });
+      return;
+    }
+
+    // Images are rendered directly via <img>; no fetch required.
+    if (kind === "image") {
+      setState({ kind: "ready", content: "" });
+      return;
+    }
+
+    // External non-image links: do not auto-fetch — surface a CTA instead.
+    if (isExternal) {
+      setState({ kind: "ready", content: "" });
       return;
     }
 
@@ -46,12 +121,20 @@ function MarkdownViewer() {
       .get<string>(url)
       .then((raw) => {
         if (cancelled) return;
-        const text =
+        let text =
           typeof raw === "string"
             ? raw
             : (raw as unknown) == null
               ? ""
               : JSON.stringify(raw, null, 2);
+        if (kind === "json" && typeof raw === "string") {
+          // Pretty-print JSON when it loaded as raw text.
+          try {
+            text = JSON.stringify(JSON.parse(raw), null, 2);
+          } catch {
+            // keep raw on parse failure
+          }
+        }
         setState({ kind: "ready", content: text });
       })
       .catch((err: unknown) => {
@@ -68,12 +151,12 @@ function MarkdownViewer() {
     return () => {
       cancelled = true;
     };
-  }, [url]);
+  }, [url, kind]);
 
   const meta = useMemo(() => {
-    const ext = (title.match(/\.([a-z0-9]+)$/i)?.[1] || "MD").toUpperCase();
+    const extLabel = (ext || "md").toUpperCase();
     let size = "—";
-    if (state.kind === "ready") {
+    if (state.kind === "ready" && state.content) {
       const bytes = new Blob([state.content]).size;
       size =
         bytes < 1024
@@ -82,11 +165,11 @@ function MarkdownViewer() {
             ? `${(bytes / 1024).toFixed(1)} KB`
             : `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
     }
-    return { ext, size };
-  }, [title, state]);
+    return { ext: extLabel, size };
+  }, [ext, state]);
 
   const handleCopy = async () => {
-    if (state.kind !== "ready") return;
+    if (state.kind !== "ready" || !state.content) return;
     try {
       await navigator.clipboard.writeText(state.content);
     } catch {
@@ -95,18 +178,26 @@ function MarkdownViewer() {
   };
 
   const handleDownload = () => {
-    if (state.kind !== "ready") return;
+    if (state.kind !== "ready" || !state.content) return;
     const blob = new Blob([state.content], {
-      type: "text/markdown;charset=utf-8",
+      type: "text/plain;charset=utf-8",
     });
     const href = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = href;
-    a.download = title.endsWith(".md") ? title : `${title}.md`;
+    const fallbackExt = ext || "md";
+    a.download = title.match(/\.[a-z0-9]+$/i)
+      ? title
+      : `${title}.${fallbackExt}`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(href);
+  };
+
+  const handleOpenNewTab = () => {
+    if (!url) return;
+    window.open(url, "_blank", "noopener,noreferrer");
   };
 
   const handleBack = () => {
@@ -116,6 +207,11 @@ function MarkdownViewer() {
       router.push("/");
     }
   };
+
+  const isExternalUrl = /^https?:\/\//i.test(url);
+  const canCopy =
+    state.kind === "ready" && !!state.content && kind !== "image";
+  const canDownload = canCopy;
 
   return (
     <div className="space-y-6">
@@ -142,18 +238,25 @@ function MarkdownViewer() {
         </div>
         <div className="flex items-center gap-2">
           <button
+            onClick={handleOpenNewTab}
+            disabled={!url}
+            className="rounded-md border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            在新标签页打开
+          </button>
+          <button
             onClick={handleCopy}
-            disabled={state.kind !== "ready"}
+            disabled={!canCopy}
             className="rounded-md border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
           >
             复制源码
           </button>
           <button
             onClick={handleDownload}
-            disabled={state.kind !== "ready"}
+            disabled={!canDownload}
             className="rounded-md bg-gray-900 px-3 py-1.5 text-sm text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            下载 .md
+            下载
           </button>
         </div>
       </header>
@@ -164,12 +267,18 @@ function MarkdownViewer() {
             <LoadingSkeleton />
           ) : state.kind === "error" ? (
             <ErrorPanel message={state.message} />
-          ) : (
+          ) : kind === "image" ? (
+            <ImagePreview url={url} alt={title} />
+          ) : isExternalUrl ? (
+            <ExternalLinkPanel url={url} onOpen={handleOpenNewTab} />
+          ) : kind === "markdown" ? (
             <article className="doc-prose">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
                 {state.content}
               </ReactMarkdown>
             </article>
+          ) : (
+            <CodeBlock content={state.content} language={ext} />
           )}
         </div>
       </section>
@@ -349,6 +458,67 @@ function ErrorPanel({ message }: { message: string }) {
       <p className="text-sm font-medium text-red-700">无法呈现这份文档</p>
       <p className="mt-1 text-sm text-red-600">{message}</p>
     </div>
+  );
+}
+
+function ImagePreview({ url, alt }: { url: string; alt: string }) {
+  const [errored, setErrored] = useState(false);
+  if (errored) {
+    return (
+      <ErrorPanel message="图片加载失败，请检查链接是否有效。" />
+    );
+  }
+  return (
+    <div className="flex justify-center">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={url}
+        alt={alt}
+        onError={() => setErrored(true)}
+        className="max-h-[80vh] max-w-full rounded-md border border-gray-200 object-contain"
+      />
+    </div>
+  );
+}
+
+function ExternalLinkPanel({
+  url,
+  onOpen,
+}: {
+  url: string;
+  onOpen: () => void;
+}) {
+  return (
+    <div className="flex flex-col items-start gap-3 rounded-md border border-gray-200 bg-gray-50 p-4">
+      <p className="text-sm text-gray-700">
+        外部链接不在当前页面嵌入预览，请点击下方按钮在新标签页打开。
+      </p>
+      <p className="break-all rounded border border-gray-200 bg-white px-2 py-1 text-xs text-gray-500">
+        {url}
+      </p>
+      <button
+        onClick={onOpen}
+        className="rounded-md bg-gray-900 px-3 py-1.5 text-sm text-white transition-colors hover:bg-gray-800"
+      >
+        在新标签页打开
+      </button>
+    </div>
+  );
+}
+
+function CodeBlock({
+  content,
+  language,
+}: {
+  content: string;
+  language: string;
+}) {
+  return (
+    <pre className="overflow-x-auto rounded-md border border-gray-200 bg-[hsl(224_71%_6%)] p-4 text-sm leading-relaxed text-gray-100">
+      <code className={language ? `language-${language}` : undefined}>
+        {content}
+      </code>
+    </pre>
   );
 }
 

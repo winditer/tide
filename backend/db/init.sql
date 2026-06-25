@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     parent_task_id TEXT REFERENCES tasks(id),
     prompt TEXT NOT NULL,
     cwd TEXT,
+    group_id TEXT,
     model TEXT,
     agent_id TEXT,
     session_id TEXT,
@@ -55,6 +56,7 @@ CREATE INDEX IF NOT EXISTS idx_tasks_workspace ON tasks(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(workspace_id, status);
 CREATE INDEX IF NOT EXISTS idx_tasks_plan ON tasks(plan_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee_id);
+-- idx_tasks_group 索引在 engine.py 迁移后创建（兼容旧表缺少 group_id 列）
 
 -- task_events 任务事件日志
 CREATE TABLE IF NOT EXISTS task_events (
@@ -79,6 +81,7 @@ CREATE TABLE IF NOT EXISTS plans (
     status TEXT NOT NULL DEFAULT 'active',
     max_parallel INTEGER DEFAULT 3,
     definition TEXT,
+    group_id TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP
 );
@@ -354,3 +357,152 @@ CREATE TABLE IF NOT EXISTS a2a_task_mapping (
     agent_id TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- ============================================================
+-- Token 成本追踪
+-- ============================================================
+
+-- 注意: tasks 表的 token_input/token_output/estimated_cost_usd 列
+-- 通过 engine.py 运行时迁移添加（ALTER TABLE IF NOT EXISTS 不被 SQLite 支持）
+
+-- ============================================================
+-- Skills 知识库
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS skills (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+    name TEXT NOT NULL,
+    slug TEXT NOT NULL,
+    description TEXT,
+    category TEXT DEFAULT 'general',
+    tags TEXT,
+    content TEXT NOT NULL,
+    version INTEGER DEFAULT 1,
+    enabled INTEGER DEFAULT 1,
+    source TEXT DEFAULT 'custom',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(workspace_id, slug)
+);
+CREATE INDEX IF NOT EXISTS idx_skills_workspace ON skills(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_skills_category ON skills(workspace_id, category);
+
+-- ============================================================
+-- Rules 规则引擎
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS rules (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+    name TEXT NOT NULL,
+    scope TEXT DEFAULT 'global',
+    scope_value TEXT,
+    project_id TEXT,
+    content TEXT NOT NULL,
+    priority INTEGER DEFAULT 0,
+    enabled INTEGER DEFAULT 1,
+    source TEXT DEFAULT 'custom',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_rules_workspace ON rules(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_rules_scope ON rules(workspace_id, scope);
+
+-- ============================================================
+-- Hooks 事件驱动
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS hooks (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+    name TEXT NOT NULL,
+    event TEXT NOT NULL,
+    action_type TEXT NOT NULL,
+    action_config TEXT NOT NULL,
+    conditions TEXT,
+    priority INTEGER DEFAULT 0,
+    enabled INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_hooks_event ON hooks(workspace_id, event);
+
+-- ============================================================
+-- Security 安全审查
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS security_rules (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+    name TEXT NOT NULL,
+    category TEXT NOT NULL,
+    pattern TEXT NOT NULL,
+    severity TEXT DEFAULT 'medium',
+    description TEXT,
+    remediation TEXT,
+    enabled INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_security_rules_workspace ON security_rules(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_security_rules_category ON security_rules(workspace_id, category);
+
+CREATE TABLE IF NOT EXISTS security_findings (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+    task_id TEXT REFERENCES tasks(id),
+    rule_id TEXT REFERENCES security_rules(id),
+    category TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    snippet TEXT,
+    location TEXT,
+    description TEXT,
+    remediation TEXT,
+    status TEXT DEFAULT 'open',
+    dismissed_by TEXT,
+    dismissed_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_security_findings_task ON security_findings(task_id);
+CREATE INDEX IF NOT EXISTS idx_security_findings_workspace ON security_findings(workspace_id, status);
+
+-- ============================================================
+-- 项目组（Project Groups）
+-- ============================================================
+
+-- 项目组定义
+CREATE TABLE IF NOT EXISTS project_groups (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+    name TEXT NOT NULL,
+    description TEXT,
+    created_by TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(workspace_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_project_groups_workspace ON project_groups(workspace_id);
+
+-- 项目组成员（关联项目）
+CREATE TABLE IF NOT EXISTS project_group_members (
+    id TEXT PRIMARY KEY,
+    group_id TEXT NOT NULL REFERENCES project_groups(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL,
+    role TEXT DEFAULT 'member',
+    display_order INTEGER DEFAULT 0,
+    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(group_id, project_id)
+);
+CREATE INDEX IF NOT EXISTS idx_pgm_group ON project_group_members(group_id);
+
+-- 项目组用户成员（关联用户，与 project_members 对称）
+CREATE TABLE IF NOT EXISTS project_group_user_members (
+    id TEXT PRIMARY KEY,
+    group_id TEXT NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(id),
+    role TEXT DEFAULT 'member',  -- owner | member | viewer
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(group_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_pgum_user ON project_group_user_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_pgum_group ON project_group_user_members(group_id);

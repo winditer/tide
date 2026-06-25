@@ -10,6 +10,7 @@ TaskService — 任务 CRUD + Agent 执行桥接层。
 import asyncio
 import json
 import logging
+import re
 import shutil
 import uuid
 from datetime import datetime, timezone
@@ -20,6 +21,8 @@ from sqlalchemy import text
 
 from backend.db.engine import async_session_factory
 from backend.services.event_emitter import event_emitter
+from backend.services.hook_engine import hook_engine
+from backend.services.ws_hub import ws_hub
 from backend.runtime.adapters import AGENT_ADAPTERS
 from backend.runtime.executor import agent_executor, TaskEvent
 from backend.runtime.task_runtime import TASKS, CodexTaskRuntime, LOCK
@@ -95,6 +98,31 @@ class TaskService:
             task_id, workspace_id, old_status, new_status,
         )
 
+        # 触发 Hooks（异步非阻塞，失败不影响主流程）
+        hook_event = None
+        if new_status == "running":
+            hook_event = "task.started"
+        elif new_status == "completed":
+            hook_event = "task.completed"
+        elif new_status == "failed":
+            hook_event = "task.failed"
+        if hook_event:
+            try:
+                task_row = await self.get_task(task_id)
+                output_text = str((task_row or {}).get("result") or "")
+                payload = {
+                    "event": hook_event,
+                    "task_id": task_id,
+                    "agent_id": (task_row or {}).get("agent_id"),
+                    "status": new_status,
+                    "output": output_text,
+                }
+                asyncio.create_task(
+                    hook_engine.trigger(hook_event, workspace_id, payload)
+                )
+            except Exception:
+                logger.debug("hook trigger dispatch failed", exc_info=True)
+
         # 任务进入终态时清理残留的 pending 审批记录
         if new_status in ("completed", "failed", "stopped", "rejected"):
             try:
@@ -127,6 +155,160 @@ class TaskService:
                     self._short_id(task_id),
                     exc_info=True,
                 )
+
+        # 任务完成时解析产物并推送 task.artifact 事件到 WS（异步、非阻塞）
+        if new_status == "completed":
+            try:
+                task_row = await self.get_task(task_id)
+                sid = str((task_row or {}).get("session_id") or "")
+                final_result = result
+                if final_result is None:
+                    final_result = str((task_row or {}).get("result") or "")
+                if sid and final_result:
+                    asyncio.create_task(
+                        self._emit_artifacts_event(task_id, sid, final_result)
+                    )
+            except Exception:
+                logger.debug(
+                    "emit task.artifact dispatch failed for task=%s",
+                    self._short_id(task_id),
+                    exc_info=True,
+                )
+
+    # ── artifacts ────────────────────────────────────────
+
+    @staticmethod
+    def _infer_artifact_type(target: str) -> str:
+        """根据 URL/路径推断产物类型：markdown / file / link。"""
+        if not target:
+            return "file"
+        lower = target.lower().split("#", 1)[0].split("?", 1)[0]
+        if lower.startswith(("http://", "https://")):
+            return "link"
+        if lower.endswith((".md", ".markdown")):
+            return "markdown"
+        return "file"
+
+    def _extract_artifacts_from_result(self, result: str) -> list[dict]:
+        """从 task result 文本中提取产物信息。
+
+        规则：
+        1. Markdown 链接 ``[label](url)``：提取 label 与 url。
+        2. ``File created successfully at: <path>`` / ``Created file: <path>`` /
+           ``写入文件: <path>`` 等约定输出：提取生成文件路径。
+        3. 排除代码块 ``` ``` 中的内容，避免命中示例代码。
+        """
+        if not result or not isinstance(result, str):
+            return []
+
+        # 排除三引号代码块，避免误匹配示例
+        try:
+            stripped = re.sub(r"```.*?```", "", result, flags=re.DOTALL)
+        except re.error:
+            stripped = result
+
+        artifacts: list[dict] = []
+        seen: set = set()
+
+        # 1. Markdown 链接
+        try:
+            for label, url in re.findall(r"\[([^\]\n]+)\]\(([^)\s]+)\)", stripped):
+                url = url.strip().strip("`'\"")
+                label = label.strip()
+                if not url or not label:
+                    continue
+                key = ("link", url)
+                if key in seen:
+                    continue
+                seen.add(key)
+                artifacts.append({
+                    "label": label,
+                    "url": url,
+                    "type": self._infer_artifact_type(url),
+                })
+        except re.error:
+            pass
+
+        # 2. 创建文件提示行
+        path_patterns = [
+            r"File created successfully at:\s*(.+?)(?:\n|$)",
+            r"Created file:\s*(.+?)(?:\n|$)",
+            r"写入文件[:：]\s*(.+?)(?:\n|$)",
+        ]
+        for pattern in path_patterns:
+            try:
+                matches = re.findall(pattern, stripped)
+            except re.error:
+                matches = []
+            for raw in matches:
+                path = (raw or "").strip().strip("`'\"")
+                if not path:
+                    continue
+                key = ("path", path)
+                if key in seen:
+                    continue
+                seen.add(key)
+                label = path.rsplit("/", 1)[-1] or path
+                artifacts.append({
+                    "label": label,
+                    "url": path,
+                    "type": self._infer_artifact_type(path),
+                })
+
+        return artifacts
+
+    async def _emit_artifacts_event(
+        self,
+        task_id: str,
+        session_id: str,
+        result: str,
+    ) -> None:
+        """解析 task result 中的产物信息并通过 WebSocket 推送 ``task.artifact`` 事件。"""
+        if not session_id:
+            return
+        try:
+            extracted = self._extract_artifacts_from_result(result)
+        except Exception:
+            logger.debug(
+                "_extract_artifacts_from_result failed for task=%s",
+                self._short_id(task_id),
+                exc_info=True,
+            )
+            return
+        if not extracted:
+            return
+
+        artifacts: list[dict] = []
+        for art in extracted:
+            artifacts.append({
+                "id": str(uuid.uuid4()),
+                "label": art.get("label") or "",
+                "url": art.get("url") or "",
+                "type": art.get("type") or "file",
+                "task_id": task_id,
+            })
+
+        event = {
+            "type": "task.artifact",
+            "task_id": task_id,
+            "session_id": session_id,
+            "artifacts": artifacts,
+        }
+        try:
+            await ws_hub.broadcast(f"session:{session_id}", event)
+            await ws_hub.broadcast(f"task:{task_id}", event)
+            await ws_hub.broadcast("tasks", event)
+        except Exception:
+            logger.debug(
+                "ws broadcast task.artifact failed for task=%s",
+                self._short_id(task_id),
+                exc_info=True,
+            )
+            return
+        logger.info(
+            "emit task.artifact task=%s session=%s count=%d",
+            self._short_id(task_id), session_id, len(artifacts),
+        )
 
     async def _append_result_chunk(
         self,
@@ -186,6 +368,7 @@ class TaskService:
         conversation_id: Optional[str] = None,
         session_id: str = "",
         full_auto: bool = False,
+        group_id: Optional[str] = None,
     ) -> dict:
         """创建任务：写 DB + 启动真实 Agent CLI。"""
         task_id = str(uuid.uuid4())
@@ -214,8 +397,8 @@ class TaskService:
             await session.execute(
                 text("""
                 INSERT INTO tasks
-                    (id, workspace_id, chat_id, session_id, prompt, agent_id, model, cwd, attachments, status, created_at)
-                VALUES (:id, :workspace_id, :chat_id, :session_id, :prompt, :agent_id, :model, :cwd, :attachments, 'queued', :created_at)
+                    (id, workspace_id, chat_id, session_id, prompt, agent_id, model, cwd, group_id, attachments, status, created_at)
+                VALUES (:id, :workspace_id, :chat_id, :session_id, :prompt, :agent_id, :model, :cwd, :group_id, :attachments, 'queued', :created_at)
                 """),
                 {
                     "id": task_id,
@@ -226,6 +409,7 @@ class TaskService:
                     "agent_id": agent_id,
                     "model": model or None,
                     "cwd": cwd,
+                    "group_id": group_id or None,
                     "attachments": attachments_json,
                     "created_at": now,
                 },

@@ -16,6 +16,7 @@ const variantStyles = {
     secondary: "border-transparent bg-secondary text-secondary-foreground",
     destructive: "border-transparent bg-destructive text-destructive-foreground",
     outline: "text-foreground",
+    success: "border-transparent bg-emerald-100 text-emerald-700",
 };
 function Badge(_a) {
     var { className, variant = "default" } = _a, props = __rest(_a, ["className", "variant"]);

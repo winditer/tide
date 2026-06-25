@@ -9,6 +9,8 @@ export interface CreateTaskParams {
   session_id?: string;
   attachments?: string[];
   workspace_id?: string;
+  /** 项目组 id；选中项目组时由后端注入多仓库上下文 */
+  group_id?: string;
 }
 
 export interface ListTasksParams {
@@ -16,6 +18,8 @@ export interface ListTasksParams {
   status?: string;
   agent_id?: string;
   project?: string;
+  /** 项目组 id；仅返回 DB 中属于该项目组的任务 */
+  group_id?: string;
   session_id?: string;
   created_after?: string;
   created_before?: string;
@@ -83,6 +87,7 @@ export function listTasks(params?: ListTasksParams): Promise<ListTasksResponse> 
   if (params?.status) searchParams.set("status", params.status);
   if (params?.agent_id) searchParams.set("agent_id", params.agent_id);
   if (params?.project) searchParams.set("project", params.project);
+  if (params?.group_id) searchParams.set("group_id", params.group_id);
   if (params?.session_id) searchParams.set("session_id", params.session_id);
   if (params?.created_after) searchParams.set("created_after", params.created_after);
   if (params?.created_before) searchParams.set("created_before", params.created_before);

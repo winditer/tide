@@ -14,6 +14,8 @@ import {
   uploadTaskAttachments,
   useCreateTaskMutation,
   useProjects,
+  useProjectGroups,
+  type CreateTaskParams,
   type SessionItem,
 } from "@tide/core";
 
@@ -83,8 +85,13 @@ export function TaskCreateForm({ onSuccess }: TaskCreateFormProps) {
   const [prompt, setPrompt] = useState("");
   const [agentId, setAgentId] = useState("codex");
   const [model, setModel] = useState("");
-  const [cwd, setCwd] = useState("");
-  const [cwdOpen, setCwdOpen] = useState(false);
+  /**
+   * 统一作用域编码：
+   * - ``"project:<cwd>"`` -> 单仓库，后端使用 cwd
+   * - ``"group:<id>"``    -> 项目组，后端根据 group_id 注入多仓库上下文
+   * - ``""``              -> 未选（需后端默认 cwd）
+   */
+  const [scopeValue, setScopeValue] = useState("");
   const [sessionId, setSessionId] = useState<string>("");
   const [sessionOpen, setSessionOpen] = useState(false);
   const [sessionList, setSessionList] = useState<SessionItem[]>([]);
@@ -95,27 +102,21 @@ export function TaskCreateForm({ onSuccess }: TaskCreateFormProps) {
   const [uploadError, setUploadError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const cwdBoxRef = useRef<HTMLDivElement>(null);
   const sessionBoxRef = useRef<HTMLDivElement>(null);
   const previewUrlsRef = useRef<string[]>([]);
 
   const createMutation = useCreateTaskMutation();
   const projectsQuery = useProjects();
   const projects = projectsQuery.data?.projects ?? [];
+  const groupsQuery = useProjectGroups();
+  const groups = groupsQuery.data?.groups ?? [];
+
+  // 从统一 scope 解码
+  const projectCwd = scopeValue.startsWith("project:") ? scopeValue.slice(8) : "";
+  const groupId = scopeValue.startsWith("group:") ? scopeValue.slice(6) : "";
 
   // 关闭 CWD 下拉（点击外部）
-  useEffect(() => {
-    if (!cwdOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (cwdBoxRef.current && !cwdBoxRef.current.contains(e.target as Node)) {
-        setCwdOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [cwdOpen]);
-
-  // 关闭 Session 下拉（点击外部）
+  // 项目组模式下不需要会话选择，状态以下仅在项目模式下生效
   useEffect(() => {
     if (!sessionOpen) return;
     const handler = (e: MouseEvent) => {
@@ -130,19 +131,18 @@ export function TaskCreateForm({ onSuccess }: TaskCreateFormProps) {
     return () => document.removeEventListener("mousedown", handler);
   }, [sessionOpen]);
 
-  // cwd 变化时加载会话列表
+  // 当选中项目时加载会话列表；项目组模式清空
   useEffect(() => {
-    const target = cwd.trim();
     setSessionId("");
     setSessionError(null);
-    if (!target) {
+    if (!projectCwd) {
       setSessionList([]);
       setSessionLoading(false);
       return;
     }
     let cancelled = false;
     setSessionLoading(true);
-    fetchSessionsForProject(target)
+    fetchSessionsForProject(projectCwd)
       .then((res) => {
         if (cancelled) return;
         setSessionList(res.sessions ?? []);
@@ -158,7 +158,7 @@ export function TaskCreateForm({ onSuccess }: TaskCreateFormProps) {
     return () => {
       cancelled = true;
     };
-  }, [cwd]);
+  }, [projectCwd]);
 
   // 卸载时释放 ObjectURL
   useEffect(() => {
@@ -168,15 +168,9 @@ export function TaskCreateForm({ onSuccess }: TaskCreateFormProps) {
     };
   }, []);
 
-  const filteredProjects = useMemo(() => {
-    const q = cwd.trim().toLowerCase();
-    if (!q) return projects;
-    return projects.filter(
-      (p) =>
-        p.name.toLowerCase().includes(q) ||
-        p.cwd.toLowerCase().includes(q)
-    );
-  }, [projects, cwd]);
+  const filteredProjects = useMemo(() => projects, [projects]);
+  // 项目组模式下不展示该项
+  void filteredProjects;
 
   const groupedSessions = useMemo(() => {
     const project: SessionItem[] = [];
@@ -193,7 +187,7 @@ export function TaskCreateForm({ onSuccess }: TaskCreateFormProps) {
     [sessionList, sessionId]
   );
 
-  const sessionDisabled = !cwd.trim();
+  const sessionDisabled = !projectCwd;
 
   const isUploading = attachments.some((a) => a.status === "uploading");
 
@@ -309,11 +303,6 @@ export function TaskCreateForm({ onSuccess }: TaskCreateFormProps) {
     });
   };
 
-  const pickProject = (path: string) => {
-    setCwd(path);
-    setCwdOpen(false);
-  };
-
   const pickSession = (id: string) => {
     setSessionId(id);
     setSessionOpen(false);
@@ -328,15 +317,21 @@ export function TaskCreateForm({ onSuccess }: TaskCreateFormProps) {
       .filter((a) => a.status === "done" && a.remotePath)
       .map((a) => a.remotePath as string);
 
+    const params: CreateTaskParams = {
+      prompt: prompt.trim(),
+      agent_id: agentId,
+      model: model.trim() || undefined,
+      session_id: sessionId || undefined,
+      attachments: remotePaths,
+    };
+    if (groupId) {
+      params.group_id = groupId;
+    } else if (projectCwd) {
+      params.cwd = projectCwd;
+    }
+
     try {
-      await createMutation.mutateAsync({
-        prompt: prompt.trim(),
-        agent_id: agentId,
-        model: model.trim() || undefined,
-        cwd: cwd.trim() || undefined,
-        session_id: sessionId || undefined,
-        attachments: remotePaths,
-      });
+      await createMutation.mutateAsync(params);
       // 清理预览 URL
       attachments.forEach((a) => {
         if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
@@ -344,7 +339,7 @@ export function TaskCreateForm({ onSuccess }: TaskCreateFormProps) {
       previewUrlsRef.current = [];
       setPrompt("");
       setModel("");
-      setCwd("");
+      setScopeValue("");
       setSessionId("");
       setAttachments([]);
       setUploadError(null);
@@ -386,43 +381,37 @@ export function TaskCreateForm({ onSuccess }: TaskCreateFormProps) {
         </div>
       </div>
 
-      {/* 工作目录 - Combobox */}
+      {/* 工作目录 / 项目组 - 统一选择器 */}
       <div>
-        <label className="mb-1.5 block text-sm font-medium">工作目录</label>
-        <div className="relative" ref={cwdBoxRef}>
-          <Input
-            placeholder="选择项目或输入路径..."
-            value={cwd}
-            onChange={(e) => {
-              setCwd(e.target.value);
-              setCwdOpen(true);
-            }}
-            onFocus={() => setCwdOpen(true)}
-            autoComplete="off"
-          />
-          {cwdOpen && (filteredProjects.length > 0 || projectsQuery.isLoading) && (
-            <div className="absolute z-50 mt-1 max-h-60 w-full overflow-auto rounded-md border border-input bg-popover p-1 text-popover-foreground shadow-md">
-              {projectsQuery.isLoading && (
-                <div className="px-2 py-2 text-xs text-muted-foreground">
-                  加载项目中...
-                </div>
-              )}
-              {filteredProjects.map((p) => (
-                <button
-                  type="button"
-                  key={p.id}
-                  onClick={() => pickProject(p.cwd)}
-                  className="flex w-full flex-col items-start gap-0.5 rounded px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground"
-                >
-                  <span className="font-medium">{p.name}</span>
-                  <span className="truncate text-xs text-muted-foreground">
-                    {p.cwd}
-                  </span>
-                </button>
+        <label className="mb-1.5 block text-sm font-medium">项目 / 项目组</label>
+        <select
+          value={scopeValue}
+          onChange={(e) => setScopeValue(e.target.value)}
+          className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        >
+          <option value="">默认（后端推断）</option>
+          {projects.length > 0 && (
+            <optgroup label="项目">
+              {projects.map((p) => (
+                <option key={p.id} value={`project:${p.cwd}`}>
+                  {p.name}
+                </option>
               ))}
-            </div>
+            </optgroup>
           )}
-        </div>
+          {groups.length > 0 && (
+            <optgroup label="项目组">
+              {groups.map((g) => (
+                <option key={g.id} value={`group:${g.id}`}>
+                  {g.name}
+                </option>
+              ))}
+            </optgroup>
+          )}
+        </select>
+        {projectCwd && (
+          <p className="mt-1.5 truncate text-xs text-muted-foreground">工作目录：{projectCwd}</p>
+        )}
       </div>
 
       {/* 会话选择 - Combobox */}
@@ -462,11 +451,13 @@ export function TaskCreateForm({ onSuccess }: TaskCreateFormProps) {
               </span>
             ) : (
               <span>
-                {sessionDisabled
-                  ? "请先选择工作目录"
-                  : sessionLoading
-                    ? "加载会话中..."
-                    : "新建会话（默认）/ 选择已有会话..."}
+                {groupId
+                  ? "项目组任务不支持选择会话"
+                  : sessionDisabled
+                    ? "请先选择项目"
+                    : sessionLoading
+                      ? "加载会话中..."
+                      : "新建会话（默认）/ 选择已有会话..."}
               </span>
             )}
             <svg

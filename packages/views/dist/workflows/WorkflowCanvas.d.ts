@@ -14,6 +14,8 @@ export interface WorkflowCanvasProps {
     toolbarExtra?: React.ReactNode;
     /** Sub-title shown in the canvas chrome */
     subtitle?: string;
+    /** Optional project context for member-aware fields (e.g. approval node approvers) */
+    projectId?: string;
 }
 export declare function WorkflowCanvas(props: WorkflowCanvasProps): import("react").JSX.Element;
 //# sourceMappingURL=WorkflowCanvas.d.ts.map

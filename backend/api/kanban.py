@@ -38,14 +38,21 @@ async def get_project_board(
     """项目看板：按项目状态分列。"""
     accessible_pids = await get_accessible_project_ids(current_user)
     board = await kanban_service.get_project_board(workspace_id)
-    if accessible_pids is not None:
-        columns = board.get("columns") or {}
-        for key, items in list(columns.items()):
-            columns[key] = [
-                it for it in items
-                if (it.get("id") in accessible_pids)
-                or (encode_project_id(it.get("cwd") or "") in accessible_pids)
-            ]
+    columns = board.get("columns") or {}
+    for key, items in list(columns.items()):
+        filtered = items
+        if accessible_pids is not None:
+            def _visible(it: dict) -> bool:
+                # 项目组：只要成员项目中任一可访问即可见
+                if it.get("type") == "group":
+                    member_ids = it.get("member_project_ids") or []
+                    return any(mid in accessible_pids for mid in member_ids)
+                return (
+                    (it.get("id") in accessible_pids)
+                    or (encode_project_id(it.get("cwd") or "") in accessible_pids)
+                )
+            filtered = [it for it in filtered if _visible(it)]
+        columns[key] = filtered
     return board
 
 
@@ -57,17 +64,19 @@ async def get_session_board(
     """会话看板：按 Agent 分组，按任务状态分列。"""
     accessible_pids = await get_accessible_project_ids(current_user)
     board = await kanban_service.get_session_board(workspace_id)
-    if accessible_pids is not None:
-        groups = board.get("groups") or {}
-        for agent, columns in list(groups.items()):
-            for col_key, items in list(columns.items()):
-                if not isinstance(items, list):
-                    continue
-                columns[col_key] = [
-                    it for it in items
+    groups = board.get("groups") or {}
+    for agent, columns in list(groups.items()):
+        for col_key, items in list(columns.items()):
+            if not isinstance(items, list):
+                continue
+            filtered = items
+            if accessible_pids is not None:
+                filtered = [
+                    it for it in filtered
                     if not (it.get("cwd") or "")
                     or encode_project_id(it.get("cwd") or "") in accessible_pids
                 ]
+            columns[col_key] = filtered
     return board
 
 
@@ -79,22 +88,24 @@ async def get_agent_board(
     """Agent 看板（泳道式）。"""
     accessible_pids = await get_accessible_project_ids(current_user)
     board = await kanban_service.get_agent_board(workspace_id)
-    if accessible_pids is not None:
-        swimlanes = board.get("swimlanes") or {}
-        for agent, lane in list(swimlanes.items()):
-            for col_key in ("running", "queued", "review", "completed", "failed"):
-                items = lane.get(col_key)
-                if not isinstance(items, list):
-                    continue
-                lane[col_key] = [
-                    it for it in items
+    swimlanes = board.get("swimlanes") or {}
+    for agent, lane in list(swimlanes.items()):
+        for col_key in ("running", "queued", "review", "completed", "failed"):
+            items = lane.get(col_key)
+            if not isinstance(items, list):
+                continue
+            filtered = items
+            if accessible_pids is not None:
+                filtered = [
+                    it for it in filtered
                     if not (it.get("cwd") or "")
                     or encode_project_id(it.get("cwd") or "") in accessible_pids
                 ]
-            # Recalculate idle state after filtering
-            lane["idle"] = not (
-                lane.get("running") or lane.get("queued") or lane.get("review")
-            )
+            lane[col_key] = filtered
+        # Recalculate idle state after filtering
+        lane["idle"] = not (
+            lane.get("running") or lane.get("queued") or lane.get("review")
+        )
     return board
 
 

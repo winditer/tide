@@ -27,6 +27,7 @@ const FILTER_KEYS: (keyof TaskFiltersValue)[] = [
   "status",
   "agent_id",
   "project",
+  "group_id",
   "session_id",
   "created_after",
   "created_before",

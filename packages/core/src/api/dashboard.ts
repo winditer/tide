@@ -127,6 +127,8 @@ export function getProjects(params?: { show_archived?: boolean }): Promise<Proje
 
 export interface GetSessionsParams {
   project?: string;
+  /** 项目组 id；仅返回属于该项目组的会话 */
+  group_id?: string;
   agent_id?: string;
   page?: number;
   page_size?: number;
@@ -136,6 +138,7 @@ export interface GetSessionsParams {
 export function getSessions(params?: GetSessionsParams): Promise<SessionsResponse> {
   const searchParams = new URLSearchParams();
   if (params?.project) searchParams.set("project", params.project);
+  if (params?.group_id) searchParams.set("group_id", params.group_id);
   if (params?.agent_id) searchParams.set("agent_id", params.agent_id);
   if (params?.page) searchParams.set("page", String(params.page));
   if (params?.page_size) searchParams.set("page_size", String(params.page_size));
@@ -255,14 +258,40 @@ export interface ProjectProgress {
   completed: number;
 }
 
+/** 项目组进度汇总：返回组内所有工作项的总数与完成数。 */
+export interface ProjectGroupProgress {
+  id: string;
+  name: string;
+  description?: string | null;
+  /** 项目组总成员项目数（含不可访问部分）。 */
+  member_count: number;
+  /** 当前用户可访问的项目数。 */
+  accessible_member_count: number;
+  total: number;
+  completed: number;
+  last_updated: string | null;
+}
+
 export function getMyWorkItems(limit = 10): Promise<MyWorkItem[]> {
   return apiClient.get<MyWorkItem[]>(
     `/api/dashboard/work-items?limit=${limit}`,
   );
 }
 
-export function getProjectProgress(limit = 8): Promise<ProjectProgress[]> {
+export function getProjectProgress(
+  limit = 8,
+  groupId?: string,
+): Promise<ProjectProgress[]> {
+  const search = new URLSearchParams();
+  search.set("limit", String(limit));
+  if (groupId) search.set("group_id", groupId);
   return apiClient.get<ProjectProgress[]>(
-    `/api/dashboard/project-progress?limit=${limit}`,
+    `/api/dashboard/project-progress?${search.toString()}`,
+  );
+}
+
+export function getGroupProgress(limit = 8): Promise<ProjectGroupProgress[]> {
+  return apiClient.get<ProjectGroupProgress[]>(
+    `/api/dashboard/group-progress?limit=${limit}`,
   );
 }

@@ -31,6 +31,97 @@ export interface ChatMessage {
   interactive?: ChatInteractive;
 }
 
+export type ChatArtifactType = "file" | "link" | "markdown";
+
+export interface ChatArtifact {
+  id: string;
+  label: string;
+  url: string;
+  type: ChatArtifactType;
+  created_at?: string;
+  task_id?: string;
+}
+
+/**
+ * Extract artifact-like links from a message content.
+ * Matches:
+ *  1. `[label](url)` where url is `/api/...`, `http(s)://...`, or an absolute
+ *     file path like `/Users/.../file.md`.
+ *  2. Common file-creation patterns: "File created successfully at: <path>",
+ *     "Created file: <path>", "写入文件: <path>".
+ * Used as a supplementary source alongside backend `task.artifact` events.
+ */
+export function extractArtifactsFromContent(
+  content: string,
+  taskId?: string
+): ChatArtifact[] {
+  if (!content) return [];
+  const seen = new Set<string>();
+  const result: ChatArtifact[] = [];
+
+  const addArtifact = (label: string, url: string) => {
+    if (!label || !url || seen.has(url)) return;
+    seen.add(url);
+    const isExternal = /^https?:/i.test(url);
+    const lower = url.toLowerCase().split(/[?#]/)[0];
+    const isMarkdown = lower.endsWith(".md") || lower.endsWith(".markdown");
+    const type: ChatArtifactType = isExternal
+      ? "link"
+      : isMarkdown
+        ? "markdown"
+        : "file";
+    result.push({
+      id: `${taskId || "inline"}::${url}`,
+      label,
+      url,
+      type,
+      task_id: taskId,
+    });
+  };
+
+  // 1. Markdown links: /api/..., http(s)://..., or absolute file paths (containing / and a file extension)
+  const linkRegex = /\[([^\]]+)\]\((\/api\/[^)\s]+|https?:\/\/[^)\s]+|\/[^)\s]*\/[^)\s]+\.[a-zA-Z0-9]+)\)/g;
+  let match: RegExpExecArray | null;
+  while ((match = linkRegex.exec(content)) !== null) {
+    addArtifact((match[1] || "").trim(), (match[2] || "").trim().replace(/^[`'"\s]+|[`'"\s]+$/g, ""));
+  }
+
+  // 2. File creation patterns (English + Chinese)
+  const pathPatterns = [
+    /File created successfully at:\s*(.+?)(?:\n|$)/gi,
+    /Created file:\s*(.+?)(?:\n|$)/gi,
+    /写入文件[:：]\s*(.+?)(?:\n|$)/g,
+  ];
+  // Strip code blocks to avoid false positives
+  const stripped = content.replace(/```[\s\S]*?```/g, "");
+  for (const pattern of pathPatterns) {
+    let m: RegExpExecArray | null;
+    while ((m = pattern.exec(stripped)) !== null) {
+      const path = (m[1] || "").trim().replace(/^[`'"\s]+|[`'"\s]+$/g, "");
+      if (!path || !path.startsWith("/")) continue;
+      const label = path.split("/").pop() || path;
+      addArtifact(label, path);
+    }
+  }
+
+  return result;
+}
+
+function mergeArtifactsByUrl(
+  prev: ChatArtifact[],
+  next: ChatArtifact[]
+): ChatArtifact[] {
+  if (next.length === 0) return prev;
+  const seen = new Set(prev.map((a) => a.url));
+  const additions: ChatArtifact[] = [];
+  for (const a of next) {
+    if (!a || !a.url || seen.has(a.url)) continue;
+    seen.add(a.url);
+    additions.push(a);
+  }
+  return additions.length === 0 ? prev : [...prev, ...additions];
+}
+
 export interface UseChatOptions {
   projectId?: string;
   sessionId?: string;
@@ -141,6 +232,7 @@ export interface SendMessageOverrides {
   projectCwd?: string;
   sessionId?: string;
   agentId?: string;
+  groupId?: string;
 }
 
 export interface UseChatResult {
@@ -155,6 +247,8 @@ export interface UseChatResult {
   clearHistory: () => void;
   approveTask: (approvalId: string, comment?: string) => Promise<void>;
   rejectTask: (approvalId: string, comment?: string) => Promise<void>;
+  artifacts: ChatArtifact[];
+  clearArtifacts: () => void;
 }
 
 export function useChat(options: UseChatOptions = {}): UseChatResult {
@@ -163,6 +257,7 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
   const [isSending, setIsSending] = useState(false);
   const [hasUnread, setHasUnread] = useState(false);
   const [chatSessionId, setChatSessionId] = useState<string>("");
+  const [artifacts, setArtifacts] = useState<ChatArtifact[]>([]);
   const messagesRef = useRef<ChatMessage[]>([]);
   messagesRef.current = messages;
   const hydratedKeyRef = useRef<string | null>(null);
@@ -262,6 +357,14 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
       if (finalStatus === "completed" || finalStatus === "failed") {
         setHasUnread(true);
       }
+      // Extract artifact-style links from the final assistant content
+      // as a supplementary source to the structured task.artifact events.
+      if (finalStatus === "completed" && result) {
+        const finalArts = extractArtifactsFromContent(result, taskId);
+        if (finalArts.length > 0) {
+          setArtifacts((prev) => mergeArtifactsByUrl(prev, finalArts));
+        }
+      }
     } catch {
       // network failure — keep message in running state
     }
@@ -337,9 +440,70 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
               };
             })
           );
+          // Opportunistically extract artifact-style links from the chunk;
+          // backend `task.artifact` event remains the authoritative source.
+          const inlineArts = extractArtifactsFromContent(chunk, event.task_id);
+          if (inlineArts.length > 0) {
+            setArtifacts((prev) => mergeArtifactsByUrl(prev, inlineArts));
+          }
         }
         // Capture session_id lazily on the first output event
         void captureSessionFromTask(event.task_id);
+        return;
+      }
+
+      // Backend pushes structured artifacts when a task produces files/links.
+      // See backend/services/event_emitter.py + WS hub for the payload shape.
+      if (type === "task.artifact") {
+        const raw = event as TaskEvent & {
+          artifacts?: Array<{
+            id?: string;
+            label?: string;
+            url?: string;
+            type?: string;
+            task_id?: string;
+            created_at?: string;
+          }>;
+          payload?: Record<string, unknown>;
+        };
+        const list =
+          (Array.isArray(raw.artifacts) ? raw.artifacts : null) ||
+          (Array.isArray(raw.payload?.artifacts)
+            ? (raw.payload!.artifacts as Array<Record<string, unknown>>)
+            : null) ||
+          [];
+        if (list.length > 0) {
+          const allowed: ChatArtifactType[] = ["file", "link", "markdown"];
+          const incoming: ChatArtifact[] = [];
+          for (const a of list as Array<Record<string, unknown>>) {
+            if (!a) continue;
+            const url = typeof a.url === "string" ? a.url : "";
+            if (!url) continue;
+            const rawType = typeof a.type === "string" ? a.type : "";
+            const type = (allowed.includes(rawType as ChatArtifactType)
+              ? rawType
+              : "file") as ChatArtifactType;
+            incoming.push({
+              id:
+                (typeof a.id === "string" && a.id) ||
+                `${event.task_id}::${url}`,
+              label: (typeof a.label === "string" && a.label) || "附件",
+              url,
+              type,
+              task_id:
+                (typeof a.task_id === "string" && a.task_id) ||
+                event.task_id,
+              created_at:
+                (typeof a.created_at === "string" && a.created_at) ||
+                event.timestamp ||
+                new Date().toISOString(),
+            });
+          }
+          if (incoming.length > 0) {
+            setArtifacts((prev) => mergeArtifactsByUrl(prev, incoming));
+            setHasUnread(true);
+          }
+        }
         return;
       }
       // Backend emits "task.status_changed" with new_status; some flows may emit
@@ -448,6 +612,7 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
         chatSessionIdRef.current ??
         undefined;
       const finalAgentId = overrides?.agentId ?? agentId ?? undefined;
+      const finalGroupId = overrides?.groupId ?? undefined;
 
       const assistantMsg: ChatMessage = {
         id: genId(),
@@ -474,6 +639,7 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
           agent_id: finalAgentId || undefined,
           cwd: finalCwd || undefined,
           session_id: finalSessionId || undefined,
+          group_id: finalGroupId || undefined,
         });
         setMessages((prev) =>
           prev.map((m) =>
@@ -517,6 +683,7 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
               agent_id: finalAgentId || undefined,
               cwd: finalCwd || undefined,
               session_id: undefined,
+              group_id: finalGroupId || undefined,
             });
             setMessages((prev) =>
               prev.map((m) =>
@@ -560,10 +727,13 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
     [projectId, sessionId, agentId]
   );
 
+  const clearArtifacts = useCallback(() => setArtifacts([]), []);
+
   const clearHistory = useCallback(() => {
     setMessages([]);
     setChatSessionId("");
     sessionFetchedRef.current = new Set();
+    setArtifacts([]);
     if (typeof window !== "undefined") {
       try {
         window.localStorage.removeItem(storageKey(projectId));
@@ -660,7 +830,20 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
       clearHistory,
       approveTask,
       rejectTask,
+      artifacts,
+      clearArtifacts,
     }),
-    [messages, isSending, hasUnread, markRead, sendMessage, clearHistory, approveTask, rejectTask]
+    [
+      messages,
+      isSending,
+      hasUnread,
+      markRead,
+      sendMessage,
+      clearHistory,
+      approveTask,
+      rejectTask,
+      artifacts,
+      clearArtifacts,
+    ]
   );
 }

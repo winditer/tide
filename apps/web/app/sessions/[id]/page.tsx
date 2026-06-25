@@ -89,7 +89,7 @@ function renderMarkdown(src: string): React.ReactNode[] {
     blocks.push(
       <pre
         key={key++}
-        className="overflow-x-auto rounded-md border border-zinc-900/10 bg-zinc-950 p-3 font-mono text-[12px] leading-relaxed text-zinc-100"
+        className="max-w-full overflow-x-auto rounded-md border border-zinc-900/10 bg-zinc-950 p-3 font-mono text-[12px] leading-relaxed text-zinc-100"
       >
         {lang && (
           <div className="mb-2 font-mono text-[10px] tracking-widest text-zinc-400">
@@ -274,7 +274,7 @@ export default function SessionDetailPage({
 
   if (isLoading) {
     return (
-      <main className="mx-auto max-w-6xl">
+      <main className="mx-auto max-w-7xl px-2 py-2">
         <div className="py-20 text-center text-sm text-muted-foreground">加载中…</div>
       </main>
     );
@@ -282,7 +282,7 @@ export default function SessionDetailPage({
 
   if (isError || !session) {
     return (
-      <main className="mx-auto max-w-6xl space-y-6">
+      <main className="mx-auto max-w-7xl px-2 py-2 space-y-6">
         <div className="py-12 text-center text-sm text-destructive">
           会话不存在或加载失败
         </div>
@@ -301,7 +301,7 @@ export default function SessionDetailPage({
     `Session ${shortenId(session.session_id)}`;
 
   return (
-    <main className="mx-auto max-w-6xl space-y-8">
+    <main className="mx-auto max-w-7xl px-2 py-2 space-y-8">
       {/* Header */}
       <header>
         <button
@@ -339,9 +339,9 @@ export default function SessionDetailPage({
         </div>
       </header>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
+      <div className="grid min-w-0 grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
         {/* Conversation */}
-        <div className="bg-card rounded-xl shadow-card overflow-hidden">
+        <div className="min-w-0 bg-card rounded-xl shadow-card overflow-auto">
           <div
             ref={scrollRef}
             className="max-h-[68vh] overflow-y-auto px-5 py-6"
@@ -474,8 +474,11 @@ function MessageBubble({ message }: { message: SessionMessage }) {
   const labelTime = formatTime(message.timestamp);
 
   return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-      <div className={`flex max-w-[78%] flex-col gap-1 ${isUser ? "items-end" : "items-start"}`}>
+    <div className={`flex min-w-0 ${isUser ? "justify-end" : "justify-start"}`}>
+      <div
+        className="flex min-w-0 flex-col gap-1"
+        style={{ maxWidth: "88%", width: "100%" }}
+      >
         <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
           <span>{isUser ? "User" : isReasoning ? "Reasoning" : "Assistant"}</span>
           <span className="text-muted-foreground/60">·</span>
@@ -485,19 +488,32 @@ function MessageBubble({ message }: { message: SessionMessage }) {
           className={[
             "rounded-xl px-4 py-3 text-[14px] leading-relaxed transition-smooth",
             isUser
-              ? "bg-foreground text-background"
+              ? ""
               : isReasoning
                 ? "bg-muted/60 text-muted-foreground border border-dashed border-border/50"
                 : "bg-card border border-border/50",
           ].join(" ")}
+          style={{
+            maxWidth: "100%",
+            ...(isUser
+              ? { background: "var(--color-foreground)", color: "var(--color-background)" }
+              : {}),
+          }}
         >
           <div
-            className={
-              isUser ? "prose-invert space-y-2" : "space-y-2"
-            }
+            className="space-y-2 max-h-[500px] overflow-y-auto overflow-x-hidden"
+            style={{ overflowWrap: "break-word" }}
           >
             {isUser ? (
-              <p className="whitespace-pre-wrap">{message.content}</p>
+              <p
+                style={{
+                  whiteSpace: "pre-wrap",
+                  overflowWrap: "break-word",
+                  wordBreak: "break-all",
+                }}
+              >
+                {message.content}
+              </p>
             ) : (
               renderMarkdown(message.content)
             )}

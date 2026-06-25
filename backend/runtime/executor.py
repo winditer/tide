@@ -16,6 +16,8 @@ from backend.runtime.adapters import (
     A2AAdapter,
     approved_permission_mode,
     should_create_approval,
+    try_parse_claude_result,
+    try_parse_token_usage,
 )
 from backend.runtime.config import APPROVED_CODEX_APPROVAL_POLICY, APPROVED_CODEX_SANDBOX_MODE
 from backend.runtime.task_runtime import CodexTaskRuntime
@@ -150,8 +152,10 @@ class AgentExecutor:
         )
         if full_auto:
             if adapter.id == "codex":
-                runtime.approval_policy = "full-auto"
-                runtime.sandbox_mode = "off"
+                runtime.approval_policy = "never"
+                runtime.sandbox_mode = "danger-full-access"
+            elif adapter.id == "claude":
+                runtime.permission_mode = "bypassPermissions"
             else:
                 runtime.permission_mode = "bypass_permissions"
         elif approved_retry:
@@ -191,6 +195,12 @@ class AgentExecutor:
             session_id = ""
             output_parts: list[str] = []
             approval_requested = False
+            token_input_total = 0
+            token_output_total = 0
+            # Claude CLI 的 result 事件会载明精确的成本与 token，优先使用
+            claude_cost_usd: float = 0.0
+            claude_token_input = 0
+            claude_token_output = 0
             # 当带 resume 启动时，先缓冲流式输出。若 resume 失败需要降级为新建会话，
             # 这些 error 输出会被丢弃，不进入聊天历史；resume 成功或非 resume 错误则正常 flush。
             buffer_output = bool(used_resume)
@@ -204,6 +214,26 @@ class AgentExecutor:
                 line = line_bytes.decode("utf-8", errors="replace").rstrip("\n")
                 if not line:
                     continue
+
+                # 尝试从 JSON 行中提取 token 使用量（失败返回 0,0，不影响主流程）
+                try:
+                    ti, to = try_parse_token_usage(line)
+                    if ti or to:
+                        token_input_total += ti
+                        token_output_total += to
+                except Exception as _e:  # noqa: BLE001
+                    logger.debug("[executor] token parse error: %s", _e)
+
+                # Claude CLI 的 result 事件携带精确的成本和含 cache 的 token 总量，
+                # 优先使用这个数据；其他 CLI 该函数返回全 0，不会覆盖通用解析。
+                try:
+                    cc, ci, co = try_parse_claude_result(line)
+                    if cc > 0 or ci > 0 or co > 0:
+                        claude_cost_usd = cc
+                        claude_token_input = ci
+                        claude_token_output = co
+                except Exception as _e:  # noqa: BLE001
+                    logger.debug("[executor] claude result parse error: %s", _e)
 
                 try:
                     events = adapter.parse_events(line)
@@ -318,6 +348,12 @@ class AgentExecutor:
                 session_id = ""
                 output_parts = []
                 approval_requested = False
+                # 降级重试后重新计数 token 使用量（丢弃 resume 失败阶段误计的值）
+                token_input_total = 0
+                token_output_total = 0
+                claude_cost_usd = 0.0
+                claude_token_input = 0
+                claude_token_output = 0
 
                 assert proc.stdout is not None
                 while True:
@@ -327,6 +363,23 @@ class AgentExecutor:
                     line = line_bytes.decode("utf-8", errors="replace").rstrip("\n")
                     if not line:
                         continue
+
+                    try:
+                        ti, to = try_parse_token_usage(line)
+                        if ti or to:
+                            token_input_total += ti
+                            token_output_total += to
+                    except Exception as _e:  # noqa: BLE001
+                        logger.debug("[executor] token parse error: %s", _e)
+
+                    try:
+                        cc, ci, co = try_parse_claude_result(line)
+                        if cc > 0 or ci > 0 or co > 0:
+                            claude_cost_usd = cc
+                            claude_token_input = ci
+                            claude_token_output = co
+                    except Exception as _e:  # noqa: BLE001
+                        logger.debug("[executor] claude result parse error: %s", _e)
 
                     try:
                         events = adapter.parse_events(line)
@@ -385,19 +438,83 @@ class AgentExecutor:
                     yield ev
                 buffered_events = []
 
+            # 任务结束（无论成败）均尝试写入 token 成本。
+            # 失败任务的 token 消耗仍应被记录，仅在解析不到有效 token 时跳过。
+            cost_model = model or adapter.default_model or adapter.id
+            try:
+                if claude_token_input > 0 or claude_token_output > 0 or claude_cost_usd > 0:
+                    # Claude CLI 的 result 事件提供了精确数据，优先使用
+                    from backend.services.cost_service import cost_service
+                    await cost_service.update_task_cost(
+                        task_id=task_id,
+                        input_tokens=claude_token_input,
+                        output_tokens=claude_token_output,
+                        model=cost_model,
+                    )
+                    # 同步让后续 metadata 上报使用 Claude 汇总值
+                    token_input_total = claude_token_input
+                    token_output_total = claude_token_output
+                elif token_input_total or token_output_total:
+                    # 通用解析路径（Claude 以外的 CLI）
+                    # TODO: Codex CLI 的 ``--json`` 输出不携带 token；Qoder CLI 输出 input_tokens=0
+                    # 为客户端 Bug，两者都需等待 CLI 升级后才能采集到精确数值。
+                    from backend.services.cost_service import cost_service
+                    await cost_service.update_task_cost(
+                        task_id=task_id,
+                        input_tokens=token_input_total,
+                        output_tokens=token_output_total,
+                        model=cost_model,
+                    )
+                else:
+                    # 降级估算路径：Claude 精确数据与通用解析均未获取到 token，
+                    # 使用 tiktoken 对 prompt 和输出文本进行估算。
+                    # 适用于当前 Codex/Qoder CLI 未提供有效 token 数据的场景。
+                    from backend.runtime.adapters import estimate_token_count
+
+                    est_input = estimate_token_count(prompt)
+                    est_output = (
+                        estimate_token_count("\n".join(p for p in output_parts if p))
+                        if output_parts
+                        else 0
+                    )
+                    if est_input > 0 or est_output > 0:
+                        token_input_total = est_input
+                        token_output_total = est_output
+                        from backend.services.cost_service import cost_service
+                        await cost_service.update_task_cost(
+                            task_id=task_id,
+                            input_tokens=est_input,
+                            output_tokens=est_output,
+                            model=cost_model,
+                        )
+                        logger.info(
+                            "[executor] task=%s token estimated: in=%d out=%d",
+                            task_id, est_input, est_output,
+                        )
+            except Exception as _e:  # noqa: BLE001
+                logger.warning("[executor] update_task_cost failed task=%s: %s", task_id, _e)
+
             if return_code == 0:
                 yield TaskEvent(
                     type="completed",
                     content=final_output,
                     session_id=session_id,
-                    metadata={"return_code": 0},
+                    metadata={
+                        "return_code": 0,
+                        "token_input": token_input_total,
+                        "token_output": token_output_total,
+                    },
                 )
             else:
                 yield TaskEvent(
                     type="failed",
                     content=final_output or f"Process exited with code {return_code}",
                     session_id=session_id,
-                    metadata={"return_code": return_code},
+                    metadata={
+                        "return_code": return_code,
+                        "token_input": token_input_total,
+                        "token_output": token_output_total,
+                    },
                 )
 
         except asyncio.CancelledError:

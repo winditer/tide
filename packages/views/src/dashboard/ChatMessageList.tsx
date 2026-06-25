@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import type { ChatMessage } from "@tide/core";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { ChatArtifact, ChatMessage } from "@tide/core";
+import { extractArtifactsFromContent } from "@tide/core";
+import { ExternalLink, FileText } from "lucide-react";
 import { SimpleMarkdown } from "../shared/SimpleMarkdown";
 
 interface ChatMessageListProps {
@@ -211,6 +213,10 @@ function MessageBubble({ message, onApprove, onReject }: MessageBubbleProps) {
             </span>
           </div>
         )}
+
+        {/* Inline artifact cards: render only after the assistant message has
+            settled (status=completed) to avoid flicker during streaming. */}
+        <MessageArtifactCards message={message} />
       </div>
       <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
         <span>{formatTime(message.timestamp)}</span>
@@ -236,6 +242,70 @@ function MessageBubble({ message, onApprove, onReject }: MessageBubbleProps) {
         )}
       </div>
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Inline artifact rendering — extracted from message content as supplementary
+// signal to backend `task.artifact` events. Hidden until the message is
+// fully settled to avoid flicker while content streams in.
+// ─────────────────────────────────────────────────────────────────────────
+
+function MessageArtifactCards({ message }: { message: ChatMessage }) {
+  const artifacts = useMemo<ChatArtifact[]>(() => {
+    if (message.role !== "assistant") return [];
+    if (message.status !== "completed") return [];
+    return extractArtifactsFromContent(message.content || "", message.taskId);
+  }, [message.role, message.status, message.content, message.taskId]);
+
+  if (artifacts.length === 0) return null;
+  return (
+    <div className="mt-2 space-y-1">
+      {artifacts.map((artifact) => (
+        <ArtifactCard key={artifact.id} artifact={artifact} />
+      ))}
+    </div>
+  );
+}
+
+export function ArtifactCard({ artifact }: { artifact: ChatArtifact }) {
+  const isExternal =
+    artifact.type === "link" && /^https?:/i.test(artifact.url);
+  const Icon = isExternal ? ExternalLink : FileText;
+  const typeLabel =
+    artifact.type === "markdown"
+      ? "文档"
+      : artifact.type === "link"
+        ? "链接"
+        : "文件";
+  // 绝对文件路径（如 /Users/...）转为后端 API 读取
+  const resolvedUrl =
+    !isExternal && !artifact.url.startsWith("/api/") && artifact.url.startsWith("/")
+      ? `/api/files/content?path=${encodeURIComponent(artifact.url)}`
+      : artifact.url;
+  const href = isExternal
+    ? artifact.url
+    : `/docs/view?url=${encodeURIComponent(resolvedUrl)}&title=${encodeURIComponent(artifact.label)}`;
+
+  return (
+    <a
+      href={href}
+      target={isExternal ? "_blank" : undefined}
+      rel={isExternal ? "noopener noreferrer" : undefined}
+      className="group flex items-center gap-2 rounded-md border border-border/60 bg-muted/30 px-2 py-1.5 text-[11px] transition-colors hover:border-primary/40 hover:bg-primary/5"
+      title={artifact.url}
+    >
+      <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground group-hover:text-primary" />
+      <span className="min-w-0 flex-1 truncate text-foreground">
+        {artifact.label}
+      </span>
+      <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+        {typeLabel}
+      </span>
+      <span className="shrink-0 text-[10px] font-medium text-primary opacity-80 group-hover:opacity-100">
+        查看
+      </span>
+    </a>
   );
 }
 

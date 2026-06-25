@@ -153,6 +153,40 @@ def final_reply_text(text: str, limit: int = FINAL_REPLY_MAX_CHARS) -> str:
     return text[:limit].rstrip() + f"\n\n...（已截断，剩余 {omitted} 字）"
 
 
+async def _build_prompt_with_rules(
+    prompt: str,
+    workspace_id: str,
+    cwd: str,
+    project_id: Optional[str] = None,
+) -> str:
+    """将匹配的 Rules 内容注入到 prompt 前缀（在 Skills 之前）。
+
+    Rules 是强制约束（mandatory），按 priority 排序后以 Markdown 段落形式
+    注入到 prompt 顶部；Skills 是参考指南，应在 Rules 之后追加。
+    匹配失败或加载异常时静默回退到原始 prompt。
+    """
+    try:
+        from backend.services.rule_service import rule_service
+        rules = await rule_service.get_matching_rules(
+            workspace_id=workspace_id,
+            cwd=cwd,
+            project_id=project_id,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("_build_prompt_with_rules: failed to load rules")
+        return prompt
+    if not rules:
+        return prompt
+    rule_sections: list[str] = []
+    for r in rules:
+        name = r.get("name") or ""
+        scope = r.get("scope") or "global"
+        content = r.get("content") or ""
+        rule_sections.append(f"## Rule: {name} [{scope}]\n{content}")
+    prefix = "# Mandatory Rules (always follow)\n\n" + "\n\n---\n\n".join(rule_sections)
+    return f"{prefix}\n\n---\n\n{prompt}"
+
+
 def extract_text_content(content: Any) -> str:
     """提取 Codex JSON 消息列表中的文本片段。
 
@@ -500,6 +534,206 @@ CODEX_VALID_MODEL_KEYS = {"auto", "ultimate", "performance", "efficient", "lite"
 
 # ── Adapter 注册表（延迟填充，在类定义之后） ──
 _ADAPTER_REGISTRY: dict[str, "AgentAdapter"] = {}
+
+
+# ── Token usage 解析 ────────────────────────────────────────────
+# 不同 CLI（Codex / Claude / Qoder）输出格式差异较大，这里实现
+# 通用的 JSON 行提取逻辑：扫描嵌套字段中常见的 token 计数键名。
+
+_TOKEN_INPUT_KEYS = (
+    "input_tokens",
+    "prompt_tokens",
+    "prompt_token_count",
+    "input_token_count",
+    "in_tokens",
+    # camelCase 经过 .lower() 处理后的键名（CLI 输出可能为 inputTokens 等）
+    "inputtokens",
+    "prompttokens",
+    # Claude CLI 的 cache 相关 token，需计入 input 总量
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+    "cachecreationinputtokens",
+    "cachereadinputtokens",
+)
+_TOKEN_OUTPUT_KEYS = (
+    "output_tokens",
+    "completion_tokens",
+    "completion_token_count",
+    "output_token_count",
+    "out_tokens",
+    # camelCase 经过 .lower() 处理后的键名
+    "outputtokens",
+    "completiontokens",
+)
+_TOKEN_USAGE_CONTAINER_KEYS = (
+    "usage",
+    "token_usage",
+    "tokens",
+    "stats",
+    "metrics",
+)
+
+
+def _coerce_int(value: Any) -> int:
+    try:
+        v = int(value)
+        return v if v >= 0 else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def estimate_token_count(text: str, encoding_name: str = "cl100k_base") -> int:
+    """使用 tiktoken 估算文本的 token 数量。
+
+    当 Agent CLI 不报告 token 用量时（如当前 Codex CLI 的 ``--json`` 输出不携带
+    token 字段、Qoder CLI 输出 ``input_tokens=0``），作为降级估算方案使用。
+
+    注意：
+    - 该函数只统计可见文本的 token，不包含 CLI 内部注入的 system prompt、
+      工具定义、上下文 cache 等隐式输入，因此估算值通常会低于真实计费值。
+    - tiktoken 不可用时退化为按 4 字符 ≈ 1 token 的粗略估算。
+    """
+    if not text:
+        return 0
+    try:
+        import tiktoken  # 局部导入：避免可选依赖未安装时模块加载失败
+
+        enc = tiktoken.get_encoding(encoding_name)
+        return len(enc.encode(text))
+    except Exception:
+        # tiktoken 不可用时使用字符比例粗估（~4 char/token）
+        return max(1, len(text) // 4)
+
+
+def _scan_token_usage(obj: Any) -> tuple[int, int]:
+    """递归扫描任意嵌套结构，提取 (input, output) token 数。
+
+    返回找到的最大值（多次 turn 累加由调用方处理）。
+    """
+    if not isinstance(obj, (dict, list)):
+        return 0, 0
+    found_in, found_out = 0, 0
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            kl = str(key).lower()
+            if kl in _TOKEN_INPUT_KEYS and isinstance(value, (int, float, str)):
+                found_in = max(found_in, _coerce_int(value))
+            elif kl in _TOKEN_OUTPUT_KEYS and isinstance(value, (int, float, str)):
+                found_out = max(found_out, _coerce_int(value))
+            elif kl in _TOKEN_USAGE_CONTAINER_KEYS or isinstance(value, (dict, list)):
+                ci, co = _scan_token_usage(value)
+                found_in = max(found_in, ci)
+                found_out = max(found_out, co)
+    else:  # list
+        for item in obj:
+            ci, co = _scan_token_usage(item)
+            found_in = max(found_in, ci)
+            found_out = max(found_out, co)
+    return found_in, found_out
+
+
+def try_parse_token_usage(line: str) -> tuple[int, int]:
+    """尝试从单行 Agent 输出中解析 token 使用量。
+
+    返回 ``(input_tokens, output_tokens)``；解析失败返回 ``(0, 0)``，
+    调用方应忽略返回值为 0 的情况以避免覆盖真实数据。
+
+    备注：
+    - Codex CLI 的 ``--json`` 输出当前不携带 token 计数（CLI 限制），此处会返回 (0, 0)。
+      TODO: 待 Codex CLI 后续版本暴露 token 字段后再扩展。
+    - Qoder CLI 当前输出 ``input_tokens: 0`` 为客户端 Bug，后续 CLI 修复后无需改动本函数。
+    """
+    if not line:
+        return 0, 0
+    raw = line.strip()
+    if not raw or raw[0] not in "{[":
+        return 0, 0
+    try:
+        obj = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return 0, 0
+    return _scan_token_usage(obj)
+
+
+def try_parse_claude_result(line: str) -> tuple[float, int, int]:
+    """从 Claude CLI ``result`` 事件解析精确的成本和 token 用量。
+
+    Claude CLI 在任务结束时输出形如 ``{"type": "result", "total_cost_usd": ...,
+    "modelUsage": {"<model>": {"inputTokens": ..., "outputTokens": ...,
+    "cacheCreationInputTokens": ..., "cacheReadInputTokens": ...}}}`` 的事件。
+    本函数汇总所有模型的 token 计数（含 cache 部分），并直接返回 CLI 报告的成本。
+
+    Args:
+        line: Agent 输出的单行内容。
+
+    Returns:
+        ``(cost_usd, total_input_tokens, total_output_tokens)``；非 result 事件或
+        解析失败时返回 ``(0.0, 0, 0)``，调用方应忽略全 0 结果以免覆盖通用解析数据。
+    """
+    if not line:
+        return 0.0, 0, 0
+    raw = line.strip()
+    if not raw or raw[0] != "{":
+        return 0.0, 0, 0
+    try:
+        obj = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return 0.0, 0, 0
+    if not isinstance(obj, dict) or obj.get("type") != "result":
+        return 0.0, 0, 0
+
+    try:
+        cost = float(obj.get("total_cost_usd") or 0)
+    except (TypeError, ValueError):
+        cost = 0.0
+
+    model_usage = obj.get("modelUsage") or {}
+    total_in = 0
+    total_out = 0
+    if isinstance(model_usage, dict):
+        for usage in model_usage.values():
+            if not isinstance(usage, dict):
+                continue
+            total_in += (
+                _coerce_int(usage.get("inputTokens"))
+                + _coerce_int(usage.get("cacheCreationInputTokens"))
+                + _coerce_int(usage.get("cacheReadInputTokens"))
+            )
+            total_out += _coerce_int(usage.get("outputTokens"))
+
+    return cost, total_in, total_out
+
+
+# ── Skills prompt 注入 ──
+
+async def _build_prompt_with_skills(
+    prompt: str,
+    skill_slugs: list[str],
+    workspace_id: str = "default",
+) -> str:
+    """将选中的 Skills 内容注入到 prompt 前缀。
+
+    工作流 Agent 节点可在 ``data.skills`` 中配置启用的 Skill slug 列表，
+    引擎在构造 prompt 时调用本方法将 Skills 全文以可读 Markdown 段落注入。
+    若 ``skill_slugs`` 为空或查不到任何 Skill，则原样返回 ``prompt``。
+    """
+    if not skill_slugs:
+        return prompt
+    # 局部导入避免循环依赖（services 反过来不依赖 adapters）
+    from backend.services.skill_service import skill_service
+
+    skills = await skill_service.get_by_slugs(workspace_id, skill_slugs)
+    if not skills:
+        return prompt
+
+    skill_sections: list[str] = []
+    for s in skills:
+        skill_sections.append(f"## Skill: {s['name']}\n{s['content']}")
+    prefix = (
+        "# Active Skills (follow these guidelines)\n\n"
+        + "\n\n---\n\n".join(skill_sections)
+    )
+    return f"{prefix}\n\n---\n\n# Task\n\n{prompt}"
 
 
 # ── Adapter 类定义 ──

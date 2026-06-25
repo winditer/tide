@@ -1,4 +1,4 @@
-export type WorkflowNodeType = "start" | "end" | "agent" | "approval" | "condition" | "parallel" | "parallel_join" | "delay";
+export type WorkflowNodeType = "start" | "end" | "agent" | "approval" | "condition" | "parallel" | "parallel_join" | "delay" | "stage" | "git_merge";
 export interface WorkflowNodeData {
     label: string;
     [key: string]: any;

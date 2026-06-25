@@ -110,6 +110,21 @@ cd /path/to/tide && uvicorn backend.main:app --reload --port 8000
 | POST | `/api/workflows/runs/{run_id}/cancel` | 取消运行 |
 | POST | `/api/workflows/runs/{run_id}/approve` | 审批节点 |
 
+### Knowledge Graph 知识图谱
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/knowledge/{scope}/{id}/files` | 列出 `.knowledge/` 全部文件 |
+| GET | `/api/knowledge/{scope}/{id}/file` | 读取单个文件内容 |
+| PUT | `/api/knowledge/{scope}/{id}/file` | 保存 Markdown 编辑 |
+| DELETE | `/api/knowledge/{scope}/{id}/file` | 删除文件 |
+| GET | `/api/knowledge/{scope}/{id}/status` | 查询生成任务状态 |
+| POST | `/api/knowledge/{scope}/{id}/generate` | 触发生成（body: `graph_type`, `agent_id`） |
+| GET | `/api/knowledge/{scope}/{id}/export` | ZIP 导出 `.knowledge/` 目录 |
+
+> `scope` 支持 `project` 或 `group`；`graph_type` 可选 `module` / `api` / `schema` / `concept` / `all`。
+> 不传 `agent_id` 时使用 Python 静态分析（仅支持 Python 项目）；传入 `agent_id` 则通过 Agent 驱动分析（支持任意语言）。
+
 ### Lark Bridge (P10)
 
 | 方法 | 路径 | 说明 |

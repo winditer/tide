@@ -9,6 +9,6 @@ export function KanbanBoard({ columns, onDragEnd }) {
         : Array.isArray(columns === null || columns === void 0 ? void 0 : columns.columns)
             ? columns.columns
             : [];
-    return (_jsx(DragDropContext, { onDragEnd: onDragEnd, children: _jsx("div", { className: "flex gap-4 overflow-x-auto pb-4", children: safeColumns.map((column) => (_jsx(BoardColumn, { column: column }, column.id))) }) }));
+    return (_jsx(DragDropContext, { onDragEnd: onDragEnd, children: _jsx("div", { className: "flex gap-5 overflow-x-auto pb-4", children: safeColumns.map((column) => (_jsx(BoardColumn, { column: column }, column.id))) }) }));
 }
 //# sourceMappingURL=KanbanBoard.js.map

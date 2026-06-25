@@ -2,6 +2,32 @@ import { apiClient } from "./client";
 export function createTask(params) {
     return apiClient.post("/api/tasks", params);
 }
+const BASE_URL = (typeof process !== "undefined" && process.env.NEXT_PUBLIC_API_BASE_URL) ||
+    "";
+export async function uploadTaskAttachments(files) {
+    if (!files.length) {
+        return { attachments: [] };
+    }
+    const formData = new FormData();
+    for (const file of files) {
+        formData.append("files", file, file.name);
+    }
+    const response = await fetch(`${BASE_URL}/api/tasks/attachments`, {
+        method: "POST",
+        body: formData,
+    });
+    if (!response.ok) {
+        let body;
+        try {
+            body = await response.json();
+        }
+        catch (_a) {
+            body = await response.text();
+        }
+        throw new Error(`Upload failed (${response.status}): ${typeof body === "string" ? body : JSON.stringify(body)}`);
+    }
+    return response.json();
+}
 export function listTasks(params) {
     const searchParams = new URLSearchParams();
     if (params === null || params === void 0 ? void 0 : params.workspace_id)
@@ -10,6 +36,16 @@ export function listTasks(params) {
         searchParams.set("status", params.status);
     if (params === null || params === void 0 ? void 0 : params.agent_id)
         searchParams.set("agent_id", params.agent_id);
+    if (params === null || params === void 0 ? void 0 : params.project)
+        searchParams.set("project", params.project);
+    if (params === null || params === void 0 ? void 0 : params.group_id)
+        searchParams.set("group_id", params.group_id);
+    if (params === null || params === void 0 ? void 0 : params.session_id)
+        searchParams.set("session_id", params.session_id);
+    if (params === null || params === void 0 ? void 0 : params.created_after)
+        searchParams.set("created_after", params.created_after);
+    if (params === null || params === void 0 ? void 0 : params.created_before)
+        searchParams.set("created_before", params.created_before);
     if (params === null || params === void 0 ? void 0 : params.page)
         searchParams.set("page", String(params.page));
     if (params === null || params === void 0 ? void 0 : params.page_size)

@@ -3,18 +3,21 @@
 提供工作项 CRUD + 流转操作，对接 ``work_item_service``。
 """
 
+import json
+import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from backend.core.dependencies import (
     check_project_write_permission,
     get_accessible_project_ids,
+    get_current_user,
     get_optional_user,
 )
 from backend.models.schemas import (
@@ -24,7 +27,15 @@ from backend.models.schemas import (
     WorkItemTransitionResponse,
     WorkItemUpdate,
 )
+from backend.services.ai_decompose_service import ai_decompose_service
 from backend.services.work_item_service import work_item_service
+
+logger = logging.getLogger("tide.api.work_items")
+
+# AI 分解上传文件大小上限（10MB）
+AI_DECOMPOSE_MAX_FILE_BYTES = 10 * 1024 * 1024
+# 支持的文本扩展名（直接 UTF-8 读取）
+_TEXT_FILE_SUFFIXES = {".md", ".markdown", ".txt", ".log", ".rst", ".csv", ".json", ".yaml", ".yml"}
 
 router = APIRouter(prefix="/api/work-items", tags=["work-items"])
 
@@ -65,6 +76,7 @@ async def create_work_item(
 @router.get("", response_model=list[WorkItemResponse])
 async def list_work_items(
     project_id: Optional[str] = Query(None, description="按项目过滤"),
+    group_id: Optional[str] = Query(None, description="按项目组过滤"),
     status: Optional[str] = Query(None, description="状态筛选：active/completed/pending/in_progress/pending_approval/failed/stopped/waiting"),
     search: Optional[str] = Query(None, description="标题+描述模糊搜索"),
     assignee: Optional[str] = Query(None, description="负责人筛选"),
@@ -80,10 +92,12 @@ async def list_work_items(
             return await work_item_service.list_work_items(
                 project_id=project_id, status=status,
                 search=search, assignee=assignee, version_id=version_id,
+                group_id=group_id,
             )
         items = await work_item_service.list_work_items(
             project_id=None, status=status,
             search=search, assignee=assignee, version_id=version_id,
+            group_id=group_id,
         )
         return [it for it in items if (
             (it.get("project_id") if isinstance(it, dict) else getattr(it, "project_id", None))
@@ -92,6 +106,7 @@ async def list_work_items(
     return await work_item_service.list_work_items(
         project_id=project_id, status=status,
         search=search, assignee=assignee, version_id=version_id,
+        group_id=group_id,
     )
 
 
@@ -184,6 +199,26 @@ async def get_transitions(
     if not item:
         raise HTTPException(status_code=404, detail="Work item not found")
     return await work_item_service.get_transitions(item_id)
+
+
+@router.get("/{item_id}/cross-repo-results")
+async def get_cross_repo_results(
+    item_id: str,
+    current_user=Depends(get_optional_user),
+):
+    """跨仓库执行结果聚合。
+
+    当工作项关联项目组（``group_id``）时，返回该工作项驱动的跨仓库
+    Plan 下所有子任务的 diff/commit 汇总，按仓库分组返回；未关联项目组
+    或尚未生成 Plan 时，``results`` 为空数组（不报错）。
+    """
+    item = await work_item_service.get_work_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Work item not found")
+    try:
+        return await work_item_service.get_cross_repo_results(item_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 # ── Git Merge 冲突解决 ────────────────────────────────────────
@@ -408,3 +443,213 @@ async def get_artifact_content(
         media_type="application/octet-stream",
         filename=target_path.name,
     )
+
+
+# ── AI 需求分解 & 批量创建 ────────────────────────────────────
+
+
+def _extract_text_from_docx(blob: bytes) -> Optional[str]:
+    """尝试用 python-docx 解析 .docx 文件文本；未安装库则返回 None。"""
+    try:
+        from io import BytesIO
+
+        import docx  # type: ignore  # python-docx
+    except ImportError:
+        return None
+    try:
+        document = docx.Document(BytesIO(blob))
+        return "\n".join(p.text for p in document.paragraphs if p.text)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[ai-decompose] docx 解析失败: %s", exc)
+        return None
+
+
+async def _read_upload_file(upload: UploadFile) -> dict:
+    """读取上传文件并返回 ``{name, content, skipped, reason}``。
+
+    - 大小超过 :data:`AI_DECOMPOSE_MAX_FILE_BYTES` 抛出 400。
+    - 二进制 / 未支持类型返回 ``skipped=True``。
+    """
+    filename = upload.filename or "attachment"
+    blob = await upload.read()
+    if len(blob) > AI_DECOMPOSE_MAX_FILE_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File {filename!r} exceeds 10MB limit",
+        )
+
+    suffix = Path(filename).suffix.lower()
+    # 文本类
+    if suffix in _TEXT_FILE_SUFFIXES or not suffix:
+        try:
+            text = blob.decode("utf-8")
+        except UnicodeDecodeError:
+            text = blob.decode("utf-8", errors="replace")
+        return {"name": filename, "content": text, "skipped": False}
+
+    # docx
+    if suffix == ".docx":
+        text = _extract_text_from_docx(blob)
+        if text is None:
+            return {
+                "name": filename,
+                "content": "",
+                "skipped": True,
+                "reason": "python-docx not installed; .docx skipped",
+            }
+        return {"name": filename, "content": text, "skipped": False}
+
+    # 其他类型暂不解析
+    return {
+        "name": filename,
+        "content": "",
+        "skipped": True,
+        "reason": f"Unsupported file type: {suffix or 'unknown'}",
+    }
+
+
+@router.post("/ai-decompose")
+async def ai_decompose_work_items(
+    text: Optional[str] = Form(None),
+    links: Optional[str] = Form(None),
+    project_id: str = Form(...),
+    group_id: Optional[str] = Form(None),
+    agent_id: Optional[str] = Form(None),
+    files: Optional[list[UploadFile]] = File(None),
+    user=Depends(get_current_user),
+):
+    """AI 需求分解：将文本/文件/链接拆解为结构化工作项列表。
+
+    返回 ``{"items": [...], "raw_analysis": str, "skipped_files": [...]}``。
+    本端点仅返回分析结果，不写库；写库走 ``/batch``。
+    """
+    _ensure_not_viewer(user)
+    await check_project_write_permission(project_id, user)
+
+    # 解析 links（JSON 数组字符串）
+    parsed_links: list[str] = []
+    if links:
+        try:
+            data = json.loads(links)
+            if isinstance(data, list):
+                parsed_links = [str(u).strip() for u in data if str(u).strip()]
+            else:
+                raise HTTPException(status_code=400, detail="`links` must be a JSON array of strings")
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="`links` is not valid JSON")
+
+    # 处理文件
+    file_contents: list[dict] = []
+    skipped_files: list[dict] = []
+    for upload in files or []:
+        if not upload or not upload.filename:
+            continue
+        info = await _read_upload_file(upload)
+        if info.get("skipped"):
+            skipped_files.append({"name": info["name"], "reason": info.get("reason", "")})
+            continue
+        if info.get("content"):
+            file_contents.append({"name": info["name"], "content": info["content"]})
+
+    # 至少需要 text/links/files 其一
+    if not (text and text.strip()) and not parsed_links and not file_contents:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one of `text`, `links`, or readable `files` is required",
+        )
+
+    try:
+        result = await ai_decompose_service.decompose(
+            text=text,
+            links=parsed_links or None,
+            file_contents=file_contents or None,
+            project_id=project_id,
+            agent_id=agent_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        logger.warning("[ai-decompose] LLM 调用失败: %s", exc)
+        raise HTTPException(status_code=502, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("[ai-decompose] 未预期错误")
+        raise HTTPException(status_code=500, detail=f"AI decompose failed: {exc}")
+
+    return {
+        "items": result.get("items", []),
+        "raw_analysis": result.get("raw_analysis", ""),
+        "skipped_files": skipped_files,
+    }
+
+
+@router.post("/batch")
+async def batch_create_work_items(
+    payload: dict,
+    user=Depends(get_current_user),
+):
+    """批量创建工作项。
+
+    请求体：``{"items": [...], "project_id": str, "group_id": str?}``。
+    每条 item 至少需要 ``title``，可选 ``description / priority / tags``。
+    返回 ``{"created": [WorkItemResponse...], "failed": [{index, title, error}...]}``。
+    """
+    _ensure_not_viewer(user)
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid payload")
+
+    project_id = (payload.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=400, detail="`project_id` is required")
+    await check_project_write_permission(project_id, user)
+
+    items_raw = payload.get("items")
+    if not isinstance(items_raw, list) or not items_raw:
+        raise HTTPException(status_code=400, detail="`items` must be a non-empty list")
+
+    group_id = payload.get("group_id") or None
+
+    created: list[dict] = []
+    failed: list[dict] = []
+    for idx, raw in enumerate(items_raw):
+        if not isinstance(raw, dict):
+            failed.append({"index": idx, "title": "", "error": "item is not an object"})
+            continue
+        title = (raw.get("title") or "").strip()
+        if not title:
+            failed.append({"index": idx, "title": "", "error": "title is required"})
+            continue
+
+        try:
+            body = WorkItemCreate(
+                project_id=project_id,
+                title=title,
+                description=raw.get("description") or None,
+                priority=int(raw.get("priority") or 0),
+                assignee=raw.get("assignee") or None,
+                tags=raw.get("tags") or None,
+                source_type=raw.get("source_type") or "ai_decompose",
+                source_id=raw.get("source_id") or None,
+                metadata=raw.get("metadata") or None,
+                version_id=raw.get("version_id") or None,
+                group_id=group_id or raw.get("group_id"),
+            )
+        except Exception as exc:  # noqa: BLE001
+            failed.append({"index": idx, "title": title, "error": f"invalid payload: {exc}"})
+            continue
+
+        try:
+            result = await work_item_service.create_work_item(body)
+        except ValueError as exc:
+            failed.append({"index": idx, "title": title, "error": str(exc)})
+            continue
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("[work-items/batch] create_work_item failed idx=%d", idx)
+            failed.append({"index": idx, "title": title, "error": f"{type(exc).__name__}: {exc}"})
+            continue
+        if not result:
+            failed.append({"index": idx, "title": title, "error": "create returned empty result"})
+            continue
+        created.append(result)
+
+    return {"created": created, "failed": failed}
