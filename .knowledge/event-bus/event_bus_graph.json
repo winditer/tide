@@ -1,0 +1,87 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-06-26T03:00:00Z",
+  "generator": "manual+static",
+  "mechanisms": [
+    {
+      "name": "WSHub (in-process WebSocket fanout)",
+      "type": "real-time-broadcast",
+      "file": "backend/services/ws_hub.py",
+      "description": "维护 {channel → Set[WebSocket]}，支持 connect / subscribe / broadcast / broadcast_all；事件 payload 中由 hub 注入 timestamp。所有 broadcast(ch) 同时投递到 channel 订阅者 + 'all' channel。"
+    },
+    {
+      "name": "EventEmitter (业务事件发射器)",
+      "type": "in-process-pubsub",
+      "file": "backend/services/event_emitter.py",
+      "description": "对常用事件提供 emit_xxx 包装，统一写 task_events 表 + 调用 ws_hub.broadcast。"
+    },
+    {
+      "name": "Lark Long Connection",
+      "type": "external-ws-listener",
+      "file": "backend/services/lark_listener.py",
+      "description": "lark-oapi 客户端订阅 IM / Card / Callback 事件。"
+    },
+    {
+      "name": "Lark Card Callback Webhook",
+      "type": "http-webhook",
+      "file": "backend/api/lark_callback.py",
+      "description": "POST /api/lark/callback 接收飞书卡片按钮回调；POST /api/auth/lark/callback 接收 OAuth 回调。"
+    },
+    {
+      "name": "APScheduler",
+      "type": "cron-trigger",
+      "file": "backend/services/schedule_service.py",
+      "description": "进程内调度器；触发 schedule run 并发起 plan/workflow，同时广播 schedule.run.*。"
+    }
+  ],
+  "events": [
+    {"name": "task.created", "channels": ["tasks", "task:{id}"], "producers": ["services/event_emitter.emit_task_created", "services/task_service.create_task:435", "services/workflow_engine:575", "services/lark_bridge.on_lark_task_created"], "consumers": ["前端 WS 客户端 (apps/web)"]},
+    {"name": "task.updated", "channels": ["tasks", "task:{id}"], "producers": ["services/event_emitter.emit_task_updated"], "consumers": ["前端 WS 客户端"]},
+    {"name": "task.deleted", "channels": ["tasks", "task:{id}"], "producers": ["services/event_emitter.emit_task_deleted"], "consumers": ["前端 WS 客户端"]},
+    {"name": "task.status_changed", "channels": ["tasks", "task:{id}"], "producers": ["services/task_service:97,770,855", "services/kanban_service:935", "services/plan_executor:765", "services/lark_bridge.on_lark_task_updated"], "consumers": ["前端 WS 客户端", "看板视图"]},
+    {"name": "task.output", "channels": ["tasks", "task:{id}"], "producers": ["services/task_service:535", "services/plan_executor:475"], "consumers": ["前端实时日志面板"]},
+    {"name": "task.approval_request", "channels": ["tasks", "approvals", "task:{id}"], "producers": ["services/task_service:560", "services/plan_executor:491"], "consumers": ["审批面板", "Lark 卡片"]},
+    {"name": "task.artifact", "channels": ["tasks", "task:{id}", "session:{id}"], "producers": ["services/task_service:292"], "consumers": ["前端会话视图"]},
+    {"name": "approval.requested", "channels": ["tasks", "approvals", "task:{id}"], "producers": ["services/event_emitter.emit_approval_requested", "services/workflow_engine:265", "services/approval_service:85"], "consumers": ["审批中心"]},
+    {"name": "approval.resolved", "channels": ["tasks", "approvals", "task:{id}"], "producers": ["services/event_emitter.emit_approval_resolved", "services/task_service:747,820", "services/approval_service:157,259"], "consumers": ["审批中心"]},
+    {"name": "plan.task.started", "channels": ["tasks"], "producers": ["services/plan_executor"], "consumers": ["前端 plan 视图"]},
+    {"name": "plan.task.completed", "channels": ["tasks"], "producers": ["services/plan_executor"], "consumers": ["前端 plan 视图"]},
+    {"name": "workflow.run.started", "channels": ["workflows"], "producers": ["services/workflow_engine:155"], "consumers": ["前端 workflow canvas"]},
+    {"name": "workflow.run.cancelled", "channels": ["workflows"], "producers": ["services/workflow_engine:215"], "consumers": ["前端 workflow canvas"]},
+    {"name": "workflow.run.completed", "channels": ["workflows"], "producers": ["services/workflow_engine:1075"], "consumers": ["前端 workflow canvas", "hook_engine"]},
+    {"name": "workflow.run.failed", "channels": ["workflows"], "producers": ["services/workflow_engine:1097"], "consumers": ["前端 workflow canvas"]},
+    {"name": "workflow.node.started", "channels": ["workflows"], "producers": ["services/workflow_engine:230"], "consumers": ["前端 workflow canvas"]},
+    {"name": "workflow.node.completed", "channels": ["workflows"], "producers": ["services/workflow_engine:805"], "consumers": ["前端 workflow canvas"]},
+    {"name": "schedule.run.started", "channels": ["schedules"], "producers": ["services/schedule_service:422"], "consumers": ["前端 schedules 页"]},
+    {"name": "schedule.run.completed", "channels": ["schedules"], "producers": ["services/schedule_service:574"], "consumers": ["前端 schedules 页"]},
+    {"name": "work_item.created", "channels": ["work_items"], "producers": ["services/work_item_service:419"], "consumers": ["前端 work_items 页"]},
+    {"name": "work_item.updated", "channels": ["work_items"], "producers": ["services/work_item_service:572"], "consumers": ["前端 work_items 页"]},
+    {"name": "work_item.deleted", "channels": ["work_items"], "producers": ["services/work_item_service:597"], "consumers": ["前端 work_items 页"]},
+    {"name": "work_item.transitioned", "channels": ["work_items"], "producers": ["services/work_item_service:702"], "consumers": ["前端 work_items 页"]},
+    {"name": "hook.{event_name}", "channels": ["<custom>"], "producers": ["services/hook_engine:240"], "consumers": ["用户配置 hook 订阅者"]},
+    {"name": "security.alert", "channels": ["tasks"], "producers": ["services/hook_engine:261"], "consumers": ["前端安全/审批面板"]},
+    {"name": "lark.task.created", "channels": ["tasks", "task:{id}"], "producers": ["services/event_emitter.emit_lark_task_created → on_lark_task_created"], "consumers": ["前端 WS 客户端"]},
+    {"name": "lark.task.updated", "channels": ["tasks", "task:{id}"], "producers": ["services/event_emitter.emit_lark_task_updated → on_lark_task_updated"], "consumers": ["前端 WS 客户端"]}
+  ],
+  "channels": [
+    {"name": "tasks", "description": "所有任务相关事件总线", "subscribers": "Dashboard / 看板 / 任务列表"},
+    {"name": "task:{id}", "description": "单任务详情订阅", "subscribers": "任务详情页 / 实时日志"},
+    {"name": "approvals", "description": "审批事件", "subscribers": "审批中心"},
+    {"name": "workflows", "description": "工作流运行/节点事件", "subscribers": "Workflow canvas"},
+    {"name": "schedules", "description": "调度运行事件", "subscribers": "Schedules 页"},
+    {"name": "work_items", "description": "工作项 CRUD/迁移事件", "subscribers": "Work Items 页"},
+    {"name": "session:{id}", "description": "会话级 artifact / 输出", "subscribers": "会话视图"},
+    {"name": "all", "description": "全局广播（每次 broadcast 自动并入）", "subscribers": "调试/全量监听"}
+  ],
+  "external_inbound_events": [
+    {"name": "Lark IM 消息", "endpoint": "lark-oapi WS / Long Connection", "handler": "services/lark_listener.py → services/message_handler.py"},
+    {"name": "Lark 卡片按钮回调", "endpoint": "POST /api/lark/callback", "handler": "backend/api/lark_callback.py → services/card_action_handler.py"},
+    {"name": "Lark OAuth 回调", "endpoint": "GET /api/auth/lark/callback", "handler": "backend/api/auth.py:lark_callback"},
+    {"name": "A2A JSON-RPC", "endpoint": "POST /a2a (a2a-bridge)", "handler": "a2a-bridge/main.py → executor.py"}
+  ],
+  "websocket_entry": {
+    "endpoint": "WS /api/ws",
+    "file": "backend/api/ws.py",
+    "client_protocol": "客户端在 connect 后发送 {type: 'subscribe', channels: [...]} 订阅频道"
+  }
+}

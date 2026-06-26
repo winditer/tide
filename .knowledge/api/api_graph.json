@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "generated_at": "2026-06-24T02:53:15Z",
+  "generated_at": "2026-06-26T02:33:51Z",
   "routers": [
     {
       "id": "admin",
@@ -885,6 +885,348 @@
       ]
     },
     {
+      "id": "files",
+      "prefix": "/api/files",
+      "tags": [
+        "files"
+      ],
+      "file": "backend/api/files.py",
+      "service": null,
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/content",
+          "function": "read_file_content",
+          "is_async": true,
+          "params": [
+            {
+              "name": "path",
+              "type": "str",
+              "default": "Query(Ellipsis)"
+            }
+          ],
+          "response_model": null,
+          "description": "读取本地文件内容并返回纯文本。"
+        },
+        {
+          "method": "GET",
+          "path": "/tree",
+          "function": "list_directory_tree",
+          "is_async": true,
+          "params": [
+            {
+              "name": "path",
+              "type": "str",
+              "default": "Query(Ellipsis)"
+            },
+            {
+              "name": "depth",
+              "type": "int",
+              "default": "Query(1)"
+            }
+          ],
+          "response_model": null,
+          "description": "列出目录树，返回目录结构 JSON。"
+        },
+        {
+          "method": "PUT",
+          "path": "/content",
+          "function": "save_file_content",
+          "is_async": true,
+          "params": [
+            {
+              "name": "req",
+              "type": "SaveFileRequest",
+              "default": null
+            }
+          ],
+          "response_model": null,
+          "description": "保存文件内容。"
+        },
+        {
+          "method": "GET",
+          "path": "/diff",
+          "function": "get_diff",
+          "is_async": true,
+          "params": [
+            {
+              "name": "cwd",
+              "type": "str",
+              "default": "Query(Ellipsis)"
+            },
+            {
+              "name": "ref1",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "ref2",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "path",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "获取 unified diff。不传 ref 时返回工作区未提交的 diff。"
+        },
+        {
+          "method": "GET",
+          "path": "/conflict-detail",
+          "function": "get_conflict_detail",
+          "is_async": true,
+          "params": [
+            {
+              "name": "cwd",
+              "type": "str",
+              "default": "Query(Ellipsis)"
+            },
+            {
+              "name": "file_path",
+              "type": "str",
+              "default": "Query(Ellipsis)"
+            }
+          ],
+          "response_model": null,
+          "description": "获取冲突文件详情（base/ours/theirs/conflict_markers）。"
+        },
+        {
+          "method": "POST",
+          "path": "/resolve-conflict",
+          "function": "resolve_conflict",
+          "is_async": true,
+          "params": [
+            {
+              "name": "req",
+              "type": "ResolveConflictRequest",
+              "default": null
+            }
+          ],
+          "response_model": null,
+          "description": "解决单个文件冲突：写入 resolved_content 并 git add。"
+        },
+        {
+          "method": "POST",
+          "path": "/ai-resolve-conflict",
+          "function": "ai_resolve_conflict",
+          "is_async": true,
+          "params": [
+            {
+              "name": "req",
+              "type": "AIResolveConflictRequest",
+              "default": null
+            }
+          ],
+          "response_model": null,
+          "description": "AI 解决冲突：通过 Agent CLI 分析三方内容并返回合并结果。"
+        }
+      ]
+    },
+    {
+      "id": "git_audit",
+      "prefix": "/api/projects",
+      "tags": [
+        "git-audit"
+      ],
+      "file": "backend/api/git_audit.py",
+      "service": "backend.services.session_discovery",
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/{project_id}/git/branches",
+          "function": "get_project_branches",
+          "is_async": true,
+          "params": [
+            {
+              "name": "project_id",
+              "type": "str",
+              "default": null
+            }
+          ],
+          "response_model": null,
+          "description": "获取项目的 Git 分支列表。"
+        },
+        {
+          "method": "GET",
+          "path": "/{project_id}/git/commits",
+          "function": "get_project_commits",
+          "is_async": true,
+          "params": [
+            {
+              "name": "project_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "branch",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "since",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "until",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "limit",
+              "type": "int",
+              "default": "Query(50)"
+            },
+            {
+              "name": "work_item_id",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "all_branches",
+              "type": "bool",
+              "default": "Query(False)"
+            }
+          ],
+          "response_model": null,
+          "description": "获取项目的 commit 列表（含修改文件）。展示项目级全量数据，不做用户过滤。"
+        },
+        {
+          "method": "GET",
+          "path": "/{project_id}/git/changes",
+          "function": "get_project_changes",
+          "is_async": true,
+          "params": [
+            {
+              "name": "project_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "group_by",
+              "type": "str",
+              "default": "Query('branch')"
+            },
+            {
+              "name": "since",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "until",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "current_user",
+              "type": "Optional[dict]",
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "按维度聚合变更统计。"
+        },
+        {
+          "method": "GET",
+          "path": "/{project_id}/git/uncommitted",
+          "function": "get_uncommitted_changes",
+          "is_async": true,
+          "params": [
+            {
+              "name": "project_id",
+              "type": "str",
+              "default": null
+            }
+          ],
+          "response_model": null,
+          "description": "获取项目当前工作区未提交的改动（包含未暂存和已暂存文件）。"
+        },
+        {
+          "method": "GET",
+          "path": "/{project_id}/git/diff/{commit_hash}",
+          "function": "get_commit_diff",
+          "is_async": true,
+          "params": [
+            {
+              "name": "project_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "commit_hash",
+              "type": "str",
+              "default": null
+            }
+          ],
+          "response_model": null,
+          "description": "获取特定 commit 的完整 diff。"
+        },
+        {
+          "method": "POST",
+          "path": "/{project_id}/git/commit",
+          "function": "git_commit_files",
+          "is_async": true,
+          "params": [
+            {
+              "name": "project_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "req",
+              "type": "GitCommitRequest",
+              "default": null
+            }
+          ],
+          "response_model": null,
+          "description": "提交文件：git add <files> && git commit -m <message>。"
+        },
+        {
+          "method": "POST",
+          "path": "/{project_id}/git/discard",
+          "function": "git_discard_files",
+          "is_async": true,
+          "params": [
+            {
+              "name": "project_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "req",
+              "type": "GitDiscardRequest",
+              "default": null
+            }
+          ],
+          "response_model": null,
+          "description": "撤销文件修改：对 tracked 文件用 git restore，对 untracked 文件删除。"
+        },
+        {
+          "method": "POST",
+          "path": "/{project_id}/git/ignore",
+          "function": "git_ignore_files",
+          "is_async": true,
+          "params": [
+            {
+              "name": "project_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "req",
+              "type": "GitIgnoreRequest",
+              "default": null
+            }
+          ],
+          "response_model": null,
+          "description": "将文件路径追加到 .gitignore。"
+        }
+      ]
+    },
+    {
       "id": "hooks",
       "prefix": "/api/hooks",
       "tags": [
@@ -1172,6 +1514,26 @@
             },
             {
               "name": "version_id",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "status",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "search",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "assignee",
+              "type": "Optional[str]",
+              "default": "Query(None)"
+            },
+            {
+              "name": "group_id",
               "type": "Optional[str]",
               "default": "Query(None)"
             },
@@ -3599,6 +3961,51 @@
           ],
           "response_model": null,
           "description": "汇总会话关联产物。"
+        },
+        {
+          "method": "POST",
+          "path": "/{session_id}/usage",
+          "function": "report_session_usage",
+          "is_async": true,
+          "params": [
+            {
+              "name": "session_id",
+              "type": "str",
+              "default": null
+            },
+            {
+              "name": "body",
+              "type": "UsageReport",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "上报单个会话的 token 消耗数据（支持累加）。"
+        },
+        {
+          "method": "POST",
+          "path": "/batch",
+          "function": "report_usage_batch",
+          "is_async": true,
+          "params": [
+            {
+              "name": "body",
+              "type": "BatchUsageRequest",
+              "default": null
+            },
+            {
+              "name": "current_user",
+              "type": null,
+              "default": "Depends(None)"
+            }
+          ],
+          "response_model": null,
+          "description": "批量上报多个会话的 token 消耗数据。"
         }
       ]
     },
@@ -4829,12 +5236,12 @@
     }
   ],
   "stats": {
-    "total_routers": 26,
-    "total_endpoints": 188,
+    "total_routers": 28,
+    "total_endpoints": 205,
     "methods": {
-      "GET": 87,
-      "POST": 63,
-      "PUT": 16,
+      "GET": 96,
+      "POST": 70,
+      "PUT": 17,
       "DELETE": 19,
       "PATCH": 3
     }

@@ -377,38 +377,10 @@ def _load(force: bool = False) -> List[Dict]:
 
 
 
-def _session_references_project(file_path: str, project_cwd: str, max_chars: int = 100000) -> bool:
-    """
-    检查会话文件是否包含对指定项目的引用。
-    用于处理 project_root=None 但会话内容涉及项目的情况（如 CLI 会话）。
-    
-    Args:
-        file_path: 会话文件路径
-        project_cwd: 目标项目路径
-        max_chars: 最多扫描的字符数（避免读取超大文件）
-    
-    Returns:
-        True 如果文件内容包含项目路径引用
-    """
-    try:
-        project_name = Path(project_cwd).name  # e.g., "tide"
-        # 需要匹配的路径模式
-        patterns = [
-            project_cwd,  # 完整路径
-            f"/{project_name}",  # 末尾匹配
-            f"Documents/{project_name}",  # 常见父目录
-        ]
-        
-        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-            content = f.read(max_chars)
-            for pattern in patterns:
-                if pattern in content:
-                    logger.debug(f"Session {Path(file_path).stem} references {project_name} via pattern '{pattern}'")
-                    return True
-        return False
-    except Exception as e:
-        logger.debug(f"Error checking session file {file_path} for project reference: {e}")
-        return False
+# _session_references_project 已移除：
+# 该函数通过在会话文件内容中搜索项目路径片段（如 "/tide"）来判断归属，
+# 但过于宽泛，会将仅在系统提示或偶然上下文中提到项目名的无关会话错误关联。
+# 会话归属应严格依据其 project_root 或 cwd 字段判定。
 
 # ---------- 公开 API ----------
 
@@ -438,32 +410,12 @@ def discover_sessions(
         
         filtered_items = []
         for it in items:
-            # 主过滤逻辑：通过 project_root 或 cwd 匹配
-            if (
-                it.get("project_root")
-                and (
-                    it["project_root"].rstrip("/") == target
-                    or it["project_root"].rstrip("/").startswith(target + "/")
-                )
-            ) or (
-                it.get("cwd")
-                and (
-                    it["cwd"].rstrip("/") == target
-                    or it["cwd"].rstrip("/").startswith(target + "/")
-                )
-            ):
+            # 过滤逻辑：严格通过 project_root 或 cwd 精确/子目录匹配
+            pr = (it.get("project_root") or "").rstrip("/")
+            cwd_val = (it.get("cwd") or "").rstrip("/")
+            if pr and (pr == target or pr.startswith(target + "/")):
                 filtered_items.append(it)
-            # 备选逻辑：如果 project_root 为 None，扫描文件内容中是否有项目引用
-            # 这处理了 CLI 会话（cwd=/Users/haifeng）但操作 tide 项目的情况
-            elif (
-                not it.get("project_root")
-                and it.get("file")
-                and _session_references_project(it["file"], target)
-            ):
-                logger.info(
-                    f"Matching session {it.get('id')[:8]} via content reference: "
-                    f"title='{it.get('title')[:60]}' cwd={it.get('cwd')}"
-                )
+            elif cwd_val and (cwd_val == target or cwd_val.startswith(target + "/")):
                 filtered_items.append(it)
         
         items = filtered_items
@@ -662,3 +614,362 @@ def read_session_messages(
     except OSError:
         return []
     return out
+
+
+# ---------- Token 估算与同步 ----------
+
+# 复用全局 tiktoken 编码器实例，避免每次调用都重新创建
+_tiktoken_encoder = None
+_tiktoken_lock = threading.Lock()
+
+
+def _get_tiktoken_encoder():
+    """懒加载 tiktoken 编码器（线程安全）。"""
+    global _tiktoken_encoder
+    if _tiktoken_encoder is not None:
+        return _tiktoken_encoder
+    with _tiktoken_lock:
+        if _tiktoken_encoder is not None:
+            return _tiktoken_encoder
+        try:
+            import tiktoken
+            _tiktoken_encoder = tiktoken.get_encoding("cl100k_base")
+        except Exception:
+            _tiktoken_encoder = None
+    return _tiktoken_encoder
+
+
+def _estimate_tokens(text: str) -> int:
+    """使用缓存的 tiktoken 编码器估算 token 数，不可用时按 4 字符/token 粗估。"""
+    if not text:
+        return 0
+    enc = _get_tiktoken_encoder()
+    if enc is not None:
+        try:
+            return len(enc.encode(text))
+        except Exception:
+            pass
+    return max(1, len(text) // 4)
+
+
+def _estimate_tokens_chunked(parts: List[str]) -> int:
+    """分段估算 token 数，避免拼接超大字符串。"""
+    if not parts:
+        return 0
+    enc = _get_tiktoken_encoder()
+    total = 0
+    if enc is not None:
+        try:
+            for part in parts:
+                if part:
+                    total += len(enc.encode(part))
+            return total
+        except Exception:
+            pass
+    # fallback: 字符数 / 4
+    for part in parts:
+        if part:
+            total += max(1, len(part) // 4)
+    return total
+
+
+def _collect_content_text(content, role: str) -> str:
+    """从 message.content 中提取所有文本内容（包含 tool_use/tool_result），用于 token 估算。
+
+    与 _extract_text 不同，此函数不跳过任何内容类型。
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: List[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+                continue
+            if not isinstance(block, dict):
+                continue
+            block_type = block.get("type", "")
+            # redacted_thinking 不计费
+            if block_type == "redacted_thinking":
+                continue
+            if block_type in ("text", "input_text", "output_text"):
+                t = block.get("text", "")
+                if t:
+                    parts.append(t)
+            elif block_type == "tool_use":
+                # tool_use 的 input 是结构化 JSON
+                inp = block.get("input")
+                if inp:
+                    try:
+                        parts.append(json.dumps(inp, ensure_ascii=False))
+                    except (TypeError, ValueError):
+                        parts.append(str(inp))
+                # tool name 也计入
+                name = block.get("name", "")
+                if name:
+                    parts.append(name)
+            elif block_type == "tool_result":
+                # tool_result 的 content 可能是字符串或数组
+                tr_content = block.get("content")
+                if isinstance(tr_content, str):
+                    parts.append(tr_content)
+                elif isinstance(tr_content, list):
+                    for sub in tr_content:
+                        if isinstance(sub, str):
+                            parts.append(sub)
+                        elif isinstance(sub, dict):
+                            t = sub.get("text", "")
+                            if t:
+                                parts.append(t)
+            elif block_type == "thinking":
+                t = block.get("thinking", "") or block.get("text", "")
+                if t:
+                    parts.append(t)
+            else:
+                # 其他类型（image 等），尝试提取 text
+                t = block.get("text") or block.get("content", "")
+                if isinstance(t, str) and t:
+                    parts.append(t)
+        return "\n".join(parts)
+    if isinstance(content, dict):
+        return _collect_content_text(content.get("content") or content.get("text", ""), role)
+    return str(content) if content else ""
+
+
+def _estimate_session_file_tokens(file_path: str, start_line: int = 0) -> Tuple[int, int, int]:
+    """估算会话文件的 token 用量，计入所有内容类型（含 tool_use/tool_result）。
+
+    Args:
+        file_path: JSONL 文件路径
+        start_line: 从第几行开始（增量处理，基于文件行数）
+
+    Returns:
+        (input_tokens, output_tokens, total_lines_in_file)
+    """
+    p = Path(file_path)
+    if not p.exists() or not p.is_file():
+        return (0, 0, 0)
+
+    input_parts: List[str] = []
+    output_parts: List[str] = []
+    total_lines = 0
+
+    try:
+        with p.open("r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                total_lines += 1
+                if total_lines <= start_line:
+                    continue
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+
+                # 跳过非对话类型
+                line_type = obj.get("type", "")
+                if line_type in ("file-history-snapshot", "last-prompt"):
+                    continue
+                if obj.get("isMeta"):
+                    continue
+
+                # ---- 确定 role 和 content ----
+                role = None
+                content = None
+
+                # Codex 格式: {type: "event_msg", payload: {...}}
+                if line_type == "event_msg":
+                    payload = obj.get("payload") or {}
+                    sub = payload.get("type", "")
+                    if sub == "user_message":
+                        role = "user"
+                        content = payload.get("message", "")
+                    elif sub == "agent_message":
+                        role = "assistant"
+                        content = payload.get("message", "")
+                    elif sub == "agent_reasoning":
+                        role = "assistant"
+                        content = payload.get("text") or payload.get("message", "")
+                elif line_type == "response_item":
+                    payload = obj.get("payload") or {}
+                    payload_type = payload.get("type", "")
+                    if payload_type == "message":
+                        role = payload.get("role")
+                        content = payload.get("content")
+                    elif payload_type == "function_call":
+                        # Codex function call: arguments 计为 assistant output
+                        role = "assistant"
+                        args = payload.get("arguments", "")
+                        name = payload.get("name", "")
+                        content = (name + "\n" + args) if name else args
+                    elif payload_type == "function_call_output":
+                        # Codex function call result: output 计为 input
+                        role = "user"
+                        content = payload.get("output", "")
+
+                # Claude/Qoder 格式: {message: {role, content}, ...}
+                elif "message" in obj and isinstance(obj.get("message"), dict):
+                    msg = obj["message"]
+                    role = msg.get("role") or obj.get("role")
+                    content = msg.get("content")
+
+                # 顶层 role 字段: {role: "user", content: [...]}
+                elif obj.get("role") in ("user", "assistant", "system"):
+                    role = obj["role"]
+                    content = obj.get("content") or obj.get("message")
+                    # Qoder IDE 缓存: {role, message: {content: [...]}}
+                    if isinstance(content, dict):
+                        content = content.get("content")
+
+                # 顶层 type 作为 role: {type: "user", content: [...]}
+                elif line_type in ("user", "assistant", "system"):
+                    role = line_type
+                    content = obj.get("content") or obj.get("message")
+
+                if not role or role not in ("user", "assistant", "system", "developer"):
+                    continue
+
+                # 提取全量文本
+                text = _collect_content_text(content, role)
+                if not text:
+                    continue
+
+                if role in ("user", "system", "developer"):
+                    input_parts.append(text)
+                else:
+                    output_parts.append(text)
+
+    except OSError:
+        return (0, 0, 0)
+
+    # 分段估算 token
+    input_tokens = _estimate_tokens_chunked(input_parts)
+    output_tokens = _estimate_tokens_chunked(output_parts)
+
+    return (input_tokens, output_tokens, total_lines)
+
+
+async def sync_session_token_usage() -> dict:
+    """扫描所有 Qoder/Codex/Claude IDE 会话，估算 token 并写入 DB。
+
+    增量策略：通过 tasks.synced_message_count 记录已处理的文件行数，
+    仅对新增行进行估算，避免重复计算。
+    使用 _estimate_session_file_tokens 专用函数，计入所有内容类型
+    （tool_use / tool_result / thinking 等），解决之前仅覆盖 ~14% 实际用量的问题。
+
+    Returns:
+        统计信息 dict: synced / skipped / created / errors
+    """
+    from sqlalchemy import text as sa_text
+    from backend.db.engine import async_session_factory
+    from backend.services.cost_service import cost_service
+
+    stats = {"synced": 0, "skipped": 0, "created": 0, "errors": 0}
+
+    # 获取所有已发现的 Qoder/Codex/Claude IDE 会话
+    all_sessions = _load(force=False)
+    target_sessions = [
+        s for s in all_sessions
+        if s.get("agent_id") in ("qoder", "codex", "claude") and s.get("file")
+    ]
+
+    for sess in target_sessions:
+        session_id = sess.get("session_id") or sess.get("id")
+        file_path = sess.get("file")
+        if not session_id or not file_path:
+            continue
+
+        try:
+            # 查找或创建关联的 task
+            task_id: Optional[str] = None
+            synced_count = 0
+
+            async with async_session_factory() as db_session:
+                r = await db_session.execute(
+                    sa_text(
+                        "SELECT id, COALESCE(synced_message_count, 0) "
+                        "FROM tasks WHERE session_id = :sid "
+                        "ORDER BY created_at DESC LIMIT 1"
+                    ),
+                    {"sid": session_id},
+                )
+                row = r.fetchone()
+                if row:
+                    task_id = row[0]
+                    synced_count = int(row[1] or 0)
+
+            # 使用专用函数估算 token（计入 tool_use/tool_result 等全部内容）
+            # synced_count 语义为已处理的文件行数
+            input_tokens, output_tokens, total_lines = _estimate_session_file_tokens(
+                file_path, start_line=synced_count
+            )
+
+            # 增量检查：文件行数未变则跳过
+            if total_lines <= synced_count:
+                stats["skipped"] += 1
+                continue
+
+            # 如果没有关联 task，创建占位任务
+            if not task_id:
+                from backend.services.task_service import task_service
+                title = sess.get("title") or "Qoder IDE session"
+                cwd = sess.get("cwd") or ""
+                task = await task_service.create_task(
+                    workspace_id="default",
+                    prompt=title,
+                    agent_id=sess.get("agent_id", "qoder"),
+                    model=sess.get("agent_id", "qoder"),
+                    cwd=cwd,
+                    attachments=[],
+                    session_id=session_id,
+                )
+                if task:
+                    task_id = task.get("id")
+                    stats["created"] += 1
+                else:
+                    stats["errors"] += 1
+                    continue
+
+            if input_tokens == 0 and output_tokens == 0:
+                stats["skipped"] += 1
+                continue
+
+            # 写入 cost_service（累加到 task 的 token 计数）
+            await cost_service.update_task_cost(
+                task_id=task_id,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                model=sess.get("agent_id", "qoder"),
+            )
+
+            # 更新 synced_message_count（语义：已处理的文件行数）+ completed_at（最后活跃时间）
+            async with async_session_factory() as db_session:
+                await db_session.execute(
+                    sa_text(
+                        "UPDATE tasks SET synced_message_count = :cnt, "
+                        "completed_at = :now WHERE id = :tid"
+                    ),
+                    {"cnt": total_lines, "tid": task_id, "now": datetime.utcnow().isoformat()},
+                )
+                await db_session.commit()
+
+            stats["synced"] += 1
+
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "sync_session_token_usage failed for session=%s: %s",
+                session_id, exc,
+            )
+            stats["errors"] += 1
+
+    logger.info(
+        "sync_session_token_usage completed: synced=%d skipped=%d created=%d errors=%d",
+        stats["synced"], stats["skipped"], stats["created"], stats["errors"],
+    )
+    return stats

@@ -13,7 +13,7 @@
 Tide 由两个一体化部分组成：
 
 - **FastAPI 统一后端（单进程）** — 提供 REST + WebSocket、Agent 执行器、Plan 并行调度、定时任务、工作流引擎、Lark 监听器和 SQLite 状态存储。
-- **Next.js Web 工作台** — Dashboard、任务、Plan DAG、看板、定时任务和工作流可视化编辑器。
+- **Next.js Web 工作台** — Dashboard、任务、Plan DAG、看板、定时任务、工作流可视化编辑器、代码编辑器、Git 审计、冲突解决。
 
 ## 架构概览
 
@@ -43,17 +43,24 @@ Tide 由两个一体化部分组成：
 - **任务管理** — 创建 / 执行 / 停止 / 重试，REST + WebSocket 流式输出。
 - **Plan 并行执行** — DAG 阶段依赖调度 + Git worktree 隔离 + Diff 审批 + 合并总览。
 - **审批流** — Agent 权限请求 → Web/Lark 审批卡 → 恢复执行。
-- **会话管理** — 跨进程 session resume，conversations 表统一记录。
+- **会话管理** — 跨进程 session resume，conversations 表统一记录；支持 Qoder IDE / Codex CLI 多源发现、精确路径匹配、DB + 文件系统去重。
 - **Lark 双向同步** — 飞书消息 → 任务、卡片按钮 → 状态更新；状态变化反向推送回卡片。
 - **Web 工作台** — Dashboard / 任务 / Plan DAG / 看板 / 定时 / 工作流可视化。
 - **定时调度** — Cron / Interval / Date 触发，支持 Agent / Plan / Status / 自定义命令。
-- **工作流引擎** — 多 Agent 编排，节点支持 Agent / Approval / Condition / Parallel / Delay 等。
+- **工作流引擎** — 多 Agent 编排，节点支持 Agent / Approval / Condition / Parallel / Delay / Git Merge 等。
 - **多 Agent 适配** — Codex CLI、Claude Code CLI、Qoder CLI（含 Quest 模式）。
 - **项目组** — 多仓库聚合、成员管理、跨仓库 Plan 自动生成、聚合视图。
 - **工作项 AI 分解** — 输入长文本需求 / PRD / 链接 / 附件，LLM 自动拆解为多个合适粒度的工作项，人工校对后批量创建。
 - **浮动聊天产物展示** — 聊天窗口自动汇总会话中生成的文件/链接产物，支持在线查看（JSON / 代码 / 图片预览）与「在新标签页打开」。
-- **知识图谱** — 自动生成仓库级代码知识图谱（模块依赖 / API 接口 / 数据库 Schema / 业务概念），Python 项目静态分析，非 Python 项目通过 Agent（Codex/Claude/Qoder）驱动分析。
+- **知识图谱** — 自动生成仓库级代码知识图谱（10 类：模块依赖 / API 接口 / 数据库 Schema / 业务概念 / 系统架构 / 技术栈 / 编码风格 / 数据流 / 测试覆盖 / 事件总线），Python 项目静态分析（全部 10 类），非 Python 项目通过 Agent（Codex/Claude/Qoder）驱动分析；生成过程中展示旋转进度图标和实时进度弹窗。
+- **权限认证** — JWT 用户认证、Lark OAuth2 SSO、角色隔离（admin/member/viewer）、项目成员管理。
+- **A2A 远程 Agent** — 通过 A2A Bridge 协议在远程服务器部署 Agent CLI，支持多进程横向扩展。
+- **Lark 权限过滤** — Lark 端操作遵循项目级权限隔离，支持白名单控制。
 - **ECC 企业能力中心** — Skills 技能库 / Rules 规则引擎 / Hooks 事件驱动 / Security 安全审查 / Cost Tracking 成本追踪。
+- **任务自动恢复** — 服务重启时自动将残留的 running/queued 任务标记为 cancelled，避免幽灵任务。
+- **代码查看编辑器** — Monaco Editor 多标签编辑，文件树浏览、搜索、主题切换、全屏模式、Ctrl+S 保存。
+- **Git 审计** — 四维审计视图（按提交/按文件/按工作项/按会话），支持分支、工作项、时间筛选；未提交变更管理；Diff 左右分栏 + Inline/Side-by-side 切换。
+- **合并冲突解决** — 冲突文件列表、三方 diff、规则化解决、AI 智能解决，与工作流 git_merge 节点集成。
 
 ## 快速开始
 
@@ -272,6 +279,16 @@ Plan 任务通过 `/plan` 前缀触发，系统会自动将任务拆分为多个
 | `LARK_ALLOWED_OPEN_IDS` | 空 | 允许触发 Bridge 的用户 open_id。 |
 | `LARK_ADMIN_OPEN_IDS` | 空 | 可执行审批/停止/敏感操作的管理员 open_id。 |
 
+### 认证
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `TIDE_REQUIRE_AUTH` | `0` | 是否强制启用认证；设为 `1` 后所有 API 需携带 JWT token。 |
+| `TIDE_JWT_SECRET` | 空 | JWT 签名密钥，启用认证时必填。 |
+| `TIDE_ADMIN_PASSWORD` | 空 | 管理员初始密码，首次启动时自动创建 admin 账户。 |
+| `TIDE_SHOW_ARCHIVED` | `0` | 默认是否展示已归档会话/任务。 |
+| `LARK_ALLOWED_OPEN_IDS` | 空（不启用） | Lark 操作白名单（逗号分隔 open_id）。 |
+
 ### Agent 配置
 
 | 变量 | 默认值 | 说明 |
@@ -323,17 +340,21 @@ Plan 任务通过 `/plan` 前缀触发，系统会自动将任务拆分为多个
 tide/
 ├── backend/                FastAPI 统一后端
 │   ├── main.py             应用入口（lifespan 注册 init_db / scheduler / lark_listener）
-│   ├── api/                REST + WebSocket 路由
-│   ├── services/           业务服务（task / plan / approval / lark_bridge ...）
+│   ├── api/                REST + WebSocket 路由（含 git_audit、files）
+│   ├── services/           业务服务（task / plan / approval / session_discovery / lark_bridge ...）
 │   ├── runtime/            Agent 执行器、适配器、Git 工具、配置
 │   ├── models/             Pydantic Schema
 │   ├── db/                 SQLite 引擎与建表 SQL
 │   └── tests/              pytest
-├── apps/web/               Next.js 15 Web 工作台
+├── apps/web/               Next.js 16 Web 工作台（含代码编辑器、Git 审计、冲突解决）
 ├── packages/
 │   ├── core/               Headless 逻辑（zustand store / react-query / api client）
 │   ├── ui/                 shadcn/ui 原子组件
 │   └── views/              业务页面组件
+├── scripts/                仓库级脚本
+│   ├── gen_knowledge_graph.py  知识图谱生成（10 个分析器，全部 10 类图谱）
+│   ├── code_collector.py      代码收集器（语言检测、文件树、上下文构建）
+│   └── llm_analyzer.py        Prompt 模板（10 个）与 JSON 提取工具
 ├── tide_ws.py              ⚠️ DEPRECATED — 旧单文件脚本，仅作迁移参考
 ├── ARCHITECTURE.md         架构文档
 ├── DEVELOPMENT.md          开发指南
@@ -351,13 +372,15 @@ tide/
 | Dashboard | `/` | 运行中 / 排队中 / 待审批 / 今日完成统计，最近任务，Agent 状态，快捷输入 |
 | 任务 | `/tasks` `/tasks/[id]` | 创建 / 查看 / 停止 / 重试 / 审批，SSE 输出流 |
 | Plan | `/plans` `/plans/[id]` | DAG 可视化、Gantt 时间线、分文件 Diff、合并总览 |
-| 看板 | `/kanban` | 项目 / 会话 / Agent / 工作流四维看板，拖拽切换状态 |
+| 看板 | `/kanban` | 项目 / 会话 / Agent / 工作流 / 工作项五维看板，支持项目组、拖拽切换状态 |
 | 定时 | `/schedules` | Cron / Interval / Date 定时任务 |
 | 工作流 | `/workflows` | 多 Agent 协作流程可视化编辑器（React Flow） |
 | 项目 | `/projects` | 项目列表与详情 |
+| 代码编辑器 | `/projects/[id]/files` | Monaco Editor 多标签编辑、文件树浏览、主题切换、全屏 |
+| Git 审计 | `/projects/[id]/audit` | 四维审计（提交/文件/工作项/会话）、Diff 查看、未提交变更管理 |
 | 会话 | `/sessions` | Agent session resume |
 | 项目组 | `/projects/groups/[id]` | 项目组详情（对话/任务/版本/成员/设置五 Tab） |
-| 知识图谱 | 项目/项目组设置 Tab | 仓库 `.knowledge/` 图谱文件浏览、Markdown 编辑、ZIP 导出、触发 Agent 生成 |
+| 知识图谱 | 项目/项目组设置 Tab | 仓库 `.knowledge/` 图谱文件浏览（10 类图谱）、Markdown 编辑、ZIP 导出、触发 Agent 生成、旋转进度图标 + 进度弹窗 |
 | 技能库 | `/settings/skills` | ECC Skills 管理（创建/编辑/删除/Markdown 预览） |
 | 规则 | `/settings/rules` | ECC Rules 管理（global/language/project 三层） |
 | 事件钩子 | `/settings/hooks` | ECC Hooks 管理（事件/条件/动作配置） |
@@ -449,13 +472,21 @@ Dashboard 首页的成本概览卡片展示：
 
 - **时间范围**：今日 / 本周 / 本月
 - **维度切换**：按 Agent / Model / Project 分组
-- **定价模型**：内置 claude-sonnet/opus/haiku、gpt-4o 系列、o3 系列、codex-mini
+- **定价模型**：内置 claude-sonnet/opus/haiku、claude-sonnet-4/opus-4、gpt-4o/gpt-4o-mini/gpt-5、o3/o3-mini/o4-mini、codex-mini、qoder
 
 成本数据源自任务执行时记录的 `token_input` / `token_output` 字段，由 `cost_service` 按模型定价实时计算。
 
-Token 采集支持双路径：
-- **精确路径**：Claude CLI 任务结束时自动报告精确 token 用量及费用。
-- **估算路径**：Codex / Qoder CLI 当前不报告 token，系统自动使用 `tiktoken`（cl100k_base）对 prompt 和输出文本进行估算，不含 CLI 内部系统 prompt 和工具定义。
+Token 采集支持三路径（优先级从高到低）：
+1. **Claude 精确采集**：Claude CLI `result` 事件直接报告精确 token 用量及费用（含 cache token）。
+2. **通用 JSON 解析**：从 CLI 流式 stdout 的 JSON 行中解析 token 信息（Codex CLI 等）。
+3. **tiktoken 估算**：当上述两条路径均无有效数据时，使用 tiktoken（cl100k_base）对 prompt 和输出文本估算，不含系统 prompt 和工具定义。
+
+**支持的客户端类型**：
+- Codex CLI — 通用 JSON 解析 + tiktoken 兜底
+- Claude CLI — 精确 token + 直报成本 (`reported_cost_usd`)
+- Qoder CLI — 通用 JSON 解析 + tiktoken 兜底
+- Qoder IDE 插件 — 通过 `POST /api/sessions/{session_id}/usage` 主动上报
+- 自动同步 — APScheduler 每 5 分钟扫描本地 IDE 会话文件，增量估算并写入 DB
 
 ### 批量导入
 
@@ -666,36 +697,167 @@ Header 展示：成员项目数 / 用户成员数 / 创建时间 / 创建者。
 
 ## 知识图谱（Knowledge Graph）
 
-知识图谱自动分析仓库代码结构，生成 4 类可视化图谱，存放于仓库下 `.knowledge/` 目录。
+知识图谱自动分析仓库代码结构，生成 **10 类**可视化图谱，存放于仓库下 `.knowledge/` 目录。
 
 ### 图谱类型
 
-| 类型 | 内容 | 产物 |
-|------|------|------|
-| **模块依赖图** | import 关系、架构分层、被依赖统计 | `module/module_graph.json` + `.md` |
-| **API 接口图谱** | 路由、HTTP 方法、参数、关联 Service | `api/api_graph.json` + `.md` |
-| **数据库 Schema** | 表结构、外键、索引、ER 关系图 | `db/schema_graph.json` + `.md` + `er_diagram.md` |
-| **业务概念图** | 核心实体、关系、领域划分 | `concept/concept_graph.json` + `.md` |
+| 类型 | 标识 | 内容 | 产物 |
+|------|------|------|------|
+| **模块依赖图** | `module` | import 关系、架构分层、被依赖统计 | `module/module_graph.json` + `.md` |
+| **API 接口图谱** | `api` | 路由、HTTP 方法、参数、关联 Service | `api/api_graph.json` + `.md` |
+| **数据库 Schema** | `db` | 表结构、外键、索引、ER 关系图 | `db/schema_graph.json` + `.md` + `er_diagram.md` |
+| **业务概念图** | `concept` | 核心实体、关系、领域划分 | `concept/concept_graph.json` + `.md` |
+| **系统架构** | `architecture` | 目录结构、层次划分、Docker 配置推断 | `architecture/architecture_graph.json` + `.md` |
+| **技术栈** | `tech-stack` | 语言/框架/工具链/依赖推断 | `tech-stack/tech_stack_graph.json` + `.md` |
+| **编码风格** | `coding-style` | 命名约定、代码组织、测试实践推断 | `coding-style/coding_style_graph.json` + `.md` |
+| **数据流** | `data-flow` | API 路由推断请求链路 | `data-flow/data_flow_graph.json` + `.md` |
+| **测试覆盖** | `test-coverage` | 测试文件分析、覆盖率推断 | `test-coverage/test_coverage_graph.json` + `.md` |
+| **事件总线** | `event-bus` | WebSocket/EventEmitter 事件机制 | `event-bus/event_bus_graph.json` + `.md` |
 
 ### 生成方式
 
 | 方式 | 适用场景 | 说明 |
 |------|---------|------|
-| **静态分析**（默认） | Python 项目 | 基于 AST 解析 import / FastAPI 路由 / SQLite DDL，无需额外配置 |
-| **Agent 驱动** | 任意语言项目 | 用户在 UI 选择已配置的 Agent（Codex/Claude/Qoder），后端通过 AgentExecutor 发送分析 Prompt，Agent 读取代码并生成 JSON |
+| **静态分析**（默认） | Python 项目 | 基于 AST 解析 + 文件启发式推断，支持全部 10 类图谱 |
+| **Agent 驱动** | 任意语言项目 | 用户在 UI 选择已配置的 Agent（Codex/Claude/Qoder），后端发送分析 Prompt，Agent 读取代码并生成 JSON；支持全部 10 类图谱 |
 
 ### 快速使用
 
 1. 进入项目或项目组详情页 → **知识图谱** Tab。
-2. 选择「生成类型」（全部/模块/API/数据库/概念）和「分析方式」（静态分析或选择 Agent）。
-3. 点击「立即生成」，等待异步任务完成。
+2. 选择「生成类型」（全部/10 类之一）和「分析方式」（静态分析或选择 Agent）。
+3. 点击「立即生成」，旋转进度图标展示实时进度（可点击查看日志和错误）。
 4. 左侧文件树浏览产物，右侧查看 Markdown / JSON，支持在线编辑保存和 ZIP 导出。
 
-### CLI 方式（仅静态分析）
+### CLI 方式（静态分析，全部 10 类）
 
 ```bash
+# 生成全部 10 类图谱
 python3 scripts/gen_knowledge_graph.py --type all --repo-path /path/to/project
+
+# 生成特定类型
+python3 scripts/gen_knowledge_graph.py --type architecture --repo-path /path/to/project
+python3 scripts/gen_knowledge_graph.py --type tech-stack --repo-path /path/to/project
+python3 scripts/gen_knowledge_graph.py --type data-flow --repo-path /path/to/project
 ```
+
+`--type` 可选值：`all` / `module` / `api` / `db` / `concept` / `architecture` / `tech-stack` / `coding-style` / `data-flow` / `test-coverage` / `event-bus`
+
+---
+
+## 权限与认证
+
+### 启用认证
+
+设置环境变量启用强制认证：
+
+```bash
+TIDE_REQUIRE_AUTH=1
+```
+
+默认为 `0`（关闭），所有 API 可匿名访问，适用于个人开发环境。
+
+### 登录方式
+
+- **用户名密码**：`POST /api/auth/login` → 返回 JWT token
+- **Lark OAuth2**：`GET /api/auth/lark/login` → 飞书扫码 → 自动创建/绑定用户
+
+### 角色说明
+
+| 角色 | 权限范围 |
+|------|--------|
+| admin | 全局管理，跳过项目级检查 |
+| member | 按项目配置（owner/member/viewer） |
+| viewer | 全局只读 |
+
+### 项目成员管理
+
+```bash
+# 添加成员
+POST /api/projects/{project_id}/members
+{"user_id": "xxx", "role": "member"}
+
+# 查看成员
+GET /api/projects/{project_id}/members
+
+# 修改角色
+PUT /api/projects/{project_id}/members/{user_id}
+{"role": "viewer"}
+```
+
+### Lark 权限过滤
+
+Lark 端操作同样受权限体系约束：
+
+- 环境变量 `LARK_ALLOWED_OPEN_IDS`（逗号分隔）可限制允许操作的飞书用户
+- 飞书用户需通过 Web 端 OAuth 登录绑定后方可在 Lark 端执行写操作
+- `TIDE_REQUIRE_AUTH=0` 时 Lark 端权限检查不阻止操作（向后兼容）
+
+---
+
+## Git 审计
+
+### 查看 Commit 历史
+
+```bash
+GET /api/projects/{project_id}/git/commits?branch=main&limit=50
+```
+
+支持参数：`branch`、`since`、`until`、`author`、`limit`
+
+### 变更统计
+
+按不同维度聚合变更：
+
+```bash
+# 按工作项聚合
+GET /api/projects/{project_id}/git/changes?group_by=work_item
+
+# 按会话聚合
+GET /api/projects/{project_id}/git/changes?group_by=session
+
+# 按分支聚合
+GET /api/projects/{project_id}/git/changes?group_by=branch
+```
+
+### Diff 查看
+
+```bash
+GET /api/projects/{project_id}/git/diff/{commit_hash}
+```
+
+返回该 commit 的文件变更列表及具体 diff 内容。
+
+---
+
+## A2A 远程 Agent
+
+通过 A2A Bridge 支持在远程服务器上运行 Agent CLI，实现横向扩展。
+
+### 部署 Bridge
+
+```bash
+cd a2a-bridge
+cp .env.example .env
+# 编辑 .env 配置 GIT_REPO_URL、AGENT_CLI 等
+
+docker build -t tide-a2a-bridge .
+docker run -p 8720:8720 --env-file .env tide-a2a-bridge
+```
+
+### 注册远程 Agent
+
+```bash
+POST /api/remote-agents
+{
+  "name": "remote-codex",
+  "url": "http://bridge-host:8720",
+  "agent_type": "codex"
+}
+```
+
+### 使用
+
+注册后的远程 Agent 可在工作流 Agent 节点中选用，任务自动通过 A2A 协议分发到 Bridge 执行。
 
 ---
 

@@ -99,8 +99,16 @@ export function getWorkItemCrossRepoResults(
 export function getWorkItemBoard(
   projectId: string,
   versionId?: string,
+  filters?: WorkItemFilters,
 ): Promise<WorkItemBoard> {
-  const qs = buildQuery({ project_id: projectId, version_id: versionId });
+  const qs = buildQuery({
+    project_id: projectId,
+    version_id: versionId,
+    status: filters?.status,
+    search: filters?.search,
+    assignee: filters?.assignee,
+    group_id: filters?.group_id,
+  });
   return apiClient.get<WorkItemBoard>(`/api/kanban/work-items${qs}`);
 }
 

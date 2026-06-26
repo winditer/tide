@@ -1,0 +1,649 @@
+{
+  "schema_version": "1.0",
+  "request_flows": [
+    {
+      "name": "Admin",
+      "description": "API: admin",
+      "steps": [
+        {
+          "actor": "Client",
+          "action": "HTTP Request",
+          "target": "API"
+        },
+        {
+          "actor": "API",
+          "action": "处理请求",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "查询数据库",
+          "target": "DB"
+        },
+        {
+          "actor": "DB",
+          "action": "返回结果",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "返回响应",
+          "target": "API"
+        }
+      ]
+    },
+    {
+      "name": "Agents",
+      "description": "API: agents",
+      "steps": [
+        {
+          "actor": "Client",
+          "action": "HTTP Request",
+          "target": "API"
+        },
+        {
+          "actor": "API",
+          "action": "处理请求",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "查询数据库",
+          "target": "DB"
+        },
+        {
+          "actor": "DB",
+          "action": "返回结果",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "返回响应",
+          "target": "API"
+        }
+      ]
+    },
+    {
+      "name": "Approvals",
+      "description": "API: approvals",
+      "steps": [
+        {
+          "actor": "Client",
+          "action": "HTTP Request",
+          "target": "API"
+        },
+        {
+          "actor": "API",
+          "action": "处理请求",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "查询数据库",
+          "target": "DB"
+        },
+        {
+          "actor": "DB",
+          "action": "返回结果",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "返回响应",
+          "target": "API"
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "description": "API: auth",
+      "steps": [
+        {
+          "actor": "Client",
+          "action": "HTTP Request",
+          "target": "API"
+        },
+        {
+          "actor": "API",
+          "action": "处理请求",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "查询数据库",
+          "target": "DB"
+        },
+        {
+          "actor": "DB",
+          "action": "返回结果",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "返回响应",
+          "target": "API"
+        }
+      ]
+    },
+    {
+      "name": "Conversations",
+      "description": "API: conversations",
+      "steps": [
+        {
+          "actor": "Client",
+          "action": "HTTP Request",
+          "target": "API"
+        },
+        {
+          "actor": "API",
+          "action": "处理请求",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "查询数据库",
+          "target": "DB"
+        },
+        {
+          "actor": "DB",
+          "action": "返回结果",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "返回响应",
+          "target": "API"
+        }
+      ]
+    },
+    {
+      "name": "Dashboard",
+      "description": "API: dashboard",
+      "steps": [
+        {
+          "actor": "Client",
+          "action": "HTTP Request",
+          "target": "API"
+        },
+        {
+          "actor": "API",
+          "action": "处理请求",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "查询数据库",
+          "target": "DB"
+        },
+        {
+          "actor": "DB",
+          "action": "返回结果",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "返回响应",
+          "target": "API"
+        }
+      ]
+    },
+    {
+      "name": "Events",
+      "description": "API: events",
+      "steps": [
+        {
+          "actor": "Client",
+          "action": "HTTP Request",
+          "target": "API"
+        },
+        {
+          "actor": "API",
+          "action": "处理请求",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "查询数据库",
+          "target": "DB"
+        },
+        {
+          "actor": "DB",
+          "action": "返回结果",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "返回响应",
+          "target": "API"
+        }
+      ]
+    },
+    {
+      "name": "Files",
+      "description": "API: files",
+      "steps": [
+        {
+          "actor": "Client",
+          "action": "HTTP Request",
+          "target": "API"
+        },
+        {
+          "actor": "API",
+          "action": "处理请求",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "查询数据库",
+          "target": "DB"
+        },
+        {
+          "actor": "DB",
+          "action": "返回结果",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "返回响应",
+          "target": "API"
+        }
+      ]
+    },
+    {
+      "name": "Git Audit",
+      "description": "API: git_audit",
+      "steps": [
+        {
+          "actor": "Client",
+          "action": "HTTP Request",
+          "target": "API"
+        },
+        {
+          "actor": "API",
+          "action": "处理请求",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "查询数据库",
+          "target": "DB"
+        },
+        {
+          "actor": "DB",
+          "action": "返回结果",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "返回响应",
+          "target": "API"
+        }
+      ]
+    },
+    {
+      "name": "Hooks",
+      "description": "API: hooks",
+      "steps": [
+        {
+          "actor": "Client",
+          "action": "HTTP Request",
+          "target": "API"
+        },
+        {
+          "actor": "API",
+          "action": "处理请求",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "查询数据库",
+          "target": "DB"
+        },
+        {
+          "actor": "DB",
+          "action": "返回结果",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "返回响应",
+          "target": "API"
+        }
+      ]
+    },
+    {
+      "name": "Kanban",
+      "description": "API: kanban",
+      "steps": [
+        {
+          "actor": "Client",
+          "action": "HTTP Request",
+          "target": "API"
+        },
+        {
+          "actor": "API",
+          "action": "处理请求",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "查询数据库",
+          "target": "DB"
+        },
+        {
+          "actor": "DB",
+          "action": "返回结果",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "返回响应",
+          "target": "API"
+        }
+      ]
+    },
+    {
+      "name": "Knowledge",
+      "description": "API: knowledge",
+      "steps": [
+        {
+          "actor": "Client",
+          "action": "HTTP Request",
+          "target": "API"
+        },
+        {
+          "actor": "API",
+          "action": "处理请求",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "查询数据库",
+          "target": "DB"
+        },
+        {
+          "actor": "DB",
+          "action": "返回结果",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "返回响应",
+          "target": "API"
+        }
+      ]
+    },
+    {
+      "name": "Lark Bridge",
+      "description": "API: lark_bridge",
+      "steps": [
+        {
+          "actor": "Client",
+          "action": "HTTP Request",
+          "target": "API"
+        },
+        {
+          "actor": "API",
+          "action": "处理请求",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "查询数据库",
+          "target": "DB"
+        },
+        {
+          "actor": "DB",
+          "action": "返回结果",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "返回响应",
+          "target": "API"
+        }
+      ]
+    },
+    {
+      "name": "Lark Callback",
+      "description": "API: lark_callback",
+      "steps": [
+        {
+          "actor": "Client",
+          "action": "HTTP Request",
+          "target": "API"
+        },
+        {
+          "actor": "API",
+          "action": "处理请求",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "查询数据库",
+          "target": "DB"
+        },
+        {
+          "actor": "DB",
+          "action": "返回结果",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "返回响应",
+          "target": "API"
+        }
+      ]
+    },
+    {
+      "name": "Plans",
+      "description": "API: plans",
+      "steps": [
+        {
+          "actor": "Client",
+          "action": "HTTP Request",
+          "target": "API"
+        },
+        {
+          "actor": "API",
+          "action": "处理请求",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "查询数据库",
+          "target": "DB"
+        },
+        {
+          "actor": "DB",
+          "action": "返回结果",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "返回响应",
+          "target": "API"
+        }
+      ]
+    },
+    {
+      "name": "Project Groups",
+      "description": "API: project_groups",
+      "steps": [
+        {
+          "actor": "Client",
+          "action": "HTTP Request",
+          "target": "API"
+        },
+        {
+          "actor": "API",
+          "action": "处理请求",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "查询数据库",
+          "target": "DB"
+        },
+        {
+          "actor": "DB",
+          "action": "返回结果",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "返回响应",
+          "target": "API"
+        }
+      ]
+    },
+    {
+      "name": "Project Members",
+      "description": "API: project_members",
+      "steps": [
+        {
+          "actor": "Client",
+          "action": "HTTP Request",
+          "target": "API"
+        },
+        {
+          "actor": "API",
+          "action": "处理请求",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "查询数据库",
+          "target": "DB"
+        },
+        {
+          "actor": "DB",
+          "action": "返回结果",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "返回响应",
+          "target": "API"
+        }
+      ]
+    },
+    {
+      "name": "Projects",
+      "description": "API: projects",
+      "steps": [
+        {
+          "actor": "Client",
+          "action": "HTTP Request",
+          "target": "API"
+        },
+        {
+          "actor": "API",
+          "action": "处理请求",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "查询数据库",
+          "target": "DB"
+        },
+        {
+          "actor": "DB",
+          "action": "返回结果",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "返回响应",
+          "target": "API"
+        }
+      ]
+    },
+    {
+      "name": "Remote Agents",
+      "description": "API: remote_agents",
+      "steps": [
+        {
+          "actor": "Client",
+          "action": "HTTP Request",
+          "target": "API"
+        },
+        {
+          "actor": "API",
+          "action": "处理请求",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "查询数据库",
+          "target": "DB"
+        },
+        {
+          "actor": "DB",
+          "action": "返回结果",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "返回响应",
+          "target": "API"
+        }
+      ]
+    },
+    {
+      "name": "Rules",
+      "description": "API: rules",
+      "steps": [
+        {
+          "actor": "Client",
+          "action": "HTTP Request",
+          "target": "API"
+        },
+        {
+          "actor": "API",
+          "action": "处理请求",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "查询数据库",
+          "target": "DB"
+        },
+        {
+          "actor": "DB",
+          "action": "返回结果",
+          "target": "Service"
+        },
+        {
+          "actor": "Service",
+          "action": "返回响应",
+          "target": "API"
+        }
+      ]
+    }
+  ],
+  "async_flows": [
+    {
+      "name": "WebSocket 推送",
+      "trigger": "状态变更",
+      "steps": [
+        "事件发布",
+        "WebSocket Hub",
+        "推送到客户端"
+      ]
+    }
+  ],
+  "integrations": [
+    {
+      "name": "飞书",
+      "type": "REST API",
+      "description": "飞书开放平台集成",
+      "auth": "OAuth2"
+    }
+  ],
+  "stats": {
+    "total_flows": 21,
+    "total_nodes": 1
+  },
+  "generated_by": "static"
+}

@@ -104,10 +104,12 @@ class CostService:
         input_tokens: int,
         output_tokens: int,
         model: str,
+        reported_cost_usd: Optional[float] = None,
     ) -> Optional[float]:
         """累加任务的 token 计数与估算成本至 DB。
 
         已有计数会被叠加（同一任务多次调用 = 多轮 token 累加）。
+        当 ``reported_cost_usd`` 非 None 时，使用 CLI 上报的精确成本代替计算值。
         失败时记录警告并返回 None，不抛异常。
         """
         if not task_id:
@@ -117,26 +119,33 @@ class CostService:
             out_tokens = max(0, int(output_tokens or 0))
         except (TypeError, ValueError):
             return None
-        if in_tokens == 0 and out_tokens == 0:
+        if in_tokens == 0 and out_tokens == 0 and not reported_cost_usd:
             return None
-        cost = self.calculate_cost(model, in_tokens, out_tokens)
+        cost = (
+            round(float(reported_cost_usd), 6)
+            if reported_cost_usd and reported_cost_usd > 0
+            else self.calculate_cost(model, in_tokens, out_tokens)
+        )
         try:
             async with async_session_factory() as session:
-                await session.execute(
-                    text(
-                        "UPDATE tasks SET"
-                        " token_input = COALESCE(token_input, 0) + :ti,"
-                        " token_output = COALESCE(token_output, 0) + :to_,"
-                        " estimated_cost_usd = COALESCE(estimated_cost_usd, 0) + :cost"
-                        " WHERE id = :tid"
-                    ),
-                    {
-                        "ti": in_tokens,
-                        "to_": out_tokens,
-                        "cost": cost,
-                        "tid": task_id,
-                    },
+                # 构建动态 SET 子句：始终更新 token 和 cost，仅当 model 非空时同时更新 model
+                sql = (
+                    "UPDATE tasks SET"
+                    " token_input = COALESCE(token_input, 0) + :ti,"
+                    " token_output = COALESCE(token_output, 0) + :to_,"
+                    " estimated_cost_usd = COALESCE(estimated_cost_usd, 0) + :cost"
                 )
+                params: dict = {
+                    "ti": in_tokens,
+                    "to_": out_tokens,
+                    "cost": cost,
+                    "tid": task_id,
+                }
+                if model:
+                    sql += ", model = :model"
+                    params["model"] = model
+                sql += " WHERE id = :tid"
+                await session.execute(text(sql), params)
                 await session.commit()
         except Exception as exc:  # noqa: BLE001
             logger.warning(

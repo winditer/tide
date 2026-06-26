@@ -1044,18 +1044,27 @@ async def get_cost_summary(
         return {
             "period": period,
             "total_cost_usd": 0.0,
+            "total_cost": 0.0,
             "total_input_tokens": 0,
+            "input_tokens": 0,
             "total_output_tokens": 0,
+            "output_tokens": 0,
             "task_count": 0,
         }
 
     total_cost = float(row[0] or 0) if row else 0.0
+    input_tokens = int(row[1] or 0) if row else 0
+    output_tokens = int(row[2] or 0) if row else 0
+    task_count = int(row[3] or 0) if row else 0
     return {
         "period": period,
         "total_cost_usd": round(total_cost, 6),
-        "total_input_tokens": int(row[1] or 0) if row else 0,
-        "total_output_tokens": int(row[2] or 0) if row else 0,
-        "task_count": int(row[3] or 0) if row else 0,
+        "total_cost": round(total_cost, 6),
+        "total_input_tokens": input_tokens,
+        "input_tokens": input_tokens,
+        "total_output_tokens": output_tokens,
+        "output_tokens": output_tokens,
+        "task_count": task_count,
     }
 
 
@@ -1117,16 +1126,24 @@ async def get_cost_by_dimension(
     results: list[dict] = []
     for row in rows:
         key = row[0] or ""
+        cost_val = round(float(row[1] or 0), 6)
+        ti_val = int(row[2] or 0)
+        to_val = int(row[3] or 0)
+        cnt_val = int(row[4] or 0)
         item: dict = {
             "key": key,
-            "total_cost_usd": round(float(row[1] or 0), 6),
-            "total_input_tokens": int(row[2] or 0),
-            "total_output_tokens": int(row[3] or 0),
-            "task_count": int(row[4] or 0),
+            "name": key,
+            "total_cost_usd": cost_val,
+            "cost": cost_val,
+            "total_input_tokens": ti_val,
+            "total_output_tokens": to_val,
+            "tokens": ti_val + to_val,
+            "task_count": cnt_val,
         }
         if dimension == "project" and key:
             reg = registry.get(key) or {}
             item["project_id"] = _encode_project_id(key)
             item["project_name"] = reg.get("name") or _project_name_from_cwd(key)
+            item["name"] = item["project_name"]
         results.append(item)
     return results

@@ -277,22 +277,22 @@ export default function FilesPage({
   return (
     <div className="flex flex-col gap-6 p-6 h-[calc(100vh-64px)]">
       {/* Breadcrumb - separated at top like audit page */}
-      <nav className="flex items-center gap-1 text-sm text-zinc-500 dark:text-zinc-400">
+      <nav className="flex items-center gap-1 text-sm text-zinc-500">
         <Link
           href="/projects"
-          className="hover:text-zinc-700 dark:hover:text-zinc-300 transition-colors"
+          className="hover:text-zinc-700 transition-colors"
         >
           项目
         </Link>
         <ChevronRight className="h-3.5 w-3.5" />
         <Link
           href={`/projects/${id}`}
-          className="hover:text-zinc-700 dark:hover:text-zinc-300 transition-colors"
+          className="hover:text-zinc-700 transition-colors"
         >
           项目详情
         </Link>
         <ChevronRight className="h-3.5 w-3.5" />
-        <span className="flex items-center gap-1 text-zinc-900 dark:text-zinc-100 font-medium">
+        <span className="flex items-center gap-1 text-zinc-900 font-medium">
           <FileCode className="h-3.5 w-3.5" />
           文件
         </span>

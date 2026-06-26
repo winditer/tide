@@ -1,6 +1,6 @@
 # 数据库 Schema 图谱
 
-> 生成时间: 2026-06-24T02:53:15Z | 表: 30 | 列: 319 | 外键: 35 | 索引: 30
+> 生成时间: 2026-06-26T02:33:51Z | 表: 30 | 列: 320 | 外键: 35 | 索引: 30
 
 ## ER 关系图
 
@@ -386,6 +386,7 @@ erDiagram
 | `token_input` | `INTEGER` | via engine.py:ALTER | — | — |
 | `token_output` | `INTEGER` | via engine.py:ALTER | — | — |
 | `estimated_cost_usd` | `REAL` | via engine.py:ALTER | — | — |
+| `synced_message_count` | `INTEGER` | via engine.py:ALTER | — | — |
 
 **索引**：
 - `idx_tasks_workspace` (workspace_id)

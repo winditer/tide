@@ -39,6 +39,8 @@ async def init_db():
             await db.execute("ALTER TABLE tasks ADD COLUMN estimated_cost_usd REAL DEFAULT 0")
         if "group_id" not in task_columns:
             await db.execute("ALTER TABLE tasks ADD COLUMN group_id TEXT")
+        if "synced_message_count" not in task_columns:
+            await db.execute("ALTER TABLE tasks ADD COLUMN synced_message_count INTEGER DEFAULT 0")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_group ON tasks(group_id)")
 
         # approvals 表升级（兑容旧版 schema）

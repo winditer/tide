@@ -8,6 +8,7 @@ import {
   useMoveWorkItem,
   type WorkItem,
   type WorkItemBoardColumn,
+  type WorkItemFilters,
 } from "@tide/core";
 import { useQueryClient } from "@tanstack/react-query";
 import { WorkItemCard } from "./WorkItemCard";
@@ -17,6 +18,8 @@ export type WorkItemGroupBy = "none" | "assignee" | "priority" | "version";
 interface WorkItemBoardProps {
   projectId: string;
   versionId?: string;
+  /** 筛选条件（与列表视图共享同一套筛选参数） */
+  filters?: WorkItemFilters;
   onCardClick?: (item: WorkItem) => void;
   /** 版本 id -> 版本名称 映射，用于卡片版本徽标与按版本分组 */
   versionMap?: Record<string, string>;
@@ -81,6 +84,7 @@ function getColumnPalette(column: WorkItemBoardColumn) {
 export function WorkItemBoard({
   projectId,
   versionId,
+  filters,
   onCardClick,
   versionMap,
   groupBy = "none",
@@ -90,6 +94,7 @@ export function WorkItemBoard({
     projectId,
     versionId,
     refetchInterval,
+    filters,
   );
   const moveMutation = useMoveWorkItem();
   const queryClient = useQueryClient();
@@ -112,7 +117,7 @@ export function WorkItemBoard({
 
       // Optimistic update
       queryClient.setQueryData(
-        ["work-items", "board", projectId, versionId ?? null],
+        ["work-items", "board", projectId, versionId ?? null, filters ?? null],
         (old: any) => {
           if (!old?.columns) return old;
           let movedItem: WorkItem | undefined;
@@ -147,13 +152,13 @@ export function WorkItemBoard({
           onSettled: () => {
             // 无论成败都刷新看板，确保 status / current_node_id 与后端一致
             queryClient.invalidateQueries({
-              queryKey: ["work-items", "board", projectId, versionId ?? null],
+              queryKey: ["work-items", "board", projectId, versionId ?? null, filters ?? null],
             });
           },
         }
       );
     },
-    [moveMutation, queryClient, projectId, versionId, data]
+    [moveMutation, queryClient, projectId, versionId, filters, data]
   );
 
   const columns = data?.columns ?? [];

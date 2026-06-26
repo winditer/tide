@@ -15,6 +15,12 @@ export interface GitUncommittedFile {
   staged: boolean;
 }
 
+export interface GitUncommittedResponse {
+  files: GitUncommittedFile[];
+  total: number;
+  current_branch: string | null;
+}
+
 export interface GitCommit {
   hash: string;
   author: string;
@@ -122,11 +128,15 @@ export async function getGitBranches(
  */
 export async function getGitUncommitted(
   projectId: string,
-): Promise<GitUncommittedFile[]> {
-  const res = await apiClient.get<{ files: GitUncommittedFile[]; total: number }>(
+): Promise<GitUncommittedResponse> {
+  const res = await apiClient.get<GitUncommittedResponse>(
     `/api/projects/${encodeURIComponent(projectId)}/git/uncommitted`,
   );
-  return res.files ?? [];
+  return {
+    files: res.files ?? [],
+    total: res.total ?? 0,
+    current_branch: res.current_branch ?? null,
+  };
 }
 
 /**

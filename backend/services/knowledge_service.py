@@ -39,6 +39,12 @@ try:
         API_ANALYSIS_PROMPT,
         SCHEMA_ANALYSIS_PROMPT,
         CONCEPT_ANALYSIS_PROMPT,
+        ARCHITECTURE_ANALYSIS_PROMPT,
+        TECH_STACK_ANALYSIS_PROMPT,
+        CODING_STYLE_ANALYSIS_PROMPT,
+        DATA_FLOW_ANALYSIS_PROMPT,
+        TEST_COVERAGE_ANALYSIS_PROMPT,
+        EVENT_BUS_ANALYSIS_PROMPT,
     )
     _PROMPTS_AVAILABLE = True
 except ImportError:
@@ -274,7 +280,11 @@ class KnowledgeService:
 
         同一 (scope, target_id) 若已有任务在 running，则拒绝新触发（返回该任务）。
         """
-        if graph_type not in {"all", "module", "api", "db", "concept"}:
+        if graph_type not in {
+            "all", "module", "api", "db", "concept",
+            "architecture", "tech-stack", "coding-style",
+            "data-flow", "test-coverage", "event-bus",
+        }:
             raise ValueError(f"invalid graph_type: {graph_type}")
 
         repos = await self.resolve_repos(scope, target_id)
@@ -445,9 +455,15 @@ class KnowledgeService:
             "module": ("module/module_graph", MODULE_ANALYSIS_PROMPT, "模块依赖"),
             "api": ("api/api_graph", API_ANALYSIS_PROMPT, "API 接口"),
             "db": ("db/schema_graph", SCHEMA_ANALYSIS_PROMPT, "数据库 Schema"),
+            "architecture": ("architecture/architecture_graph", ARCHITECTURE_ANALYSIS_PROMPT, "系统架构"),
+            "tech-stack": ("tech-stack/tech_stack_graph", TECH_STACK_ANALYSIS_PROMPT, "技术栈"),
+            "coding-style": ("coding-style/coding_style_graph", CODING_STYLE_ANALYSIS_PROMPT, "编码风格"),
+            "data-flow": ("data-flow/data_flow_graph", DATA_FLOW_ANALYSIS_PROMPT, "数据流"),
+            "test-coverage": ("test-coverage/test_coverage_graph", TEST_COVERAGE_ANALYSIS_PROMPT, "测试覆盖"),
+            "event-bus": ("event-bus/event_bus_graph", EVENT_BUS_ANALYSIS_PROMPT, "事件总线"),
         }
 
-        for gt in ("module", "api", "db"):
+        for gt in ("module", "api", "db", "architecture", "tech-stack", "coding-style", "data-flow", "test-coverage", "event-bus"):
             if graph_type not in ("all", gt):
                 continue
             rel_path, prompt_template, label = graph_info[gt]
@@ -503,7 +519,8 @@ class KnowledgeService:
                 pass
         new_version = prev_version + 1
 
-        wanted = {"module", "api", "db", "concept"} if graph_type == "all" else {graph_type}
+        all_types = {"module", "api", "db", "concept", "architecture", "tech-stack", "coding-style", "data-flow", "test-coverage", "event-bus"}
+        wanted = all_types if graph_type == "all" else {graph_type}
         sections: List[str] = []
 
         render_map = {
@@ -511,6 +528,12 @@ class KnowledgeService:
             "api": ("api/api_graph", renderer.render_api_graph),
             "db": ("db/schema_graph", renderer.render_schema_graph),
             "concept": ("concept/concept_graph", renderer.render_concept_graph),
+            "architecture": ("architecture/architecture_graph", renderer.render_architecture_graph),
+            "tech-stack": ("tech-stack/tech_stack_graph", renderer.render_tech_stack_graph),
+            "coding-style": ("coding-style/coding_style_graph", renderer.render_coding_style_graph),
+            "data-flow": ("data-flow/data_flow_graph", renderer.render_data_flow_graph),
+            "test-coverage": ("test-coverage/test_coverage_graph", renderer.render_test_coverage_graph),
+            "event-bus": ("event-bus/event_bus_graph", renderer.render_event_bus_graph),
         }
 
         for section in wanted:
@@ -524,12 +547,27 @@ class KnowledgeService:
                 # Agent 生成了 JSON → 渲染为 Markdown
                 try:
                     data = json.loads(json_file.read_text(encoding="utf-8"))
+                    # 确保 data 是 dict，否则渲染器会失败
+                    if not isinstance(data, dict):
+                        logger.warning(
+                            "JSON file %s is not a dict (got %s), skipping render",
+                            json_file, type(data).__name__
+                        )
+                        # 如果有对应的 .md 文件则使用它
+                        if md_file.exists():
+                            sections.append(section)
+                            logger.info("Using existing Markdown: %s", md_file)
+                        continue
                     md_file.parent.mkdir(parents=True, exist_ok=True)
                     md_file.write_text(md_func(data), encoding="utf-8")
                     sections.append(section)
                     logger.info("Rendered %s from JSON → Markdown", section)
-                except (json.JSONDecodeError, OSError) as e:
-                    logger.warning("Failed to parse %s: %s", json_file, e)
+                except (json.JSONDecodeError, OSError, AttributeError, TypeError) as e:
+                    logger.warning("Failed to parse/render %s: %s", json_file, e)
+                    # 如果 JSON 渲染失败但有 .md 文件，使用它
+                    if md_file.exists():
+                        sections.append(section)
+                        logger.info("Fallback to existing Markdown: %s", md_file)
             elif md_file.exists():
                 # Agent 直接生成了 Markdown → 直接使用
                 sections.append(section)

@@ -135,6 +135,12 @@ export function ActivityTimeline() {
             活动时间线
           </h2>
         </div>
+        <Link
+          href="/tasks"
+          className="text-xs font-medium text-indigo-600 transition-colors hover:text-indigo-700"
+        >
+          查看更多 →
+        </Link>
       </header>
 
       {isLoading ? (
@@ -172,15 +178,6 @@ export function ActivityTimeline() {
           })}
         </ol>
       )}
-
-      <div className="mt-4 border-t border-gray-200/60 pt-3 text-center">
-        <Link
-          href="/tasks"
-          className="text-xs font-medium text-indigo-600 transition-colors hover:text-indigo-700"
-        >
-          查看更多 →
-        </Link>
-      </div>
     </section>
   );
 }

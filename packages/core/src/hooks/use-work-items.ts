@@ -34,12 +34,13 @@ export function useWorkItemBoard(
   projectId: string | undefined,
   versionId?: string,
   refetchInterval?: number,
+  filters?: WorkItemFilters,
 ) {
   // 默认 60s 自动刷新；传 0 表示关闭自动刷新
   const interval = refetchInterval ?? 60_000;
   return useQuery({
-    queryKey: ["work-items", "board", projectId, versionId ?? null],
-    queryFn: () => getWorkItemBoard(projectId!, versionId),
+    queryKey: ["work-items", "board", projectId, versionId ?? null, filters ?? null],
+    queryFn: () => getWorkItemBoard(projectId!, versionId, filters),
     enabled: !!projectId,
     refetchInterval: interval > 0 ? interval : false,
     refetchIntervalInBackground: false,

@@ -604,6 +604,7 @@ export type {
   GitCommit,
   GitCommitFile,
   GitUncommittedFile,
+  GitUncommittedResponse,
   GitChangeGroup,
   GitCommitsParams,
   GitChangesParams,

@@ -1,16 +1,22 @@
 {
   "schema_version": "1.0",
-  "version": 6,
+  "version": 23,
   "repo_name": "tide",
   "repo_path": "/Users/haifeng/Documents/tide",
-  "git_commit": "d5f6809fb0785bd0db091fbdaa8c5534baf6a8d6",
+  "git_commit": "05cd4f1ad40e0827a07676bb3d556df8f5d10d7d",
   "git_branch": "workflow",
-  "generated_at": "2026-06-24T02:54:15.432094Z",
+  "generated_at": "2026-06-26T02:45:40.512816Z",
   "generator": "agent",
   "sections": [
     "concept",
+    "architecture",
+    "coding-style",
     "db",
+    "data-flow",
+    "test-coverage",
+    "api",
     "module",
-    "api"
+    "tech-stack",
+    "event-bus"
   ]
 }

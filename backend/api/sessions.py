@@ -26,6 +26,7 @@ from backend.core.dependencies import (
 )
 from backend.db.engine import async_session_factory
 from backend.services.archive_service import archive_store, resolve_show_archived
+from backend.services.cost_service import cost_service
 from backend.services.session_discovery import (
     discover_chats,
     discover_sessions,
@@ -38,6 +39,7 @@ from backend.services.task_service import task_service
 logger = logging.getLogger("tide.api.sessions")
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
+usage_router = APIRouter(prefix="/api/usage", tags=["usage"])
 
 
 def _ensure_not_viewer(current_user: Optional[dict]) -> None:
@@ -681,3 +683,154 @@ async def get_session_artifacts(
                 })
 
     return {"artifacts": artifacts}
+
+
+# ── Token Usage ───────────────────────────────────────
+
+
+class UsageReport(BaseModel):
+    input_tokens: int = Field(..., ge=0, description="输入 token 数")
+    output_tokens: int = Field(..., ge=0, description="输出 token 数")
+    model: Optional[str] = Field("qoder", description="模型标识，默认 qoder")
+    source: Optional[str] = Field(None, description="来源标识，如 qoder-ide")
+
+
+class BatchUsageItem(BaseModel):
+    session_id: str = Field(..., description="会话 ID")
+    input_tokens: int = Field(..., ge=0)
+    output_tokens: int = Field(..., ge=0)
+    model: Optional[str] = Field("qoder")
+    source: Optional[str] = Field(None)
+
+
+class BatchUsageRequest(BaseModel):
+    items: list[BatchUsageItem] = Field(..., min_length=1)
+
+
+async def _find_or_create_usage_task(session_id: str) -> Optional[str]:
+    """查找 session 关联的最新 task_id，若无则创建占位任务。"""
+    async with async_session_factory() as session:
+        r = await session.execute(
+            text(
+                "SELECT id FROM tasks WHERE session_id = :sid "
+                "ORDER BY created_at DESC LIMIT 1"
+            ),
+            {"sid": session_id},
+        )
+        row = r.fetchone()
+        if row:
+            return row[0]
+
+    # 无关联 task → 创建轻量级占位任务
+    task = await task_service.create_task(
+        workspace_id="default",
+        prompt="[usage-tracking] Token usage placeholder",
+        agent_id="qoder",
+        model="qoder",
+        cwd="",
+        attachments=[],
+        session_id=session_id,
+    )
+    if task:
+        return task.get("id")
+    return None
+
+
+@router.post("/{session_id}/usage")
+async def report_session_usage(
+    session_id: str,
+    body: UsageReport,
+    current_user=Depends(get_optional_user),
+):
+    """上报单个会话的 token 消耗数据（支持累加）。
+
+    外部客户端（如 Qoder IDE）调用此端点将本地 token 消耗同步至 Tide。
+    """
+    task_id = await _find_or_create_usage_task(session_id)
+    if not task_id:
+        raise HTTPException(status_code=404, detail="Session not found and failed to create tracking task")
+
+    model = (body.model or "qoder").strip() or "qoder"
+    cost = await cost_service.update_task_cost(
+        task_id=task_id,
+        input_tokens=body.input_tokens,
+        output_tokens=body.output_tokens,
+        model=model,
+    )
+
+    # 返回更新后的统计
+    async with async_session_factory() as session:
+        r = await session.execute(
+            text(
+                "SELECT COALESCE(SUM(token_input), 0), "
+                "COALESCE(SUM(token_output), 0), "
+                "COALESCE(SUM(estimated_cost_usd), 0) "
+                "FROM tasks WHERE session_id = :sid"
+            ),
+            {"sid": session_id},
+        )
+        row = r.fetchone()
+
+    total_input = int(row[0]) if row else body.input_tokens
+    total_output = int(row[1]) if row else body.output_tokens
+    total_cost = float(row[2]) if row else (cost or 0.0)
+
+    return {
+        "session_id": session_id,
+        "task_id": task_id,
+        "total_input_tokens": total_input,
+        "total_output_tokens": total_output,
+        "total_cost_usd": round(total_cost, 6),
+        "model": model,
+        "source": body.source,
+    }
+
+
+@usage_router.post("/batch")
+async def report_usage_batch(
+    body: BatchUsageRequest,
+    current_user=Depends(get_optional_user),
+):
+    """批量上报多个会话的 token 消耗数据。"""
+    results: list[dict] = []
+    errors: list[dict] = []
+
+    for item in body.items:
+        try:
+            task_id = await _find_or_create_usage_task(item.session_id)
+            if not task_id:
+                errors.append({
+                    "session_id": item.session_id,
+                    "error": "Session not found and failed to create tracking task",
+                })
+                continue
+
+            model = (item.model or "qoder").strip() or "qoder"
+            cost = await cost_service.update_task_cost(
+                task_id=task_id,
+                input_tokens=item.input_tokens,
+                output_tokens=item.output_tokens,
+                model=model,
+            )
+            results.append({
+                "session_id": item.session_id,
+                "task_id": task_id,
+                "cost_usd": cost,
+                "model": model,
+            })
+        except Exception as exc:
+            logger.warning(
+                "batch usage report failed for session=%s: %s",
+                item.session_id, exc,
+            )
+            errors.append({
+                "session_id": item.session_id,
+                "error": str(exc),
+            })
+
+    return {
+        "processed": len(results),
+        "failed": len(errors),
+        "results": results,
+        "errors": errors,
+    }

@@ -10,6 +10,7 @@ import {
   gitIgnore,
   type GitCommitsParams,
   type GitChangesParams,
+  type GitUncommittedResponse,
 } from "../api/git-audit";
 
 /**
@@ -69,7 +70,7 @@ export function useCommitDiff(
  * 获取项目未提交的变更文件。
  */
 export function useGitUncommitted(projectId: string | undefined) {
-  return useQuery({
+  return useQuery<GitUncommittedResponse>({
     queryKey: ["git-audit", "uncommitted", projectId],
     queryFn: () => getGitUncommitted(projectId!),
     enabled: !!projectId,

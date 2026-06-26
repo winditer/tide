@@ -30,11 +30,11 @@ interface DiffFileListProps {
 
 function getStatusColor(status: string): string {
   const s = status.toLowerCase();
-  if (s === "a" || s === "added") return "text-green-600 dark:text-green-400";
-  if (s === "d" || s === "deleted") return "text-red-600 dark:text-red-400";
-  if (s === "u" || s === "untracked") return "text-zinc-500 dark:text-zinc-400";
+  if (s === "a" || s === "added") return "text-green-600";
+  if (s === "d" || s === "deleted") return "text-red-600";
+  if (s === "u" || s === "untracked") return "text-zinc-500";
   // M / modified / renamed
-  return "text-yellow-600 dark:text-yellow-400";
+  return "text-yellow-600";
 }
 
 function getStatusLabel(status: string): string {
@@ -48,10 +48,10 @@ function getStatusLabel(status: string): string {
 
 function getStatusBgColor(status: string): string {
   const s = status.toLowerCase();
-  if (s === "a" || s === "added") return "bg-green-100 dark:bg-green-900/30";
-  if (s === "d" || s === "deleted") return "bg-red-100 dark:bg-red-900/30";
-  if (s === "u" || s === "untracked") return "bg-zinc-100 dark:bg-zinc-700/30";
-  return "bg-yellow-100 dark:bg-yellow-900/30";
+  if (s === "a" || s === "added") return "bg-green-100";
+  if (s === "d" || s === "deleted") return "bg-red-100";
+  if (s === "u" || s === "untracked") return "bg-zinc-100";
+  return "bg-yellow-100";
 }
 
 export function DiffFileList({
@@ -65,8 +65,8 @@ export function DiffFileList({
 }: DiffFileListProps) {
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      <div className="px-3 py-2 border-b border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50">
-        <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
+      <div className="px-3 py-2 border-b border-zinc-200 bg-zinc-50">
+        <span className="text-xs font-medium text-zinc-500 uppercase tracking-wider">
           文件 ({files.length})
         </span>
       </div>
@@ -86,8 +86,8 @@ export function DiffFileList({
                 group flex items-center gap-2 px-3 py-2 cursor-pointer border-l-2 transition-colors
                 ${
                   isSelected
-                    ? "border-l-blue-500 bg-blue-50 dark:bg-blue-900/20"
-                    : "border-l-transparent hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
+                    ? "border-l-blue-500 bg-blue-50"
+                    : "border-l-transparent hover:bg-zinc-50"
                 }
               `}
             >
@@ -97,11 +97,11 @@ export function DiffFileList({
                 {getStatusLabel(file.status)}
               </span>
               <div className="flex-1 min-w-0">
-                <p className="text-xs font-medium text-zinc-800 dark:text-zinc-200 truncate">
+                <p className="text-xs font-medium text-zinc-800 truncate">
                   {fileName}
                 </p>
                 {dirPath && (
-                  <p className="text-[10px] text-zinc-400 dark:text-zinc-500 truncate">
+                  <p className="text-[10px] text-zinc-400 truncate">
                     {dirPath}
                   </p>
                 )}
@@ -109,13 +109,13 @@ export function DiffFileList({
               {(file.additions !== undefined || file.deletions !== undefined) && (
                 <span className="flex items-center gap-1 text-[10px] flex-shrink-0">
                   {file.additions !== undefined && file.additions > 0 && (
-                    <span className="text-green-600 dark:text-green-400 flex items-center">
+                    <span className="text-green-600 flex items-center">
                       <Plus className="h-2.5 w-2.5" />
                       {file.additions}
                     </span>
                   )}
                   {file.deletions !== undefined && file.deletions > 0 && (
-                    <span className="text-red-600 dark:text-red-400 flex items-center">
+                    <span className="text-red-600 flex items-center">
                       <Minus className="h-2.5 w-2.5" />
                       {file.deletions}
                     </span>
@@ -127,7 +127,7 @@ export function DiffFileList({
                   {onCommitFile && (
                     <button
                       onClick={(e) => { e.stopPropagation(); onCommitFile(file.path); }}
-                      className="rounded p-1 text-green-600 hover:bg-green-50 dark:text-green-400 dark:hover:bg-green-900/20"
+                      className="rounded p-1 text-green-600 hover:bg-green-50"
                       title="提交"
                     >
                       <Upload className="h-3 w-3" />
@@ -136,7 +136,7 @@ export function DiffFileList({
                   {onDiscardFile && (
                     <button
                       onClick={(e) => { e.stopPropagation(); onDiscardFile(file.path); }}
-                      className="rounded p-1 text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20"
+                      className="rounded p-1 text-red-600 hover:bg-red-50"
                       title="撤销修改"
                     >
                       <Trash2 className="h-3 w-3" />
@@ -145,7 +145,7 @@ export function DiffFileList({
                   {onIgnoreFile && (
                     <button
                       onClick={(e) => { e.stopPropagation(); onIgnoreFile(file.path); }}
-                      className="rounded p-1 text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-700/30"
+                      className="rounded p-1 text-zinc-600 hover:bg-zinc-100"
                       title="加入 .gitignore"
                     >
                       <Ban className="h-3 w-3" />

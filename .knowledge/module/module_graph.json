@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "generated_at": "2026-06-24T02:53:15Z",
+  "generated_at": "2026-06-26T02:33:51Z",
   "root": "backend",
   "internal_prefix": "backend",
   "layers": [
@@ -545,7 +545,7 @@
       "name": "dashboard",
       "layer": "api",
       "file": "backend/api/dashboard.py",
-      "lines": 1097,
+      "lines": 1149,
       "description": "",
       "classes": [],
       "functions": [
@@ -621,7 +621,7 @@
         },
         {
           "name": "get_recent_tasks",
-          "line": 330,
+          "line": 358,
           "is_async": true,
           "doc": [
             "最近任务列表：合并 DB tasks 与本地 Agent 会话发现结果。"
@@ -629,7 +629,7 @@
         },
         {
           "name": "get_active_projects",
-          "line": 447,
+          "line": 475,
           "is_async": true,
           "doc": [
             "最近活跃项目列表。"
@@ -637,7 +637,7 @@
         },
         {
           "name": "get_activity_timeline",
-          "line": 505,
+          "line": 533,
           "is_async": true,
           "doc": [
             "最近系统活动事件时间线（按 task_events.created_at DESC）。"
@@ -645,7 +645,7 @@
         },
         {
           "name": "get_task_status_distribution",
-          "line": 583,
+          "line": 611,
           "is_async": true,
           "doc": [
             "任务状态分布。"
@@ -653,7 +653,7 @@
         },
         {
           "name": "get_upcoming_schedules",
-          "line": 625,
+          "line": 653,
           "is_async": true,
           "doc": [
             "即将执行的定时调度。"
@@ -661,7 +661,7 @@
         },
         {
           "name": "get_my_work_items",
-          "line": 714,
+          "line": 742,
           "is_async": true,
           "doc": [
             "获取当前用户的待办工作项（默认前 10 条）。"
@@ -669,7 +669,7 @@
         },
         {
           "name": "get_project_progress",
-          "line": 803,
+          "line": 838,
           "is_async": true,
           "doc": [
             "获取各项目工作项进度（仅返回总数 > 0 的项目）。"
@@ -677,7 +677,7 @@
         },
         {
           "name": "get_group_progress",
-          "line": 877,
+          "line": 912,
           "is_async": true,
           "doc": [
             "项目组进度汇总：返回当前用户可访问的项目组，含组内工作项总数与已完成数。"
@@ -685,7 +685,7 @@
         },
         {
           "name": "get_cost_summary",
-          "line": 966,
+          "line": 1001,
           "is_async": true,
           "doc": [
             "返回当前 workspace 在指定 period 内的 token 成本汇总。"
@@ -693,7 +693,7 @@
         },
         {
           "name": "get_cost_by_dimension",
-          "line": 1028,
+          "line": 1072,
           "is_async": true,
           "doc": [
             "按维度（agent / model / project）聚合 token 成本。"
@@ -749,6 +749,321 @@
       "imports_external": [
         "fastapi",
         "sqlalchemy"
+      ],
+      "imported_by": [
+        "backend.main"
+      ]
+    },
+    {
+      "id": "backend.api.files",
+      "name": "files",
+      "layer": "api",
+      "file": "backend/api/files.py",
+      "lines": 328,
+      "description": "文件读取 API 路由。",
+      "classes": [
+        {
+          "name": "SaveFileRequest",
+          "line": 146,
+          "methods": [],
+          "doc": []
+        },
+        {
+          "name": "ResolveConflictRequest",
+          "line": 208,
+          "methods": [],
+          "doc": []
+        },
+        {
+          "name": "AIResolveConflictRequest",
+          "line": 249,
+          "methods": [],
+          "doc": []
+        }
+      ],
+      "functions": [
+        {
+          "name": "_check_path_security",
+          "line": 41,
+          "is_async": false,
+          "doc": [
+            "路径安全检查：禁止访问系统敏感目录。"
+          ]
+        },
+        {
+          "name": "_resolve_and_validate",
+          "line": 48,
+          "is_async": false,
+          "doc": [
+            "解析路径并执行基础安全校验。"
+          ]
+        },
+        {
+          "name": "read_file_content",
+          "line": 62,
+          "is_async": true,
+          "doc": [
+            "读取本地文件内容并返回纯文本。"
+          ]
+        },
+        {
+          "name": "list_directory_tree",
+          "line": 98,
+          "is_async": true,
+          "doc": [
+            "列出目录树，返回目录结构 JSON。"
+          ]
+        },
+        {
+          "name": "save_file_content",
+          "line": 152,
+          "is_async": true,
+          "doc": [
+            "保存文件内容。"
+          ]
+        },
+        {
+          "name": "get_diff",
+          "line": 173,
+          "is_async": true,
+          "doc": [
+            "获取 unified diff。不传 ref 时返回工作区未提交的 diff。"
+          ]
+        },
+        {
+          "name": "get_conflict_detail",
+          "line": 190,
+          "is_async": true,
+          "doc": [
+            "获取冲突文件详情（base/ours/theirs/conflict_markers）。"
+          ]
+        },
+        {
+          "name": "resolve_conflict",
+          "line": 215,
+          "is_async": true,
+          "doc": [
+            "解决单个文件冲突：写入 resolved_content 并 git add。"
+          ]
+        },
+        {
+          "name": "ai_resolve_conflict",
+          "line": 259,
+          "is_async": true,
+          "doc": [
+            "AI 解决冲突：通过 Agent CLI 分析三方内容并返回合并结果。"
+          ]
+        }
+      ],
+      "imports_internal": [
+        "backend.runtime.config",
+        "backend.runtime.executor",
+        "backend.runtime.git_utils"
+      ],
+      "imports_external": [
+        "asyncio",
+        "fastapi",
+        "logging",
+        "os",
+        "pathlib",
+        "pydantic",
+        "re",
+        "typing",
+        "uuid"
+      ],
+      "imported_by": [
+        "backend.main"
+      ]
+    },
+    {
+      "id": "backend.api.git_audit",
+      "name": "git_audit",
+      "layer": "api",
+      "file": "backend/api/git_audit.py",
+      "lines": 957,
+      "description": "Git 审计 API 路由。",
+      "classes": [
+        {
+          "name": "GitCommitRequest",
+          "line": 798,
+          "methods": [],
+          "doc": []
+        },
+        {
+          "name": "GitDiscardRequest",
+          "line": 803,
+          "methods": [],
+          "doc": []
+        },
+        {
+          "name": "GitIgnoreRequest",
+          "line": 807,
+          "methods": [],
+          "doc": []
+        }
+      ],
+      "functions": [
+        {
+          "name": "_should_filter_by_user",
+          "line": 29,
+          "is_async": true,
+          "doc": [
+            "判断当前用户是否需要按个人数据过滤。"
+          ]
+        },
+        {
+          "name": "_get_user_git_identities",
+          "line": 66,
+          "is_async": false,
+          "doc": [
+            "获取用户可能的 git author 标识（用于 --author 匹配）。"
+          ]
+        },
+        {
+          "name": "_decode_project_path",
+          "line": 84,
+          "is_async": false,
+          "doc": [
+            "将 base64 编码的 project_id 解码为实际路径。"
+          ]
+        },
+        {
+          "name": "_parse_log_output",
+          "line": 103,
+          "is_async": false,
+          "doc": [
+            "解析 git log --numstat --format=%H|%an|%aI|%s 的输出。"
+          ]
+        },
+        {
+          "name": "get_project_branches",
+          "line": 171,
+          "is_async": true,
+          "doc": [
+            "获取项目的 Git 分支列表。"
+          ]
+        },
+        {
+          "name": "get_project_commits",
+          "line": 197,
+          "is_async": true,
+          "doc": [
+            "获取项目的 commit 列表（含修改文件）。展示项目级全量数据，不做用户过滤。"
+          ]
+        },
+        {
+          "name": "get_project_changes",
+          "line": 233,
+          "is_async": true,
+          "doc": [
+            "按维度聚合变更统计。"
+          ]
+        },
+        {
+          "name": "_get_main_branch",
+          "line": 265,
+          "is_async": true,
+          "doc": [
+            "获取主分支名称（main 或 master）。"
+          ]
+        },
+        {
+          "name": "_branch_stats",
+          "line": 279,
+          "is_async": true,
+          "doc": [
+            "统计某个分支相对于主分支的 commit 数、文件变更、增删行数。"
+          ]
+        },
+        {
+          "name": "_time_range_stats",
+          "line": 355,
+          "is_async": true,
+          "doc": [
+            "统计指定时间范围内的 git commit 变更。"
+          ]
+        },
+        {
+          "name": "_group_by_work_item",
+          "line": 421,
+          "is_async": true,
+          "doc": [
+            "按工作项分组：从 DB 查询工作项，关联其 branch_name 统计 Git 变更。"
+          ]
+        },
+        {
+          "name": "_group_by_session",
+          "line": 499,
+          "is_async": true,
+          "doc": [
+            "按会话分组：复用 session_discovery 获取项目下所有会话，补充 Git 变更统计。"
+          ]
+        },
+        {
+          "name": "_group_by_branch",
+          "line": 677,
+          "is_async": true,
+          "doc": [
+            "按分支分组：列出所有分支的变更统计。展示项目级全量数据，不做用户过滤。"
+          ]
+        },
+        {
+          "name": "get_uncommitted_changes",
+          "line": 711,
+          "is_async": true,
+          "doc": [
+            "获取项目当前工作区未提交的改动（包含未暂存和已暂存文件）。"
+          ]
+        },
+        {
+          "name": "get_commit_diff",
+          "line": 773,
+          "is_async": true,
+          "doc": [
+            "获取特定 commit 的完整 diff。"
+          ]
+        },
+        {
+          "name": "git_commit_files",
+          "line": 812,
+          "is_async": true,
+          "doc": [
+            "提交文件：git add <files> && git commit -m <message>。"
+          ]
+        },
+        {
+          "name": "git_discard_files",
+          "line": 846,
+          "is_async": true,
+          "doc": [
+            "撤销文件修改：对 tracked 文件用 git restore，对 untracked 文件删除。"
+          ]
+        },
+        {
+          "name": "git_ignore_files",
+          "line": 922,
+          "is_async": true,
+          "doc": [
+            "将文件路径追加到 .gitignore。"
+          ]
+        }
+      ],
+      "imports_internal": [
+        "backend.core.dependencies",
+        "backend.db.engine",
+        "backend.runtime.git_utils",
+        "backend.services.session_discovery"
+      ],
+      "imports_external": [
+        "base64",
+        "binascii",
+        "fastapi",
+        "logging",
+        "pathlib",
+        "pydantic",
+        "re",
+        "sqlalchemy",
+        "typing"
       ],
       "imported_by": [
         "backend.main"
@@ -838,7 +1153,7 @@
       "name": "kanban",
       "layer": "api",
       "file": "backend/api/kanban.py",
-      "lines": 180,
+      "lines": 194,
       "description": "Kanban 聚合 API 路由。",
       "classes": [],
       "functions": [
@@ -860,7 +1175,7 @@
         },
         {
           "name": "get_session_board",
-          "line": 55,
+          "line": 60,
           "is_async": true,
           "doc": [
             "会话看板：按 Agent 分组，按任务状态分列。"
@@ -868,7 +1183,7 @@
         },
         {
           "name": "get_agent_board",
-          "line": 79,
+          "line": 84,
           "is_async": true,
           "doc": [
             "Agent 看板（泳道式）。"
@@ -876,7 +1191,7 @@
         },
         {
           "name": "get_workflow_board",
-          "line": 108,
+          "line": 113,
           "is_async": true,
           "doc": [
             "工作流任务看板。"
@@ -884,7 +1199,7 @@
         },
         {
           "name": "move_card",
-          "line": 117,
+          "line": 122,
           "is_async": true,
           "doc": [
             "拖拽更新状态。"
@@ -892,7 +1207,7 @@
         },
         {
           "name": "get_work_item_board",
-          "line": 144,
+          "line": 149,
           "is_async": true,
           "doc": [
             "工作项看板：按 workflow 可见节点划列。"
@@ -900,7 +1215,7 @@
         },
         {
           "name": "move_work_item",
-          "line": 156,
+          "line": 170,
           "is_async": true,
           "doc": [
             "看板拖拽流转工作项。"
@@ -928,7 +1243,7 @@
       "name": "knowledge",
       "layer": "api",
       "file": "backend/api/knowledge.py",
-      "lines": 252,
+      "lines": 254,
       "description": "知识图谱 API。",
       "classes": [
         {
@@ -1609,18 +1924,18 @@
       "name": "projects",
       "layer": "api",
       "file": "backend/api/projects.py",
-      "lines": 899,
+      "lines": 891,
       "description": "项目 API 路由。",
       "classes": [
         {
           "name": "ProjectCreate",
-          "line": 69,
+          "line": 68,
           "methods": [],
           "doc": []
         },
         {
           "name": "GitConfigUpdate",
-          "line": 854,
+          "line": 846,
           "methods": [],
           "doc": []
         }
@@ -1628,7 +1943,7 @@
       "functions": [
         {
           "name": "_ensure_not_viewer",
-          "line": 52,
+          "line": 51,
           "is_async": false,
           "doc": [
             "写操作权限检查：viewer 角色禁止修改资源。"
@@ -1636,7 +1951,7 @@
         },
         {
           "name": "_parse_project_roots",
-          "line": 77,
+          "line": 76,
           "is_async": false,
           "doc": [
             "解析可用项目根目录列表。"
@@ -1644,25 +1959,25 @@
         },
         {
           "name": "_load_registry",
-          "line": 110,
+          "line": 109,
           "is_async": false,
           "doc": []
         },
         {
           "name": "_save_registry",
-          "line": 120,
+          "line": 119,
           "is_async": false,
           "doc": []
         },
         {
           "name": "_registry_index",
-          "line": 128,
+          "line": 127,
           "is_async": false,
           "doc": []
         },
         {
           "name": "_validate_project_name",
-          "line": 137,
+          "line": 136,
           "is_async": false,
           "doc": [
             "校验项目名称安全性，返回清理后的名称。"
@@ -1670,7 +1985,7 @@
         },
         {
           "name": "_update_project_status",
-          "line": 152,
+          "line": 151,
           "is_async": false,
           "doc": [
             "更新注册表中项目的状态字段。"
@@ -1678,7 +1993,7 @@
         },
         {
           "name": "_async_clone_project",
-          "line": 167,
+          "line": 166,
           "is_async": true,
           "doc": [
             "后台异步克隆仓库；完成后更新注册表 status。"
@@ -1686,13 +2001,13 @@
         },
         {
           "name": "_encode_id",
-          "line": 219,
+          "line": 218,
           "is_async": false,
           "doc": []
         },
         {
           "name": "_decode_id",
-          "line": 223,
+          "line": 222,
           "is_async": false,
           "doc": [
             "解码 project_id；失败时回退到原值（向后兼容旧裸路径 ID）。"
@@ -1700,19 +2015,19 @@
         },
         {
           "name": "_max_iso",
-          "line": 239,
+          "line": 238,
           "is_async": false,
           "doc": []
         },
         {
           "name": "_normalize_cwd",
-          "line": 247,
+          "line": 246,
           "is_async": false,
           "doc": []
         },
         {
           "name": "_aggregate_db_stats",
-          "line": 251,
+          "line": 250,
           "is_async": true,
           "doc": [
             "按 cwd 聚合 tasks 表统计。"
@@ -1720,13 +2035,13 @@
         },
         {
           "name": "_project_payload",
-          "line": 303,
+          "line": 302,
           "is_async": false,
           "doc": []
         },
         {
           "name": "list_projects",
-          "line": 387,
+          "line": 386,
           "is_async": true,
           "doc": [
             "项目列表 — 文件发现 + DB 聚合 + 已注册项目合并。"
@@ -1734,7 +2049,7 @@
         },
         {
           "name": "get_project_roots",
-          "line": 462,
+          "line": 461,
           "is_async": true,
           "doc": [
             "返回可选项目根目录。"
@@ -1742,7 +2057,7 @@
         },
         {
           "name": "create_project",
-          "line": 472,
+          "line": 471,
           "is_async": true,
           "doc": [
             "创建项目（用户目录隔离 + 可选异步 clone）。"
@@ -1750,7 +2065,7 @@
         },
         {
           "name": "get_project",
-          "line": 630,
+          "line": 629,
           "is_async": true,
           "doc": [
             "项目详情。"
@@ -1758,7 +2073,7 @@
         },
         {
           "name": "get_project_sessions",
-          "line": 662,
+          "line": 661,
           "is_async": true,
           "doc": [
             "项目下的会话列表（按项目根/cwd 过滤文件扫描结果）。"
@@ -1766,7 +2081,7 @@
         },
         {
           "name": "_project_chats",
-          "line": 673,
+          "line": 672,
           "is_async": false,
           "doc": [
             "返回与项目 ``cwd`` 内容相关、但 ``project_root`` 为空的普通对话列表。"
@@ -1774,7 +2089,7 @@
         },
         {
           "name": "get_project_chats",
-          "line": 690,
+          "line": 682,
           "is_async": true,
           "doc": [
             "项目相关的普通对话（chats）— 不绑定项目但内容引用该项目的 chat。"
@@ -1782,7 +2097,7 @@
         },
         {
           "name": "get_project_tasks",
-          "line": 702,
+          "line": 694,
           "is_async": true,
           "doc": [
             "项目下的任务（DB tasks 表 + source=exec 的文件会话）。"
@@ -1790,7 +2105,7 @@
         },
         {
           "name": "remove_project",
-          "line": 763,
+          "line": 755,
           "is_async": true,
           "doc": [
             "从已注册列表中移除项目（不删除文件、不影响历史会话/任务）。"
@@ -1798,7 +2113,7 @@
         },
         {
           "name": "archive_project",
-          "line": 782,
+          "line": 774,
           "is_async": true,
           "doc": [
             "归档项目（软操作，不删除任何文件/数据）。"
@@ -1806,7 +2121,7 @@
         },
         {
           "name": "unarchive_project",
-          "line": 794,
+          "line": 786,
           "is_async": true,
           "doc": [
             "取消项目归档。"
@@ -1814,7 +2129,7 @@
         },
         {
           "name": "set_project_workflow",
-          "line": 809,
+          "line": 801,
           "is_async": true,
           "doc": [
             "绑定项目到工作流。"
@@ -1822,7 +2137,7 @@
         },
         {
           "name": "get_project_workflow",
-          "line": 827,
+          "line": 819,
           "is_async": true,
           "doc": [
             "获取项目的工作流绑定信息。"
@@ -1830,7 +2145,7 @@
         },
         {
           "name": "remove_project_workflow",
-          "line": 839,
+          "line": 831,
           "is_async": true,
           "doc": [
             "解绑项目工作流。"
@@ -1838,7 +2153,7 @@
         },
         {
           "name": "set_project_git_config",
-          "line": 865,
+          "line": 857,
           "is_async": true,
           "doc": [
             "设置项目的 Git 仓库配置。写入 ``project_settings.metadata.git_config``。"
@@ -1846,7 +2161,7 @@
         },
         {
           "name": "get_project_git_config",
-          "line": 894,
+          "line": 886,
           "is_async": true,
           "doc": [
             "获取项目的 Git 仓库配置。未配置时返回空对象。"
@@ -2396,12 +2711,30 @@
       "name": "sessions",
       "layer": "api",
       "file": "backend/api/sessions.py",
-      "lines": 604,
+      "lines": 836,
       "description": "会话 API：合并 SQLite tasks 表（按 session_id 聚合）+ 本地 Agent 会话文件扫描。",
       "classes": [
         {
           "name": "SessionCreate",
-          "line": 54,
+          "line": 58,
+          "methods": [],
+          "doc": []
+        },
+        {
+          "name": "UsageReport",
+          "line": 691,
+          "methods": [],
+          "doc": []
+        },
+        {
+          "name": "BatchUsageItem",
+          "line": 698,
+          "methods": [],
+          "doc": []
+        },
+        {
+          "name": "BatchUsageRequest",
+          "line": 706,
           "methods": [],
           "doc": []
         }
@@ -2409,7 +2742,7 @@
       "functions": [
         {
           "name": "_ensure_not_viewer",
-          "line": 41,
+          "line": 45,
           "is_async": false,
           "doc": [
             "写操作权限检查：viewer 角色禁止修改资源。"
@@ -2417,13 +2750,13 @@
         },
         {
           "name": "_sort_key",
-          "line": 47,
+          "line": 51,
           "is_async": false,
           "doc": []
         },
         {
           "name": "list_sessions_for_project",
-          "line": 79,
+          "line": 83,
           "is_async": true,
           "doc": [
             "精简会话列表，供前端下拉框使用。"
@@ -2431,7 +2764,7 @@
         },
         {
           "name": "list_chats",
-          "line": 116,
+          "line": 120,
           "is_async": true,
           "doc": [
             "普通对话列表（不绑定项目），等价于 type=chat 的快捷入口。"
@@ -2439,7 +2772,7 @@
         },
         {
           "name": "list_sessions",
-          "line": 158,
+          "line": 162,
           "is_async": true,
           "doc": [
             "会话列表：DB 优先（按 session_id 聚合），文件扫描补充。支持 type 过滤。"
@@ -2447,13 +2780,21 @@
         },
         {
           "name": "_related_tasks",
-          "line": 295,
+          "line": 325,
           "is_async": true,
           "doc": []
         },
         {
+          "name": "_synthesize_messages_from_tasks",
+          "line": 348,
+          "is_async": false,
+          "doc": [
+            "从任务数据合成对话消息列表（当会话文件不可用时的降级方案）。"
+          ]
+        },
+        {
           "name": "get_session",
-          "line": 319,
+          "line": 378,
           "is_async": true,
           "doc": [
             "会话详情：返回会话元信息、对话消息流、关联任务。"
@@ -2461,7 +2802,7 @@
         },
         {
           "name": "create_session",
-          "line": 366,
+          "line": 447,
           "is_async": true,
           "doc": [
             "新建会话。"
@@ -2469,7 +2810,7 @@
         },
         {
           "name": "archive_session",
-          "line": 440,
+          "line": 521,
           "is_async": true,
           "doc": [
             "归档会话（软操作，不删除任何文件/数据）。"
@@ -2477,7 +2818,7 @@
         },
         {
           "name": "unarchive_session",
-          "line": 451,
+          "line": 532,
           "is_async": true,
           "doc": [
             "取消会话归档。"
@@ -2485,16 +2826,40 @@
         },
         {
           "name": "_safe_json_loads",
-          "line": 464,
+          "line": 545,
           "is_async": false,
           "doc": []
         },
         {
           "name": "get_session_artifacts",
-          "line": 474,
+          "line": 555,
           "is_async": true,
           "doc": [
             "汇总会话关联产物。"
+          ]
+        },
+        {
+          "name": "_find_or_create_usage_task",
+          "line": 710,
+          "is_async": true,
+          "doc": [
+            "查找 session 关联的最新 task_id，若无则创建占位任务。"
+          ]
+        },
+        {
+          "name": "report_session_usage",
+          "line": 740,
+          "is_async": true,
+          "doc": [
+            "上报单个会话的 token 消耗数据（支持累加）。"
+          ]
+        },
+        {
+          "name": "report_usage_batch",
+          "line": 790,
+          "is_async": true,
+          "doc": [
+            "批量上报多个会话的 token 消耗数据。"
           ]
         }
       ],
@@ -2502,6 +2867,8 @@
         "backend.core.dependencies",
         "backend.db.engine",
         "backend.services.archive_service",
+        "backend.services.cost_service",
+        "backend.services.project_discovery",
         "backend.services.project_group_service",
         "backend.services.session_discovery",
         "backend.services.task_service"
@@ -2511,6 +2878,7 @@
         "fastapi",
         "json",
         "logging",
+        "pathlib",
         "pydantic",
         "sqlalchemy",
         "typing",
@@ -2604,7 +2972,7 @@
       "name": "tasks",
       "layer": "api",
       "file": "backend/api/tasks.py",
-      "lines": 447,
+      "lines": 450,
       "description": "任务 API 路由。",
       "classes": [],
       "functions": [
@@ -2648,7 +3016,7 @@
         },
         {
           "name": "_file_session_to_task",
-          "line": 173,
+          "line": 176,
           "is_async": false,
           "doc": [
             "把文件扫描得到的会话映射成 TaskResponse 兼容的 dict。"
@@ -2656,7 +3024,7 @@
         },
         {
           "name": "_sort_key",
-          "line": 206,
+          "line": 209,
           "is_async": false,
           "doc": [
             "排序优先级：completed_at > created_at > last_active。"
@@ -2664,7 +3032,7 @@
         },
         {
           "name": "list_tasks",
-          "line": 216,
+          "line": 219,
           "is_async": true,
           "doc": [
             "任务列表：合并 DB 任务 + 本地 Agent 会话文件扫描结果。"
@@ -2672,7 +3040,7 @@
         },
         {
           "name": "_strip_source_prefix",
-          "line": 302,
+          "line": 305,
           "is_async": false,
           "doc": [
             "去除看板视图添加的 source 前缀（db: / file:），返回 (raw_id, source_hint)。"
@@ -2680,7 +3048,7 @@
         },
         {
           "name": "get_task",
-          "line": 312,
+          "line": 315,
           "is_async": true,
           "doc": [
             "任务详情。"
@@ -2688,7 +3056,7 @@
         },
         {
           "name": "stop_task",
-          "line": 342,
+          "line": 345,
           "is_async": true,
           "doc": [
             "停止任务"
@@ -2696,7 +3064,7 @@
         },
         {
           "name": "approve_task",
-          "line": 359,
+          "line": 362,
           "is_async": true,
           "doc": [
             "批准审批"
@@ -2704,7 +3072,7 @@
         },
         {
           "name": "reject_task",
-          "line": 376,
+          "line": 379,
           "is_async": true,
           "doc": [
             "拒绝审批"
@@ -2712,7 +3080,7 @@
         },
         {
           "name": "retry_task",
-          "line": 395,
+          "line": 398,
           "is_async": true,
           "doc": [
             "重试失败任务"
@@ -2720,7 +3088,7 @@
         },
         {
           "name": "stream_task_output",
-          "line": 412,
+          "line": 415,
           "is_async": true,
           "doc": [
             "SSE 流式输出任务结果"
@@ -3171,9 +3539,20 @@
       "name": "dependencies",
       "layer": "core",
       "file": "backend/core/dependencies.py",
-      "lines": 211,
+      "lines": 293,
       "description": "FastAPI 认证依赖注入。",
-      "classes": [],
+      "classes": [
+        {
+          "name": "LarkPermissionDenied",
+          "line": 242,
+          "methods": [
+            "__init__"
+          ],
+          "doc": [
+            "Lark 端权限检查失败异常"
+          ]
+        }
+      ],
       "functions": [
         {
           "name": "encode_project_id",
@@ -3246,6 +3625,22 @@
           "doc": [
             "角色检查依赖工厂。"
           ]
+        },
+        {
+          "name": "resolve_lark_user",
+          "line": 214,
+          "is_async": true,
+          "doc": [
+            "根据 Lark open_id 查询 users 表，返回与 get_optional_user 相同格式的 user dict。"
+          ]
+        },
+        {
+          "name": "check_lark_permission",
+          "line": 250,
+          "is_async": true,
+          "doc": [
+            "Lark 端统一权限检查。"
+          ]
         }
       ],
       "imports_internal": [
@@ -3269,6 +3664,7 @@
         "backend.api.conversations",
         "backend.api.dashboard",
         "backend.api.events",
+        "backend.api.git_audit",
         "backend.api.hooks",
         "backend.api.kanban",
         "backend.api.knowledge",
@@ -3285,7 +3681,10 @@
         "backend.api.tasks",
         "backend.api.versions",
         "backend.api.work_items",
-        "backend.api.workflows"
+        "backend.api.workflows",
+        "backend.services.card_action_handler",
+        "backend.services.message_handler",
+        "backend.tests.test_lark_permission"
       ]
     },
     {
@@ -3371,7 +3770,7 @@
       "name": "engine",
       "layer": "db",
       "file": "backend/db/engine.py",
-      "lines": 169,
+      "lines": 171,
       "description": "",
       "classes": [],
       "functions": [
@@ -3403,6 +3802,7 @@
         "backend.api.auth",
         "backend.api.dashboard",
         "backend.api.events",
+        "backend.api.git_audit",
         "backend.api.kanban",
         "backend.api.plans",
         "backend.api.project_groups",
@@ -3438,6 +3838,7 @@
         "backend.services.rule_service",
         "backend.services.schedule_service",
         "backend.services.security_scanner",
+        "backend.services.session_discovery",
         "backend.services.skill_service",
         "backend.services.task_service",
         "backend.services.work_item_service",
@@ -3447,6 +3848,7 @@
         "backend.tests.test_api_tasks",
         "backend.tests.test_db_init",
         "backend.tests.test_kanban",
+        "backend.tests.test_lark_permission",
         "backend.tests.test_plan_service",
         "backend.tests.test_project_groups",
         "backend.tests.test_projects_chat_count",
@@ -3461,19 +3863,19 @@
       "name": "main",
       "layer": "other",
       "file": "backend/main.py",
-      "lines": 135,
+      "lines": 161,
       "description": "",
       "classes": [],
       "functions": [
         {
           "name": "lifespan",
-          "line": 52,
+          "line": 54,
           "is_async": true,
           "doc": []
         },
         {
           "name": "health",
-          "line": 134,
+          "line": 160,
           "is_async": true,
           "doc": []
         }
@@ -3486,6 +3888,8 @@
         "backend.api.conversations",
         "backend.api.dashboard",
         "backend.api.events",
+        "backend.api.files",
+        "backend.api.git_audit",
         "backend.api.hooks",
         "backend.api.kanban",
         "backend.api.knowledge",
@@ -3513,9 +3917,11 @@
         "backend.services.message_handler",
         "backend.services.plan_executor",
         "backend.services.schedule_service",
+        "backend.services.session_discovery",
         "backend.services.task_service"
       ],
       "imports_external": [
+        "apscheduler",
         "asyncio",
         "contextlib",
         "fastapi",
@@ -3926,7 +4332,7 @@
       "name": "adapters",
       "layer": "runtime",
       "file": "backend/runtime/adapters.py",
-      "lines": 1292,
+      "lines": 1293,
       "description": "Agent 适配器：AgentAdapter 基类及 Codex / Claude / Qoder 三个子类。",
       "classes": [
         {
@@ -3941,7 +4347,7 @@
         },
         {
           "name": "AgentAdapter",
-          "line": 741,
+          "line": 742,
           "methods": [
             "normalize_model",
             "build_command",
@@ -3953,7 +4359,7 @@
         },
         {
           "name": "CodexAdapter",
-          "line": 784,
+          "line": 785,
           "methods": [
             "build_command",
             "parse_events",
@@ -3963,7 +4369,7 @@
         },
         {
           "name": "ClaudeAdapter",
-          "line": 840,
+          "line": 841,
           "methods": [
             "build_command",
             "parse_events",
@@ -3973,7 +4379,7 @@
         },
         {
           "name": "QoderAdapter",
-          "line": 955,
+          "line": 956,
           "methods": [
             "build_command",
             "parse_events",
@@ -3983,7 +4389,7 @@
         },
         {
           "name": "A2AAdapter",
-          "line": 1005,
+          "line": 1006,
           "methods": [
             "execute",
             "_map_to_internal_event",
@@ -4128,13 +4534,13 @@
         },
         {
           "name": "_coerce_int",
-          "line": 577,
+          "line": 578,
           "is_async": false,
           "doc": []
         },
         {
           "name": "estimate_token_count",
-          "line": 585,
+          "line": 586,
           "is_async": false,
           "doc": [
             "使用 tiktoken 估算文本的 token 数量。"
@@ -4142,7 +4548,7 @@
         },
         {
           "name": "_scan_token_usage",
-          "line": 608,
+          "line": 609,
           "is_async": false,
           "doc": [
             "递归扫描任意嵌套结构，提取 (input, output) token 数。"
@@ -4150,7 +4556,7 @@
         },
         {
           "name": "try_parse_token_usage",
-          "line": 635,
+          "line": 636,
           "is_async": false,
           "doc": [
             "尝试从单行 Agent 输出中解析 token 使用量。"
@@ -4158,7 +4564,7 @@
         },
         {
           "name": "try_parse_claude_result",
-          "line": 658,
+          "line": 659,
           "is_async": false,
           "doc": [
             "从 Claude CLI ``result`` 事件解析精确的成本和 token 用量。"
@@ -4166,7 +4572,7 @@
         },
         {
           "name": "_build_prompt_with_skills",
-          "line": 709,
+          "line": 710,
           "is_async": true,
           "doc": [
             "将选中的 Skills 内容注入到 prompt 前缀。"
@@ -4174,7 +4580,7 @@
         },
         {
           "name": "extract_claude_text_content",
-          "line": 820,
+          "line": 821,
           "is_async": false,
           "doc": [
             "递归提取 Claude JSON 消息中的文本内容。"
@@ -4182,7 +4588,7 @@
         },
         {
           "name": "parse_qoder_json_event",
-          "line": 909,
+          "line": 910,
           "is_async": false,
           "doc": [
             "解析 Qoder CLI 输出的 stream-json 事件行。"
@@ -4213,6 +4619,7 @@
         "backend.api.agents",
         "backend.runtime",
         "backend.runtime.executor",
+        "backend.scripts.backfill_tokens",
         "backend.services.message_handler",
         "backend.services.task_service",
         "backend.services.workflow_engine"
@@ -4223,7 +4630,7 @@
       "name": "config",
       "layer": "runtime",
       "file": "backend/runtime/config.py",
-      "lines": 172,
+      "lines": 175,
       "description": "环境变量配置与常量。",
       "classes": [],
       "functions": [
@@ -4237,7 +4644,7 @@
         },
         {
           "name": "get_config",
-          "line": 137,
+          "line": 140,
           "is_async": false,
           "doc": [
             "返回当前所有配置常量（快照）。"
@@ -4245,7 +4652,7 @@
         },
         {
           "name": "parse_csv_set",
-          "line": 149,
+          "line": 152,
           "is_async": false,
           "doc": [
             "将逗号/分号/空白分隔的字符串解析为集合。"
@@ -4253,7 +4660,7 @@
         },
         {
           "name": "user_projects_root",
-          "line": 158,
+          "line": 161,
           "is_async": false,
           "doc": [
             "返回用户的项目根目录 {TIDE_DATA_DIR}/users/{user_id}"
@@ -4261,7 +4668,7 @@
         },
         {
           "name": "project_dir",
-          "line": 163,
+          "line": 166,
           "is_async": false,
           "doc": [
             "返回项目目录 {TIDE_DATA_DIR}/users/{user_id}/{project_name}"
@@ -4269,7 +4676,7 @@
         },
         {
           "name": "ensure_user_dir",
-          "line": 168,
+          "line": 171,
           "is_async": false,
           "doc": [
             "确保用户根目录存在，返回路径"
@@ -4287,6 +4694,7 @@
       "imported_by": [
         "backend.api.admin",
         "backend.api.auth",
+        "backend.api.files",
         "backend.api.project_groups",
         "backend.api.projects",
         "backend.api.ws",
@@ -4299,8 +4707,10 @@
         "backend.runtime.plan_runtime",
         "backend.services.ai_decompose_service",
         "backend.services.auth_service",
+        "backend.services.card_action_handler",
         "backend.services.lark_bridge",
         "backend.services.lark_listener",
+        "backend.services.message_handler",
         "backend.services.plan_executor"
       ]
     },
@@ -4309,7 +4719,7 @@
       "name": "executor",
       "layer": "runtime",
       "file": "backend/runtime/executor.py",
-      "lines": 694,
+      "lines": 703,
       "description": "AgentExecutor: 异步 Agent CLI 执行器",
       "classes": [
         {
@@ -4355,6 +4765,7 @@
         "typing"
       ],
       "imported_by": [
+        "backend.api.files",
         "backend.services.ai_decompose_service",
         "backend.services.knowledge_service",
         "backend.services.plan_executor",
@@ -4367,7 +4778,7 @@
       "name": "git_utils",
       "layer": "runtime",
       "file": "backend/runtime/git_utils.py",
-      "lines": 919,
+      "lines": 1019,
       "description": "Git 异步操作工具模块。",
       "classes": [],
       "functions": [
@@ -4618,6 +5029,38 @@
           "doc": [
             "克隆远程仓库到目标目录。"
           ]
+        },
+        {
+          "name": "git_diff_full",
+          "line": 924,
+          "is_async": true,
+          "doc": [
+            "获取完整 unified diff。"
+          ]
+        },
+        {
+          "name": "git_show_file",
+          "line": 947,
+          "is_async": true,
+          "doc": [
+            "获取指定 ref (commit/branch) 下特定文件的内容。"
+          ]
+        },
+        {
+          "name": "git_log_files",
+          "line": 959,
+          "is_async": true,
+          "doc": [
+            "获取 commit 列表及每个 commit 修改的文件（含增删行数）。"
+          ]
+        },
+        {
+          "name": "git_conflict_content",
+          "line": 995,
+          "is_async": true,
+          "doc": [
+            "获取冲突文件的三个版本：base (:1:path), ours (:2:path), theirs (:3:path)。"
+          ]
         }
       ],
       "imports_internal": [],
@@ -4631,6 +5074,8 @@
         "shutil"
       ],
       "imported_by": [
+        "backend.api.files",
+        "backend.api.git_audit",
         "backend.api.projects",
         "backend.services.work_item_service",
         "backend.services.workflow_engine",
@@ -4725,6 +5170,42 @@
         "backend.runtime.executor",
         "backend.services.task_service"
       ]
+    },
+    {
+      "id": "backend.scripts.backfill_tokens",
+      "name": "backfill_tokens",
+      "layer": "scripts",
+      "file": "backend/scripts/backfill_tokens.py",
+      "lines": 116,
+      "description": "回填历史任务的 token 估算数据。",
+      "classes": [],
+      "functions": [
+        {
+          "name": "infer_model",
+          "line": 32,
+          "is_async": false,
+          "doc": [
+            "推断模型名称：优先使用已有 model，否则按 agent_id 推断。"
+          ]
+        },
+        {
+          "name": "main",
+          "line": 40,
+          "is_async": false,
+          "doc": []
+        }
+      ],
+      "imports_internal": [
+        "backend.runtime.adapters",
+        "backend.services.cost_service"
+      ],
+      "imports_external": [
+        "asyncio",
+        "pathlib",
+        "sqlite3",
+        "sys"
+      ],
+      "imported_by": []
     },
     {
       "id": "backend.scripts.import_ecc_skills",
@@ -5141,12 +5622,12 @@
       "name": "ai_decompose_service",
       "layer": "services",
       "file": "backend/services/ai_decompose_service.py",
-      "lines": 304,
+      "lines": 340,
       "description": "AI 需求分解服务。",
       "classes": [
         {
           "name": "AIDecomposeService",
-          "line": 199,
+          "line": 230,
           "methods": [
             "__init__",
             "decompose",
@@ -5167,8 +5648,16 @@
           ]
         },
         {
+          "name": "_try_merge_multiple_arrays",
+          "line": 107,
+          "is_async": false,
+          "doc": [
+            "尝试解析拼接的多个 JSON 数组并合并为一个列表。"
+          ]
+        },
+        {
           "name": "_normalize_item",
-          "line": 100,
+          "line": 131,
           "is_async": false,
           "doc": [
             "将 LLM 返回的单条数据规范化为标准工作项 dict。"
@@ -5176,13 +5665,13 @@
         },
         {
           "name": "_truncate",
-          "line": 142,
+          "line": 173,
           "is_async": false,
           "doc": []
         },
         {
           "name": "_build_user_prompt",
-          "line": 150,
+          "line": 181,
           "is_async": false,
           "doc": [
             "构建用户侧 prompt 内容。"
@@ -5405,12 +5894,12 @@
       "name": "card_action_handler",
       "layer": "services",
       "file": "backend/services/card_action_handler.py",
-      "lines": 554,
+      "lines": 647,
       "description": "CardActionHandler — Lark 卡片按钮回调分发。",
       "classes": [
         {
           "name": "CardActionHandler",
-          "line": 297,
+          "line": 304,
           "methods": [
             "handle",
             "_dispatch",
@@ -5419,6 +5908,8 @@
             "_build_task_detail_card",
             "_build_plan_card_or_notice",
             "_plan_retry_failed",
+            "_permission_denied_card",
+            "_check_plan_write",
             "_build_task_list_card",
             "_build_plan_list_card"
           ],
@@ -5430,7 +5921,7 @@
       "functions": [
         {
           "name": "parse_action_value",
-          "line": 93,
+          "line": 100,
           "is_async": false,
           "doc": [
             "解析 action_value 字符串。"
@@ -5438,7 +5929,7 @@
         },
         {
           "name": "_load_plan_with_tasks",
-          "line": 124,
+          "line": 131,
           "is_async": true,
           "doc": [
             "读 plan 行 + 注入子任务列表（用于重建 plan 卡片）。"
@@ -5446,7 +5937,7 @@
         },
         {
           "name": "_aggregate_dashboard_stats",
-          "line": 159,
+          "line": 166,
           "is_async": true,
           "doc": [
             "聚合 Dashboard 卡片所需的统计快照。"
@@ -5454,7 +5945,9 @@
         }
       ],
       "imports_internal": [
+        "backend.core.dependencies",
         "backend.db.engine",
+        "backend.runtime.config",
         "backend.services.approval_service",
         "backend.services.card_builder",
         "backend.services.plan_service",
@@ -5769,12 +6262,12 @@
       "name": "cost_service",
       "layer": "services",
       "file": "backend/services/cost_service.py",
-      "lines": 287,
+      "lines": 301,
       "description": "Token 成本计算与统计服务。",
       "classes": [
         {
           "name": "CostService",
-          "line": 73,
+          "line": 78,
           "methods": [
             "calculate_cost",
             "update_task_cost",
@@ -5790,7 +6283,7 @@
       "functions": [
         {
           "name": "_resolve_pricing",
-          "line": 46,
+          "line": 48,
           "is_async": false,
           "doc": [
             "根据模型名匹配定价；优先精确匹配，其次按关键词模糊匹配。"
@@ -5809,7 +6302,10 @@
       ],
       "imported_by": [
         "backend.api.dashboard",
-        "backend.runtime.executor"
+        "backend.api.sessions",
+        "backend.runtime.executor",
+        "backend.scripts.backfill_tokens",
+        "backend.services.session_discovery"
       ]
     },
     {
@@ -5944,7 +6440,7 @@
       "name": "kanban_service",
       "layer": "services",
       "file": "backend/services/kanban_service.py",
-      "lines": 819,
+      "lines": 948,
       "description": "KanbanService — 四维看板数据聚合。",
       "classes": [
         {
@@ -5952,6 +6448,7 @@
           "line": 102,
           "methods": [
             "get_project_board",
+            "_build_project_group_cards",
             "_enrich_project_cards",
             "_calc_health",
             "_query_work_item_stats",
@@ -6022,12 +6519,12 @@
       "name": "knowledge_service",
       "layer": "services",
       "file": "backend/services/knowledge_service.py",
-      "lines": 580,
+      "lines": 631,
       "description": "知识图谱服务。",
       "classes": [
         {
           "name": "KnowledgeService",
-          "line": 80,
+          "line": 86,
           "methods": [
             "__init__",
             "resolve_repos",
@@ -6055,13 +6552,13 @@
       "functions": [
         {
           "name": "_now_iso",
-          "line": 58,
+          "line": 64,
           "is_async": false,
           "doc": []
         },
         {
           "name": "_decode_project_id",
-          "line": 62,
+          "line": 68,
           "is_async": false,
           "doc": [
             "解码 ``project_id``（base64 编码的 cwd）为绝对路径。失败返回 None。"
@@ -6069,7 +6566,7 @@
         },
         {
           "name": "_run_gen_script",
-          "line": 548,
+          "line": 599,
           "is_async": false,
           "doc": [
             "阻塞地调用生成脚本，返回 (returncode, stdout, stderr)。"
@@ -6258,12 +6755,12 @@
       "name": "message_handler",
       "layer": "services",
       "file": "backend/services/message_handler.py",
-      "lines": 1812,
+      "lines": 1896,
       "description": "MessageHandler: Lark 消息指令处理器",
       "classes": [
         {
           "name": "MessageHandler",
-          "line": 47,
+          "line": 49,
           "methods": [
             "__init__",
             "task_service",
@@ -6294,13 +6791,13 @@
       "functions": [
         {
           "name": "_pending_key",
-          "line": 32,
+          "line": 34,
           "is_async": false,
           "doc": []
         },
         {
           "name": "_prune_pending_attachments",
-          "line": 36,
+          "line": 38,
           "is_async": false,
           "doc": [
             "清除超过 TTL 的暂存附件。"
@@ -6308,9 +6805,11 @@
         }
       ],
       "imports_internal": [
+        "backend.core.dependencies",
         "backend.db.engine",
         "backend.models.schemas",
         "backend.runtime.adapters",
+        "backend.runtime.config",
         "backend.services.archive_service",
         "backend.services.card_builder",
         "backend.services.chat_state",
@@ -6329,6 +6828,7 @@
         "asyncio",
         "base64",
         "datetime",
+        "fastapi",
         "json",
         "logging",
         "pathlib",
@@ -6484,18 +6984,18 @@
       "name": "project_discovery",
       "layer": "services",
       "file": "backend/services/project_discovery.py",
-      "lines": 334,
+      "lines": 339,
       "description": "项目发现服务 - 通过扫描本地 Agent 会话文件发现项目",
       "classes": [
         {
           "name": "SessionRecord",
-          "line": 83,
+          "line": 88,
           "methods": [],
           "doc": []
         },
         {
           "name": "DiscoveredProject",
-          "line": 92,
+          "line": 97,
           "methods": [],
           "doc": []
         }
@@ -6503,7 +7003,7 @@
       "functions": [
         {
           "name": "is_worktree_path",
-          "line": 71,
+          "line": 76,
           "is_async": false,
           "doc": [
             "判断给定路径是否位于 worktrees 目录下（兼容 .tide 和 .lark-codex 命名）。"
@@ -6511,25 +7011,25 @@
         },
         {
           "name": "_normalize_path",
-          "line": 104,
+          "line": 109,
           "is_async": false,
           "doc": []
         },
         {
           "name": "_is_generic_dir",
-          "line": 111,
+          "line": 116,
           "is_async": false,
           "doc": []
         },
         {
           "name": "_has_project_marker",
-          "line": 118,
+          "line": 123,
           "is_async": false,
           "doc": []
         },
         {
           "name": "find_project_root",
-          "line": 122,
+          "line": 127,
           "is_async": false,
           "doc": [
             "从给定 cwd 向上查找项目根（含 PROJECT_MARKERS 任一）。"
@@ -6537,19 +7037,19 @@
         },
         {
           "name": "_project_name",
-          "line": 145,
+          "line": 150,
           "is_async": false,
           "doc": []
         },
         {
           "name": "_list_jsonl",
-          "line": 152,
+          "line": 157,
           "is_async": false,
           "doc": []
         },
         {
           "name": "_peek_cwd",
-          "line": 163,
+          "line": 168,
           "is_async": false,
           "doc": [
             "只读取前若干行以提取 cwd 与 session_id。"
@@ -6557,43 +7057,43 @@
         },
         {
           "name": "_scan_agent",
-          "line": 211,
+          "line": 216,
           "is_async": false,
           "doc": []
         },
         {
           "name": "_scan_codex_sessions",
-          "line": 233,
+          "line": 238,
           "is_async": false,
           "doc": []
         },
         {
           "name": "_scan_claude_sessions",
-          "line": 237,
+          "line": 242,
           "is_async": false,
           "doc": []
         },
         {
           "name": "_scan_qoder_sessions",
-          "line": 241,
+          "line": 246,
           "is_async": false,
           "doc": []
         },
         {
           "name": "_aggregate",
-          "line": 248,
+          "line": 253,
           "is_async": false,
           "doc": []
         },
         {
           "name": "_ts_to_iso",
-          "line": 282,
+          "line": 287,
           "is_async": false,
           "doc": []
         },
         {
           "name": "discover_projects",
-          "line": 291,
+          "line": 296,
           "is_async": false,
           "doc": [
             "扫描所有 Agent 会话文件，聚合为项目列表（带 TTL 缓存）。"
@@ -6601,7 +7101,7 @@
         },
         {
           "name": "clear_cache",
-          "line": 331,
+          "line": 336,
           "is_async": false,
           "doc": []
         }
@@ -6619,6 +7119,7 @@
         "typing"
       ],
       "imported_by": [
+        "backend.api.sessions",
         "backend.services.kanban_service",
         "backend.services.message_handler",
         "backend.services.session_discovery"
@@ -6863,19 +7364,35 @@
       "name": "session_discovery",
       "layer": "services",
       "file": "backend/services/session_discovery.py",
-      "lines": 551,
+      "lines": 793,
       "description": "会话发现服务 - 从本地 Agent 会话文件提供历史会话/任务数据。",
       "classes": [],
       "functions": [
         {
+          "name": "_build_qoder_project_cwd_map",
+          "line": 48,
+          "is_async": false,
+          "doc": [
+            "从 ~/.qoder/projects/ 目录名反推项目名→实际路径映射。"
+          ]
+        },
+        {
+          "name": "_resolve_cache_project_cwd",
+          "line": 73,
+          "is_async": false,
+          "doc": [
+            "从 Qoder 缓存文件路径推导项目 CWD。"
+          ]
+        },
+        {
           "name": "_truncate",
-          "line": 53,
+          "line": 107,
           "is_async": false,
           "doc": []
         },
         {
           "name": "_extract_text",
-          "line": 60,
+          "line": 114,
           "is_async": false,
           "doc": [
             "从 Claude/Codex/Qoder 的 message.content 中抽取纯文本。"
@@ -6883,7 +7400,7 @@
         },
         {
           "name": "_peek_session_meta",
-          "line": 83,
+          "line": 149,
           "is_async": false,
           "doc": [
             "读取前若干行，提取 cwd, session_id, title (首个用户 prompt), created_at, is_sub_session, session_source。"
@@ -6891,13 +7408,13 @@
         },
         {
           "name": "_ts_to_iso",
-          "line": 201,
+          "line": 281,
           "is_async": false,
           "doc": []
         },
         {
           "name": "_scan_all",
-          "line": 216,
+          "line": 296,
           "is_async": false,
           "doc": [
             "扫描所有 Agent 的会话文件，返回会话字典列表（未过滤）。"
@@ -6905,21 +7422,13 @@
         },
         {
           "name": "_load",
-          "line": 278,
+          "line": 365,
           "is_async": false,
           "doc": []
         },
         {
-          "name": "_session_references_project",
-          "line": 293,
-          "is_async": false,
-          "doc": [
-            "检查会话文件是否包含对指定项目的引用。"
-          ]
-        },
-        {
           "name": "discover_sessions",
-          "line": 329,
+          "line": 388,
           "is_async": false,
           "doc": [
             "发现所有会话，可选按项目 cwd（项目根或子目录）和 agent_id 过滤。"
@@ -6927,7 +7436,7 @@
         },
         {
           "name": "discover_chats",
-          "line": 396,
+          "line": 435,
           "is_async": false,
           "doc": [
             "发现不绑定项目的普通对话（Chat）。"
@@ -6935,13 +7444,13 @@
         },
         {
           "name": "clear_cache",
-          "line": 427,
+          "line": 466,
           "is_async": false,
           "doc": []
         },
         {
           "name": "find_session",
-          "line": 436,
+          "line": 475,
           "is_async": false,
           "doc": [
             "按 session_id 在已扫描的会话中查找单条记录。"
@@ -6949,33 +7458,60 @@
         },
         {
           "name": "_coerce_iso",
-          "line": 455,
+          "line": 494,
           "is_async": false,
           "doc": []
         },
         {
           "name": "_parse_codex_line",
-          "line": 472,
+          "line": 511,
           "is_async": false,
           "doc": []
         },
         {
           "name": "_parse_claude_line",
-          "line": 498,
+          "line": 537,
           "is_async": false,
           "doc": []
         },
         {
           "name": "read_session_messages",
-          "line": 516,
+          "line": 581,
           "is_async": false,
           "doc": [
             "解析 JSONL 会话文件，返回标准化的消息列表。"
           ]
+        },
+        {
+          "name": "_get_tiktoken_encoder",
+          "line": 626,
+          "is_async": false,
+          "doc": [
+            "懒加载 tiktoken 编码器（线程安全）。"
+          ]
+        },
+        {
+          "name": "_estimate_tokens",
+          "line": 642,
+          "is_async": false,
+          "doc": [
+            "使用缓存的 tiktoken 编码器估算 token 数，不可用时按 4 字符/token 粗估。"
+          ]
+        },
+        {
+          "name": "sync_session_token_usage",
+          "line": 655,
+          "is_async": true,
+          "doc": [
+            "扫描所有 Qoder/Codex/Claude IDE 会话，估算 token 并写入 DB。"
+          ]
         }
       ],
       "imports_internal": [
-        "backend.services.project_discovery"
+        "backend.db.engine",
+        "backend.services.cost_service",
+        "backend.services.project_discovery",
+        "backend.services.task_service"
       ],
       "imports_external": [
         "__future__",
@@ -6984,15 +7520,19 @@
         "logging",
         "pathlib",
         "re",
+        "sqlalchemy",
         "threading",
+        "tiktoken",
         "time",
         "typing"
       ],
       "imported_by": [
         "backend.api.dashboard",
+        "backend.api.git_audit",
         "backend.api.projects",
         "backend.api.sessions",
         "backend.api.tasks",
+        "backend.main",
         "backend.services.kanban_service",
         "backend.services.message_handler"
       ]
@@ -7145,6 +7685,7 @@
         "backend.services.message_handler",
         "backend.services.plan_service",
         "backend.services.schedule_service",
+        "backend.services.session_discovery",
         "backend.services.work_item_service",
         "backend.tests.test_api_tasks",
         "backend.tests.test_task_service"
@@ -7155,7 +7696,7 @@
       "name": "work_item_service",
       "layer": "services",
       "file": "backend/services/work_item_service.py",
-      "lines": 2626,
+      "lines": 2635,
       "description": "WorkItemService — 工作项 CRUD + 流转引擎。",
       "classes": [
         {
@@ -7863,6 +8404,116 @@
         "pytest",
         "sqlalchemy",
         "uuid"
+      ],
+      "imported_by": []
+    },
+    {
+      "id": "backend.tests.test_lark_permission",
+      "name": "test_lark_permission",
+      "layer": "tests",
+      "file": "backend/tests/test_lark_permission.py",
+      "lines": 237,
+      "description": "Lark 权限过滤单元测试",
+      "classes": [],
+      "functions": [
+        {
+          "name": "test_resolve_lark_user_found",
+          "line": 24,
+          "is_async": true,
+          "doc": [
+            "已绑定用户返回 user dict"
+          ]
+        },
+        {
+          "name": "test_resolve_lark_user_not_found",
+          "line": 61,
+          "is_async": true,
+          "doc": [
+            "未绑定用户返回 None"
+          ]
+        },
+        {
+          "name": "test_resolve_lark_user_empty_open_id",
+          "line": 70,
+          "is_async": true,
+          "doc": [
+            "空 open_id 返回 None"
+          ]
+        },
+        {
+          "name": "test_check_lark_permission_auth_disabled",
+          "line": 82,
+          "is_async": true,
+          "doc": [
+            "TIDE_REQUIRE_AUTH=0 时直接放行"
+          ]
+        },
+        {
+          "name": "test_check_lark_permission_whitelist_reject",
+          "line": 94,
+          "is_async": true,
+          "doc": [
+            "白名单启用时，非白名单用户被拒绝"
+          ]
+        },
+        {
+          "name": "test_check_lark_permission_user_not_bound",
+          "line": 106,
+          "is_async": true,
+          "doc": [
+            "认证模式下未绑定用户被拒绝"
+          ]
+        },
+        {
+          "name": "test_check_lark_permission_user_disabled",
+          "line": 119,
+          "is_async": true,
+          "doc": [
+            "被禁用的用户被拒绝"
+          ]
+        },
+        {
+          "name": "test_check_lark_permission_admin_bypass",
+          "line": 141,
+          "is_async": true,
+          "doc": [
+            "admin 用户跳过项目权限检查"
+          ]
+        },
+        {
+          "name": "test_check_lark_permission_project_denied",
+          "line": 165,
+          "is_async": true,
+          "doc": [
+            "项目级权限不足时被拒绝"
+          ]
+        },
+        {
+          "name": "test_whitelist_empty_allows_all",
+          "line": 197,
+          "is_async": true,
+          "doc": [
+            "白名单为空时不启用过滤"
+          ]
+        },
+        {
+          "name": "test_whitelist_allows_listed_user",
+          "line": 219,
+          "is_async": true,
+          "doc": [
+            "白名单中的用户正常通过"
+          ]
+        }
+      ],
+      "imports_internal": [
+        "backend.core.dependencies",
+        "backend.db.engine"
+      ],
+      "imports_external": [
+        "fastapi",
+        "pytest",
+        "sqlalchemy",
+        "unittest"
       ],
       "imported_by": []
     },
@@ -8647,6 +9298,41 @@
       "type": "import"
     },
     {
+      "from": "backend.api.files",
+      "to": "backend.runtime.config",
+      "type": "import"
+    },
+    {
+      "from": "backend.api.files",
+      "to": "backend.runtime.executor",
+      "type": "import"
+    },
+    {
+      "from": "backend.api.files",
+      "to": "backend.runtime.git_utils",
+      "type": "import"
+    },
+    {
+      "from": "backend.api.git_audit",
+      "to": "backend.core.dependencies",
+      "type": "import"
+    },
+    {
+      "from": "backend.api.git_audit",
+      "to": "backend.db.engine",
+      "type": "import"
+    },
+    {
+      "from": "backend.api.git_audit",
+      "to": "backend.runtime.git_utils",
+      "type": "import"
+    },
+    {
+      "from": "backend.api.git_audit",
+      "to": "backend.services.session_discovery",
+      "type": "import"
+    },
+    {
       "from": "backend.api.hooks",
       "to": "backend.core.dependencies",
       "type": "import"
@@ -8883,6 +9569,16 @@
     },
     {
       "from": "backend.api.sessions",
+      "to": "backend.services.cost_service",
+      "type": "import"
+    },
+    {
+      "from": "backend.api.sessions",
+      "to": "backend.services.project_discovery",
+      "type": "import"
+    },
+    {
+      "from": "backend.api.sessions",
       "to": "backend.services.project_group_service",
       "type": "import"
     },
@@ -9073,6 +9769,16 @@
     },
     {
       "from": "backend.main",
+      "to": "backend.api.files",
+      "type": "import"
+    },
+    {
+      "from": "backend.main",
+      "to": "backend.api.git_audit",
+      "type": "import"
+    },
+    {
+      "from": "backend.main",
       "to": "backend.api.hooks",
       "type": "import"
     },
@@ -9208,6 +9914,11 @@
     },
     {
       "from": "backend.main",
+      "to": "backend.services.session_discovery",
+      "type": "import"
+    },
+    {
+      "from": "backend.main",
       "to": "backend.services.task_service",
       "type": "import"
     },
@@ -9297,6 +10008,16 @@
       "type": "import"
     },
     {
+      "from": "backend.scripts.backfill_tokens",
+      "to": "backend.runtime.adapters",
+      "type": "import"
+    },
+    {
+      "from": "backend.scripts.backfill_tokens",
+      "to": "backend.services.cost_service",
+      "type": "import"
+    },
+    {
       "from": "backend.scripts.import_ecc_skills",
       "to": "backend.db.engine",
       "type": "import"
@@ -9383,7 +10104,17 @@
     },
     {
       "from": "backend.services.card_action_handler",
+      "to": "backend.core.dependencies",
+      "type": "import"
+    },
+    {
+      "from": "backend.services.card_action_handler",
       "to": "backend.db.engine",
+      "type": "import"
+    },
+    {
+      "from": "backend.services.card_action_handler",
+      "to": "backend.runtime.config",
       "type": "import"
     },
     {
@@ -9523,6 +10254,11 @@
     },
     {
       "from": "backend.services.message_handler",
+      "to": "backend.core.dependencies",
+      "type": "import"
+    },
+    {
+      "from": "backend.services.message_handler",
       "to": "backend.db.engine",
       "type": "import"
     },
@@ -9534,6 +10270,11 @@
     {
       "from": "backend.services.message_handler",
       "to": "backend.runtime.adapters",
+      "type": "import"
+    },
+    {
+      "from": "backend.services.message_handler",
+      "to": "backend.runtime.config",
       "type": "import"
     },
     {
@@ -9708,7 +10449,22 @@
     },
     {
       "from": "backend.services.session_discovery",
+      "to": "backend.db.engine",
+      "type": "import"
+    },
+    {
+      "from": "backend.services.session_discovery",
+      "to": "backend.services.cost_service",
+      "type": "import"
+    },
+    {
+      "from": "backend.services.session_discovery",
       "to": "backend.services.project_discovery",
+      "type": "import"
+    },
+    {
+      "from": "backend.services.session_discovery",
+      "to": "backend.services.task_service",
       "type": "import"
     },
     {
@@ -9897,6 +10653,16 @@
       "type": "import"
     },
     {
+      "from": "backend.tests.test_lark_permission",
+      "to": "backend.core.dependencies",
+      "type": "import"
+    },
+    {
+      "from": "backend.tests.test_lark_permission",
+      "to": "backend.db.engine",
+      "type": "import"
+    },
+    {
       "from": "backend.tests.test_plan_service",
       "to": "backend.db.engine",
       "type": "import"
@@ -9988,18 +10754,18 @@
     }
   ],
   "stats": {
-    "total_modules": 92,
-    "total_edges": 296,
+    "total_modules": 96,
+    "total_edges": 319,
     "layers": {
       "other": 2,
-      "api": 27,
+      "api": 29,
       "core": 2,
       "db": 1,
       "models": 1,
       "runtime": 8,
-      "scripts": 6,
+      "scripts": 7,
       "services": 31,
-      "tests": 14
+      "tests": 15
     }
   }
 }

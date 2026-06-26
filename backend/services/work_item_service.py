@@ -2484,6 +2484,10 @@ class WorkItemService:
         self,
         project_id: str,
         version_id: Optional[str] = None,
+        status: Optional[str] = None,
+        search: Optional[str] = None,
+        assignee: Optional[str] = None,
+        group_id: Optional[str] = None,
     ) -> dict:
         """
         获取工作项看板：
@@ -2524,9 +2528,14 @@ class WorkItemService:
         # 提取可见节点作为列（包含 end，使已完成工作项也能在看板上呈现）
         visible_nodes = self._get_visible_nodes(definition, include_end=True)
 
-        # 查询全部工作项（含已完成），可选按版本过滤
+        # 查询全部工作项（含已完成），可选按版本/状态/负责人等过滤
         items = await self.list_work_items(
-            project_id=project_id, version_id=version_id
+            project_id=project_id,
+            version_id=version_id,
+            status=status,
+            search=search,
+            assignee=assignee,
+            group_id=group_id,
         )
 
         # 按 current_node_id 分组

@@ -43,6 +43,12 @@ const GRAPH_TYPE_OPTIONS: { value: KnowledgeGraphType; label: string }[] = [
   { value: "api", label: "API 接口" },
   { value: "db", label: "数据库 Schema" },
   { value: "concept", label: "业务概念" },
+  { value: "architecture", label: "系统架构" },
+  { value: "tech-stack", label: "技术栈" },
+  { value: "coding-style", label: "编码风格" },
+  { value: "data-flow", label: "数据流" },
+  { value: "test-coverage", label: "测试覆盖" },
+  { value: "event-bus", label: "事件总线" },
 ];
 
 const STATUS_LABEL: Record<KnowledgeJobStatus, string> = {
@@ -217,9 +223,13 @@ export function KnowledgeGraphCard({ scope, targetId }: KnowledgeGraphCardProps)
   // 乐观状态：点击后立即禁用按钮，防止重复触发
   const [optimisticRunning, setOptimisticRunning] = useState(false);
 
+  // 进度弹窗
+  const [progressOpen, setProgressOpen] = useState(false);
+
   const jobStatus: KnowledgeJobStatus = statusQuery.data?.status ?? "idle";
   const isRunning = optimisticRunning || jobStatus === "pending" || jobStatus === "running";
   const progress = statusQuery.data?.progress;
+  const logs = statusQuery.data?.logs ?? [];
 
   // 如果文件存在但任务状态为 idle（服务重启后），显示“已生成”
   const hasFiles = repos.some((r) => r.files.length > 0);
@@ -231,9 +241,9 @@ export function KnowledgeGraphCard({ scope, targetId }: KnowledgeGraphCardProps)
   const handleTrigger = async () => {
     if (isRunning) return;
     setOptimisticRunning(true);
+    setProgressOpen(true);
     try {
       await triggerMutation.mutateAsync({ scope, targetId, graphType, agentId: agentId || undefined });
-      toast({ title: "已开始生成", description: "可在卡片顶部查看进度" });
       await statusQuery.refetch();
     } catch (err) {
       toast({
@@ -301,7 +311,7 @@ export function KnowledgeGraphCard({ scope, targetId }: KnowledgeGraphCardProps)
     <div className="bg-card rounded-xl shadow-card p-6 space-y-4">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
+        <div className="flex items-center gap-2">
           <h2 className="text-base font-medium">
             知识图谱
             {activeRepo?.meta && (
@@ -310,19 +320,28 @@ export function KnowledgeGraphCard({ scope, targetId }: KnowledgeGraphCardProps)
               </span>
             )}
           </h2>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            仓库下 <code className="font-mono">.knowledge/</code>{" "}
-            目录中的 Markdown / JSON 产物（模块依赖、API、数据库 Schema、业务概念）
-          </p>
+          {isRunning && (
+            <button
+              type="button"
+              onClick={() => setProgressOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-2.5 py-0.5 text-xs text-blue-600 hover:bg-blue-100 transition-colors"
+              title="点击查看生成进度"
+            >
+              <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              <span>生成中</span>
+              {progress && (
+                <span className="font-mono">
+                  {progress.done}/{progress.total}
+                </span>
+              )}
+            </button>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Badge variant={STATUS_VARIANT[displayStatus]}>{STATUS_LABEL[displayStatus]}</Badge>
-          {isRunning && progress && (
-            <span className="font-mono text-xs text-muted-foreground">
-              {progress.done}/{progress.total}
-              {progress.current ? ` · ${progress.current}` : ""}
-            </span>
-          )}
         </div>
       </div>
 
@@ -582,6 +601,110 @@ export function KnowledgeGraphCard({ scope, targetId }: KnowledgeGraphCardProps)
           </div>
         </div>
       )}
+
+      {/* 生成进度弹窗 */}
+      <Dialog open={progressOpen} onOpenChange={setProgressOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              {isRunning && (
+                <svg className="h-4 w-4 animate-spin text-blue-500" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+              )}
+              知识图谱生成进度
+            </DialogTitle>
+            <DialogDescription>
+              {isRunning
+                ? "正在分析仓库并生成知识图谱，请稍候…"
+                : jobStatus === "completed"
+                  ? "生成已完成"
+                  : jobStatus === "failed"
+                    ? "生成失败"
+                    : "当前无生成任务"}
+            </DialogDescription>
+          </DialogHeader>
+
+          {/* 进度条 */}
+          {progress && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">
+                  {progress.current ? `正在处理：${progress.current}` : "准备中…"}
+                </span>
+                <span className="font-mono">
+                  {progress.done}/{progress.total}
+                  {progress.total > 0 && (
+                    <span className="ml-1 text-muted-foreground">
+                      ({Math.round((progress.done / progress.total) * 100)}%)
+                    </span>
+                  )}
+                </span>
+              </div>
+              <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-100">
+                <div
+                  className={`h-full rounded-full transition-all duration-500 ${
+                    jobStatus === "failed" ? "bg-red-500" : "bg-blue-500"
+                  }`}
+                  style={{
+                    width: progress.total > 0
+                      ? `${(progress.done / progress.total) * 100}%`
+                      : "0%",
+                  }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* 日志 */}
+          {logs.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-xs font-medium text-muted-foreground">执行日志</p>
+              <div className="max-h-48 overflow-y-auto rounded-md bg-zinc-900 p-3">
+                {logs.map((log, idx) => (
+                  <div key={idx} className="text-xs">
+                    <div className="flex items-center gap-2 text-zinc-400">
+                      <span className="font-mono">{log.repo}</span>
+                      <span className={`font-mono ${log.returncode === 0 ? "text-green-400" : "text-red-400"}`}>
+                        {log.returncode === 0 ? "✓" : `✗ rc=${log.returncode}`}
+                      </span>
+                    </div>
+                    {log.stderr_tail && (
+                      <pre className="mt-1 text-zinc-500 whitespace-pre-wrap break-all text-[10px] leading-relaxed">
+                        {log.stderr_tail.slice(-500)}
+                      </pre>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* 错误信息 */}
+          {statusQuery.data?.status === "failed" && statusQuery.data.error && (
+            <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+              {statusQuery.data.error}
+            </div>
+          )}
+
+          {/* 时间信息 */}
+          <div className="flex items-center gap-4 text-xs text-muted-foreground">
+            {statusQuery.data?.started_at && (
+              <span>开始：{fmtTime(statusQuery.data.started_at)}</span>
+            )}
+            {statusQuery.data?.finished_at && (
+              <span>完成：{fmtTime(statusQuery.data.finished_at)}</span>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setProgressOpen(false)}>
+              关闭
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* 删除确认 */}
       <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>

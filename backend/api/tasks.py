@@ -125,6 +125,9 @@ async def _fetch_db_tasks(
     if status:
         conditions.append("status = :status")
         params["status"] = status
+    else:
+        # 默认不返回 cancelled 状态的任务（如 auto-recovery 产生的）
+        conditions.append("status != 'cancelled'")
     if agent_id:
         conditions.append("agent_id = :agent_id")
         params["agent_id"] = agent_id

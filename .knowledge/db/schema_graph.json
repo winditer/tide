@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "generated_at": "2026-06-24T02:53:15Z",
+  "generated_at": "2026-06-26T02:33:51Z",
   "source_file": "backend/db/init.sql",
   "tables": [
     {
@@ -439,6 +439,16 @@
         {
           "name": "estimated_cost_usd",
           "type": "REAL",
+          "pk": false,
+          "not_null": false,
+          "default": null,
+          "fk": null,
+          "check": null,
+          "source": "engine.py:ALTER"
+        },
+        {
+          "name": "synced_message_count",
+          "type": "INTEGER",
           "pk": false,
           "not_null": false,
           "default": null,
@@ -3846,7 +3856,7 @@
   ],
   "stats": {
     "total_tables": 30,
-    "total_columns": 319,
+    "total_columns": 320,
     "total_foreign_keys": 35,
     "total_indexes": 30
   }

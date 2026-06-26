@@ -20,6 +20,8 @@ from typing import Any, Optional
 from backend.services.lark_listener import LarkEvent
 from backend.services.lark_bridge import lark_bridge
 from backend.services.conversation_service import conversation_service
+from backend.core.dependencies import check_lark_permission, LarkPermissionDenied
+from backend.runtime.config import TIDE_REQUIRE_AUTH, LARK_ALLOWED_OPEN_IDS
 
 logger = logging.getLogger("tide.message_handler")
 
@@ -102,6 +104,31 @@ class MessageHandler:
         """处理文本消息"""
         content = (event.content or "").strip()
         chat_id = event.chat_id
+        sender_id = event.sender_id  # Lark open_id
+
+        # === 权限前置检查 ===
+        # 白名单检查
+        if LARK_ALLOWED_OPEN_IDS and sender_id not in LARK_ALLOWED_OPEN_IDS:
+            # 静默忽略非白名单用户，不回复
+            return
+
+        # 身份解析（仅在认证模式下强制）
+        current_user: Optional[dict] = None
+        if TIDE_REQUIRE_AUTH:
+            try:
+                current_user = await check_lark_permission(sender_id)
+            except LarkPermissionDenied as e:
+                if e.reason == "user_not_bound":
+                    await lark_bridge.send_text(chat_id, "⚠️ 您的飞书账号尚未绑定 Tide 系统，请先通过 Web 端登录绑定。")
+                elif e.reason == "user_disabled":
+                    await lark_bridge.send_text(chat_id, "⚠️ 您的账号已被禁用，无法执行操作。")
+                else:
+                    await lark_bridge.send_text(chat_id, "⚠️ 权限不足，无法执行操作。")
+                return
+        else:
+            # 非强制认证模式下，尝试解析但不阻止
+            from backend.core.dependencies import resolve_lark_user
+            current_user = await resolve_lark_user(sender_id)
 
         # 附件仅消息：暂存并提示用户发送指令使用
         if event.attachments and not content:
@@ -227,12 +254,12 @@ class MessageHandler:
 
         # /workflow run <id> | /workflow list — 工作流触发
         if content.lower().startswith("/workflow"):
-            await self._cmd_workflow(chat_id, content)
+            await self._cmd_workflow(chat_id, content, current_user=current_user)
             return
 
         # /wi create|list|move — 工作项管理
         if content.lower().startswith("/wi ") or content.lower() == "/wi":
-            await self._cmd_work_item(chat_id, content)
+            await self._cmd_work_item(chat_id, content, current_user=current_user)
             return
 
         # /daily — 每日进度报告
@@ -265,12 +292,24 @@ class MessageHandler:
             return
 
         # 纯文本 → 创建任务
-        await self._cmd_create_task(chat_id, content, event)
+        await self._cmd_create_task(chat_id, content, event, current_user=current_user)
 
     # ── 指令处理器 ─────────────────────────────────────────
 
-    async def _cmd_create_task(self, chat_id: str, prompt: str, event: LarkEvent):
+    async def _cmd_create_task(self, chat_id: str, prompt: str, event: LarkEvent, current_user: Optional[dict] = None):
         """创建任务"""
+        # 项目级写权限检查
+        if TIDE_REQUIRE_AUTH and current_user:
+            project_id = await self._resolve_active_project_id(chat_id)
+            if project_id:
+                from backend.core.dependencies import check_project_write_permission
+                from fastapi import HTTPException
+                try:
+                    await check_project_write_permission(project_id, current_user)
+                except HTTPException:
+                    await lark_bridge.send_text(chat_id, "⚠️ 您没有该项目的写入权限。")
+                    return
+
         # 从持久化会话获取 agent/model 设置
         conv = await conversation_service.get_or_create(
             workspace_id="default", chat_id=chat_id
@@ -606,7 +645,7 @@ class MessageHandler:
 
     # ── Workflow / WorkItem 指令 ─────────────────────────
 
-    async def _cmd_workflow(self, chat_id: str, content: str):
+    async def _cmd_workflow(self, chat_id: str, content: str, current_user: Optional[dict] = None):
         """/workflow run <id> | /workflow list — 工作流触发入口。"""
         body = content[len("/workflow"):].strip()
         parts = body.split(None, 2) if body else []
@@ -643,6 +682,30 @@ class MessageHandler:
                     chat_id, "用法：/workflow run <workflow_id>"
                 )
                 return
+            # 项目级写权限检查
+            if TIDE_REQUIRE_AUTH and current_user:
+                try:
+                    from backend.db.engine import async_session_factory as _sf
+                    from sqlalchemy import text as _text
+                    async with _sf() as _sess:
+                        _r = await _sess.execute(
+                            _text("SELECT project_id FROM workflows WHERE id = :wid OR id LIKE :prefix LIMIT 1"),
+                            {"wid": workflow_id, "prefix": f"{workflow_id}%"},
+                        )
+                        _row = _r.fetchone()
+                    if _row and _row[0]:
+                        from backend.core.dependencies import check_project_write_permission
+                        from fastapi import HTTPException
+                        try:
+                            await check_project_write_permission(_row[0], current_user)
+                        except HTTPException:
+                            await lark_bridge.send_text(chat_id, "⚠️ 您没有该工作流所属项目的操作权限。")
+                            return
+                except LarkPermissionDenied:
+                    await lark_bridge.send_text(chat_id, "⚠️ 您没有该工作流所属项目的操作权限。")
+                    return
+                except Exception:
+                    pass  # 查询失败时不阻止操作
             try:
                 from backend.services.workflow_service import workflow_service
                 from backend.services.workflow_engine import workflow_engine
@@ -708,7 +771,7 @@ class MessageHandler:
             pass
         return base64.urlsafe_b64encode(cwd.encode()).decode().rstrip("=")
 
-    async def _cmd_work_item(self, chat_id: str, content: str):
+    async def _cmd_work_item(self, chat_id: str, content: str, current_user: Optional[dict] = None):
         """/wi create|list|move — 工作项管理入口。"""
         body = content[len("/wi"):].strip()
         parts = body.split(None, 2) if body else []
@@ -736,6 +799,15 @@ class MessageHandler:
                     chat_id, "❌ 请先使用 /cd 切换到项目目录"
                 )
                 return
+            # 项目级写权限检查
+            if TIDE_REQUIRE_AUTH and current_user and project_id:
+                from backend.core.dependencies import check_project_write_permission
+                from fastapi import HTTPException
+                try:
+                    await check_project_write_permission(project_id, current_user)
+                except HTTPException:
+                    await lark_bridge.send_text(chat_id, "⚠️ 您没有该项目的写入权限。")
+                    return
             try:
                 from backend.services.work_item_service import work_item_service
                 from backend.models.schemas import WorkItemCreate
@@ -811,6 +883,18 @@ class MessageHandler:
                         chat_id, f"❌ 找不到工作项：`{item_arg}`"
                     )
                     return
+
+                # 项目级写权限检查
+                if TIDE_REQUIRE_AUTH and current_user:
+                    item_project_id = target_item.get("project_id")
+                    if item_project_id:
+                        from backend.core.dependencies import check_project_write_permission as _check_pw
+                        from fastapi import HTTPException as _HTTPExc
+                        try:
+                            await _check_pw(item_project_id, current_user)
+                        except _HTTPExc:
+                            await lark_bridge.send_text(chat_id, "⚠️ 您没有该项目的写入权限。")
+                            return
 
                 # 通过 stage_label 查找目标节点（支持 node_id 或可见节点的 label）
                 workflow_id = target_item.get("workflow_id")

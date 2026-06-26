@@ -1,7 +1,7 @@
 # Tide — 系统架构
 
-> 版本：v2.1 | 更新日期：2026-06-24
-> 状态：**已实施**（Phase 1–4 迁移完成；旧脚本 `tide_ws.py` 已废弃）
+> 版本：v2.4 | 更新日期：2026-06-26
+> 状态：**已实施**（Phase 1–4 迁移完成；旧脚本 `tide_ws.py` 已废弃；知识图谱扩展至 10 类）
 
 完整功能与启动方式见 [README.md](README.md)；演进路线见 [ROADMAP.md](ROADMAP.md)。
 
@@ -24,7 +24,9 @@ Tide 把 Codex / Claude Code / Qoder 等 Agent CLI 统一封装在 **单进程 F
 ```
 ┌────────────────────────────────────────────────────────────────┐
 │                      Web 前端 (Next.js 16)                      │
-│  Dashboard │ Tasks │ Plans (DAG) │ Kanban │ Schedules │ Workflows│
+│  Dashboard │ Tasks │ Plans │ Kanban │ Schedules │ Workflows     │
+│  Code Editor │ Git Audit │ Merge Conflict │ Work Items          │
+│  Knowledge Graph (10 types) │ Progress Indicator                │
 └──────────────┬───────────────────────────────────────┬─────────┘
                │ REST /api/*                            │ WS /ws
                ▼                                        ▼
@@ -34,7 +36,7 @@ Tide 把 Codex / Claude Code / Qoder 等 Agent CLI 统一封装在 **单进程 F
 │  │ backend/api/      REST + WebSocket 路由                    │  │
 │  │   tasks plans approvals conversations kanban schedules     │  │
 │  │   workflows projects sessions agents events ws lark_*      │  │
-│  │   skills rules hooks security dashboard                    │  │
+│  │   skills rules hooks security dashboard git_audit files    │  │
 │  └────────────────────────┬─────────────────────────────────┘  │
 │                           ▼                                     │
 │  ┌──────────────────────────────────────────────────────────┐  │
@@ -44,7 +46,7 @@ Tide 把 Codex / Claude Code / Qoder 等 Agent CLI 统一封装在 **单进程 F
 │  │   kanban card_builder card_action_handler                  │  │
 │  │   lark_bridge lark_listener message_handler                │  │
 │  │   skill_service rule_service hook_engine                   │  │
-│  │   security_scanner cost_service                            │  │
+│  │   security_scanner cost_service session_discovery          │  │
 │  └────────────────────────┬─────────────────────────────────┘  │
 │                           ▼                                     │
 │  ┌──────────────────────────────────────────────────────────┐  │
@@ -105,7 +107,7 @@ CORS 白名单默认放行 `localhost:3000–3002`，匹配 Next.js 端口自动
 | [schedule_service.py](backend/services/schedule_service.py) | APScheduler 封装、cron/interval/date 触发、schedule_runs 记录 |
 | [workflow_engine.py](backend/services/workflow_engine.py) | DAG 工作流引擎，节点回调驱动 |
 | [workflow_service.py](backend/services/workflow_service.py) | 工作流定义 CRUD |
-| [kanban_service.py](backend/services/kanban_service.py) | 四维看板聚合（项目/会话/Agent/工作流） |
+| [kanban_service.py](backend/services/kanban_service.py) | 四维看板聚合（项目/会话/Agent/工作流）+ 工作项看板，项目看板支持项目组 |
 | [event_emitter.py](backend/services/event_emitter.py) | 任务事件统一出口 → task_events 表 + ws_hub |
 | [ws_hub.py](backend/services/ws_hub.py) | 进程内 WebSocket 广播总线 |
 | [card_builder.py](backend/services/card_builder.py) | Lark 卡片 JSON 构造 |
@@ -119,9 +121,10 @@ CORS 白名单默认放行 `localhost:3000–3002`，匹配 Next.js 端口自动
 | [security_scanner.py](backend/services/security_scanner.py) | 正则模式匹配扫描引擎，检测密钥/质量/合规问题 |
 | [cost_service.py](backend/services/cost_service.py) | 多模型定价 + 多维度成本计算与聚合 |
 | [project_group_service.py](backend/services/project_group_service.py) | 项目组 CRUD、成员管理、跨仓库聚合、上下文 prompt 生成 |
-| [knowledge_service.py](backend/services/knowledge_service.py) | 知识图谱文件管理、异步生成任务调度（静态分析 + Agent 双路径） |
+| [knowledge_service.py](backend/services/knowledge_service.py) | 知识图谱文件管理、异步生成任务调度（静态分析 + Agent 双路径，支持 10 类图谱）、Agent JSON 类型检查与渲染降级 |
 | [ai_decompose_service.py](backend/services/ai_decompose_service.py) | 工作项 AI 分解：通过 httpx 异步调用 LLM API（OpenAI 兼容 / Anthropic），将长文本需求/PRD/链接/附件拆解为多个工作项草稿；复用 `KNOWLEDGE_LLM_*` 环境变量 |
 | [work_item_service.py](backend/services/work_item_service.py) | 工作项 CRUD、批量创建、AI 分解结果落库；同时收集会话产物（task result 中的文件路径与文档链接） |
+| [session_discovery.py](backend/services/session_discovery.py) | 会话发现服务：支持 Qoder IDE（~/.qoder/cache/projects/）、Codex CLI 对话、精确项目路径匹配、DB + 文件系统合成去重 |
 
 ### 3.3 `backend/api/` — REST + WebSocket 路由
 
@@ -131,7 +134,7 @@ CORS 白名单默认放行 `localhost:3000–3002`，匹配 Next.js 端口自动
 | `/api/plans` | [plans.py](backend/api/plans.py) | Plan CRUD、子任务、合并总览、cleanup |
 | `/api/approvals` | [approvals.py](backend/api/approvals.py) | 待审批列表、批准/拒绝 |
 | `/api/conversations` | [conversations.py](backend/api/conversations.py) | 会话列表、resume |
-| `/api/kanban` | [kanban.py](backend/api/kanban.py) | 四维看板聚合 |
+| `/api/kanban` | [kanban.py](backend/api/kanban.py) | 四维看板聚合 + 工作项看板（支持项目组、多维筛选） |
 | `/api/schedules` | [schedules.py](backend/api/schedules.py) | 定时任务 CRUD、toggle、trigger、runs |
 | `/api/workflows` | [workflows.py](backend/api/workflows.py) | 工作流定义、运行、节点审批 |
 | `/api/projects` `/api/sessions` | [projects.py](backend/api/projects.py) [sessions.py](backend/api/sessions.py) | 项目与会话只读视图 |
@@ -145,7 +148,10 @@ CORS 白名单默认放行 `localhost:3000–3002`，匹配 Next.js 端口自动
 | `/api/project-groups` | [project_groups.py](backend/api/project_groups.py) | 项目组 CRUD、成员项目/用户管理、聚合查询、工作流绑定 |
 | `/api/work-items` | [work_items.py](backend/api/work_items.py) | 工作项 CRUD、AI 分解（`POST /api/work-items/ai-decompose`，multipart/form-data 接受文本/链接/文件）、批量创建（`POST /api/work-items/batch`） |
 | `/api/sessions/{id}/artifacts` | [sessions.py](backend/api/sessions.py) | 会话产物收集：从 task result 解析文件路径与链接，返回汇总产物列表 |
+| `/api/sessions/{id}/usage` `/api/usage/batch` | [sessions.py](backend/api/sessions.py) | Token 上报 API（单个/批量），外部客户端主动上报 token 消耗 |
 | `/api/knowledge` | [knowledge.py](backend/api/knowledge.py) | 知识图谱文件 CRUD、触发生成、状态查询、ZIP 导出 |
+| `/api/projects/{id}/git/*` | [git_audit.py](backend/api/git_audit.py) | Git 审计：提交列表、变更统计、diff、分支、未提交变更、提交/撤销/忽略 |
+| `/api/files/*` | [files.py](backend/api/files.py) | 文件操作：文件树、内容读写、diff、冲突详情、解决冲突、AI 解决冲突 |
 | `/api/lark/*` | [lark_callback.py](backend/api/lark_callback.py) [lark_bridge.py](backend/api/lark_bridge.py) | Lark 卡片回调与 webhook |
 
 ### 3.4 `backend/db/` — 数据库
@@ -157,7 +163,58 @@ CORS 白名单默认放行 `localhost:3000–3002`，匹配 Next.js 端口自动
 
 ### 3.5 `backend/models/`
 
-[schemas.py](backend/models/schemas.py) — Pydantic 请求/响应模型，所有 API 共享。
+[schemas.py](backend/models/schemas.py) — Pydantic 请求/响应模型，所有 API 共享.
+
+### 3.6 认证与权限体系
+
+#### 认证流程
+
+系统支持双认证方式，由环境变量 `TIDE_REQUIRE_AUTH` 控制是否强制启用：
+
+- **JWT Token 认证**：用户名密码登录 → 签发 access_token + refresh_token
+- **Lark OAuth2 SSO**：飞书扫码 → OIDC 三步验证 → 自动创建/关联用户
+
+#### 角色体系
+
+| 角色 | 全局权限 | 项目级权限 |
+|------|---------|------------|
+| admin | 全部操作，跳过项目级检查 | — |
+| member | 需按项目配置 | owner/member: 读写; viewer: 只读 |
+| viewer | 全局只读 | 只读 |
+
+#### 权限检查链路
+
+```
+请求 → get_optional_user() → 解析 JWT → 返回 user dict
+                                          ↓
+                              check_project_write_permission()
+                                          ↓
+                              查 project_members 表 → 允许/拒绝
+```
+
+关键依赖注入（`backend/core/dependencies.py`）：
+- `get_optional_user(request)` — 可选认证（TIDE_REQUIRE_AUTH=0 时放行）
+- `get_current_user(request)` — 强制认证
+- `check_project_write_permission(project_id, user)` — 项目级写权限
+- `check_cwd_write_permission(cwd, user)` — 基于工作目录的权限检查
+
+#### Lark 端权限过滤
+
+Lark 消息处理链路（message_handler、card_action_handler）集成了独立的权限检查：
+
+```
+Lark 消息/按钮 → LARK_ALLOWED_OPEN_IDS 白名单
+                        ↓
+              resolve_lark_user(open_id) → 查 users.lark_open_id
+                        ↓
+              check_lark_permission() → 身份+项目权限校验
+                        ↓
+                  允许执行 / 回复权限提示
+```
+
+- 白名单为空时不启用过滤
+- `TIDE_REQUIRE_AUTH=0` 时权限检查为 best-effort，不阻止操作
+- 权限不足时向 Lark 用户回复友好提示消息
 
 ---
 
@@ -172,7 +229,10 @@ apps/web/                Next.js 16 应用（App Router）
     kanban/              四维看板
     schedules/           定时调度
     workflows/           工作流可视化
-    projects/ sessions/  辅助视图
+    projects/            项目列表与详情
+      [id]/files/        代码查看编辑器（Monaco Editor 多标签）
+      [id]/audit/        Git 审计信息展示（提交/文件/工作项/会话四维）
+    sessions/            辅助视图
     settings/
       skills/            ECC 技能库管理
       rules/             ECC 规则管理
@@ -188,9 +248,9 @@ packages/
   views/                 业务页面组件（被 apps/web 引用）
 
 scripts/                 仓库级脚本
-  gen_knowledge_graph.py 知识图谱生成脚本（Python AST 静态分析）
+  gen_knowledge_graph.py 知识图谱生成脚本（10 个分析器：Python AST 静态分析 + 文件启发式推断）
   code_collector.py      代码收集器（语言检测、文件树、上下文构建）
-  llm_analyzer.py        Prompt 模板与 JSON 提取工具（供 Agent 生成路径使用）
+  llm_analyzer.py        Prompt 模板（10 个）与 JSON 提取工具（供 Agent 生成路径使用）
 ```
 
 主要业务组件包含：
@@ -461,27 +521,82 @@ ECC 是 Tide 的 **可扩展能力层**，为 Agent 执行提供企业级治理�
 #### Cost Tracking 成本追踪
 
 | 层 | 模块 | 职责 |
-|----|------|------|
+|------|------|------|
 | API | [backend/api/dashboard.py](backend/api/dashboard.py) | GET `/api/dashboard/cost-summary` + `/api/dashboard/cost-by-dimension` |
-| Service | [backend/services/cost_service.py](backend/services/cost_service.py) | 定价模型 + 成本计算 |
+| API | [backend/api/sessions.py](backend/api/sessions.py) | POST `/api/sessions/{session_id}/usage`（Token 上报）+ POST `/api/usage/batch`（批量上报） |
+| Service | [backend/services/cost_service.py](backend/services/cost_service.py) | 定价模型 + 成本计算 + `reported_cost_usd` 直报成本支持 |
+| Service | [backend/services/session_discovery.py](backend/services/session_discovery.py) | `sync_session_token_usage()` — Qoder/Codex/Claude IDE 会话 token 自动同步（APScheduler 每 5 分钟） |
 | 前端 | [packages/views/src/dashboard/CostOverview.tsx](packages/views/src/dashboard/CostOverview.tsx) | 成本概览卡片 |
-| DB | `tasks` 表扩展字段 | `token_input, token_output, estimated_cost_usd` |
+| DB | `tasks` 表扩展字段 | `token_input, token_output, estimated_cost_usd, synced_message_count` |
 
-**Token 采集双路径**：
+**Token 采集三路径**（优先级从高到低）：
 
 | 路径 | 适用 CLI | 数据来源 | 精度 |
 |------|----------|----------|------|
-| 精确采集 | Claude CLI | CLI `result` 事件中的 `total_cost_usd` + `modelUsage` | 精确 |
-| tiktoken 估算 | Codex CLI / Qoder CLI | 对 prompt 和累积 output 使用 `tiktoken`（cl100k_base）编码计数 | 估算（不含系统 prompt 和工具定义） |
+| 1. 精确采集 | Claude CLI | CLI `result` 事件中的 `total_cost_usd` + `modelUsage`（含 cache token） | 精确 |
+| 2. 通用 JSON 解析 | Codex CLI / 通用 | 流式 stdout JSON 行中 `try_parse_token_usage()` 累计 | 较高 |
+| 3. tiktoken 估算 | 所有 CLI（兜底） | 对 prompt 和累积 output 使用 `tiktoken`（cl100k_base）编码计数 | 估算（不含系统 prompt 和工具定义） |
 
-当 CLI 未报告有效 token 时，自动降级至 tiktoken 估算路径，日志标记 `token estimated` 以区分。
+当路径 1 和 2 均未报告有效 token 时，自动降级至 tiktoken 估算路径，日志标记 `token estimated` 以区分。
 若 tiktoken 未安装，进一步退化为字符比例粗估（~4 char/token）。
 
-**支持的定价模型**：claude-sonnet / opus / haiku, gpt-4o 系列, o3 系列, codex-mini
+**cost_model 降级策略**：确定成本计算所用的模型名，按 `model 参数 → adapter.default_model → adapter.id` 三级降级。
+
+**定价表 + 模糊匹配**：`MODEL_PRICING` 精确匹配失败时，通过 `keyword_map` 关键词模糊匹配（如 `claude-3-5-sonnet-20241022` → `claude-sonnet`）。
+
+**支持的定价模型**：claude-sonnet / opus / haiku, claude-sonnet-4 / opus-4, gpt-4o / gpt-4o-mini / gpt-5, o3 / o3-mini / o4-mini, codex-mini, qoder
+
+**`reported_cost_usd`**：当 CLI（如 Claude）直接上报精确成本时，`update_task_cost()` 优先使用上报值，不再由定价表计算。
+
+**Token 自动同步机制**：
+
+```
+APScheduler (每 5 分钟)
+  └─ sync_session_token_usage()
+       ├─ 扫描 ~/.codex/ ~/.claude/ ~/.qoder/ 会话文件
+       ├─ 增量策略：对比 tasks.synced_message_count 与实际消息数
+       ├─ 仅对新增消息 tiktoken 估算 → cost_service.update_task_cost()
+       └─ 无关联 task 时自动创建占位任务
+```
+
+**Token 上报 API**：外部客户端（如 Qoder IDE 插件）可直接调用 `POST /api/sessions/{session_id}/usage` 主动上报本地 token 消耗，支持累加。批量上报使用 `POST /api/usage/batch`。
 
 **维度聚合**：支持 today / week / month 时间范围，按 agent / model / project 维度分组统计。
 
-### 10.3 扩展机制
+### 10.3 看板系统增强（Kanban Enhancements）
+
+看板服务 [kanban_service.py](backend/services/kanban_service.py) 最新扩展：
+
+- **项目看板支持项目组**：卡片区分 `type: "group"` 与 `type: "project"`，项目组卡片展示成员项目列表、统计数据、最近活动。权限过滤时，项目组只要成员项目中任一可访问即可见。
+- **工作项看板视图**：`GET /api/kanban/work-items` 支持 `version_id`、`status`、`search`、`assignee`、`group_id` 多维度筛选。
+- **移除了 scope 筛选**：看板页面不再提供 scope 过滤器，简化交互。
+
+### 10.4 任务恢复（Task Recovery）
+
+后端服务重启时，[task_service.py](backend/services/task_service.py) 的 `recover_orphaned_tasks()` 在 lifespan 阶段自动执行：
+
+- 扫描 DB 中 `status IN ('running', 'queued')` 的任务（进程已丢失）
+- 将它们标记为 `cancelled`，并通过 `event_emitter` 广播状态变更
+- `cancelled` 状态任务默认不在前端任务列表中突出展示
+
+### 10.5 工作台展示限制（Dashboard Limits）
+
+Dashboard 前端组件对各模块设置展示上限，避免信息过载：
+
+| 模块 | 限制 |
+|------|------|
+| 我的工作项 | 最多 4 条 |
+| 活跃项目 | 最多 3 个 |
+| 项目进度 | 2 个项目组 + 2 个项目 |
+| 活跃时间线 | “查看更多”按钮位于标题栏右侧 |
+
+权限规则：`admin` 角色展示所有工作项，其他角色仅展示自己拥有的。
+
+### 10.6 工作流补充（Workflow Enhancements）
+
+ReactFlow 画布事件过滤优化：忽略 `dimensions` 和 `select` 类型的 `onNodesChange` 事件，防止非用户编辑操作（如窗口 resize、节点选中）触发「未保存」(dirty) 状态提示。
+
+### 10.7 扩展机制
 
 #### 添加新技能
 
@@ -689,7 +804,7 @@ GET /api/sessions/{session_id}/artifacts
 
 ## 13. 知识图谱（Knowledge Graph）
 
-知识图谱为每个仓库自动生成代码结构的可视化文档，支持 Python 静态分析和 Agent 驱动两种路径。
+知识图谱为每个仓库自动生成代码结构的可视化文档，支持 **10 类图谱**，通过 Python 静态分析和 Agent 驱动两种路径生成，并配有前端进度指示器实时反馈生成状态。
 
 ### 13.1 架构设计
 
@@ -698,26 +813,28 @@ GET /api/sessions/{session_id}/artifacts
 │                        知识图谱生成流程                                │
 ├──────────────────────────────────────────────────────────────────────┤
 │                                                                      │
-│  前端 KnowledgeGraphCard                                             │
-│  ┌───────────────────────────────┐                                   │
-│  │ 选择图谱类型 + 分析方式        │                                   │
-│  │ • 静态分析（仅 Python）       │                                   │
-│  │ • Agent（Codex/Claude/Qoder）│                                   │
-│  └──────────────┬────────────────┘                                   │
+│  前端 KnowledgeGraphCard（含生成进度指示器）                           │
+│  ┌───────────────────────────────────┐                               │
+│  │ 选择图谱类型（10 类）+ 分析方式    │                               │
+│  │ • 静态分析（Python，全部 10 类）   │  ← 旋转图标 + 进度弹窗        │
+│  │ • Agent（Codex/Claude/Qoder）     │                               │
+│  └──────────────┬────────────────────┘                               │
 │                 │ POST /api/knowledge/{scope}/{id}/generate           │
 │                 ▼                                                      │
 │  ┌──────────────────────────────────────────────────────────────┐    │
 │  │ knowledge_service.py                                          │    │
-│  │  ┌─────────────────────┐   ┌──────────────────────────────┐   │    │
-│  │  │ 静态分析路径         │   │ Agent 驱动路径               │   │    │
-│  │  │ (无 agent_id)        │   │ (有 agent_id)                │   │    │
-│  │  │                      │   │                              │   │    │
-│  │  │ gen_knowledge_graph.py│   │ code_collector 构建上下文    │   │    │
-│  │  │ Python AST 解析       │   │ → 组装 Prompt                │   │    │
-│  │  │ (module/api/db/concept)│   │ → AgentExecutor.run_task()  │   │    │
-│  │  │                      │   │ → 读取 Agent 生成的 JSON     │   │    │
-│  │  └──────────┬───────────┘   └──────────┬───────────────────┘   │    │
-│  │             └──────────┬────────────┘                        │    │
+│  │  ┌─────────────────────────┐  ┌────────────────────────────┐  │    │
+│  │  │ 静态分析路径             │  │ Agent 驱动路径             │  │    │
+│  │  │ (无 agent_id)            │  │ (有 agent_id)              │  │    │
+│  │  │                          │  │                            │  │    │
+│  │  │ gen_knowledge_graph.py   │  │ code_collector 构建上下文  │  │    │
+│  │  │ 10 个分析器：            │  │ → 组装 Prompt（10 个模板） │  │    │
+│  │  │  Module/Api/Db/Concept/  │  │ → AgentExecutor.run_task() │  │    │
+│  │  │  Architecture/TechStack/ │  │ → 读取 Agent 生成的 JSON   │  │    │
+│  │  │  CodingStyle/DataFlow/   │  │ → 类型检查 + 渲染降级     │  │    │
+│  │  │  TestCoverage/EventBus   │  │                            │  │    │
+│  │  └──────────┬───────────────┘  └──────────┬─────────────────┘  │    │
+│  │             └──────────┬──────────────────┘                   │    │
 │  │                        ▼                                      │    │
 │  │         MarkdownRenderer 渲染 .md + 写入 _meta.json           │    │
 │  └──────────────────────────────────────────────────────────────┘    │
@@ -729,39 +846,78 @@ GET /api/sessions/{session_id}/artifacts
 │         ├── module/module_graph.json + .md                            │
 │         ├── api/api_graph.json + .md                                  │
 │         ├── db/schema_graph.json + .md + er_diagram.md                │
-│         └── concept/concept_graph.json + .md                          │
+│         ├── concept/concept_graph.json + .md                          │
+│         ├── architecture/architecture_graph.json + .md                │
+│         ├── tech-stack/tech_stack_graph.json + .md                    │
+│         ├── coding-style/coding_style_graph.json + .md                │
+│         ├── data-flow/data_flow_graph.json + .md                      │
+│         ├── test-coverage/test_coverage_graph.json + .md              │
+│         └── event-bus/event_bus_graph.json + .md                      │
 │                                                                      │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-### 13.2 双路径设计
+### 13.2 十类图谱
+
+| 类型 | 标识 | 内容 | 产物 |
+|------|------|------|------|
+| 模块依赖图 | `module` | import 关系、架构分层、被依赖统计 | `module/module_graph.json` + `.md` |
+| API 接口图谱 | `api` | 路由、HTTP 方法、参数、关联 Service | `api/api_graph.json` + `.md` |
+| 数据库 Schema | `db` | 表结构、外键、索引、ER 关系图 | `db/schema_graph.json` + `.md` + `er_diagram.md` |
+| 业务概念图 | `concept` | 核心实体、关系、领域划分 | `concept/concept_graph.json` + `.md` |
+| 系统架构 | `architecture` | 目录结构、层次划分、Docker 配置推断 | `architecture/architecture_graph.json` + `.md` |
+| 技术栈 | `tech-stack` | 语言/框架/工具链/依赖推断 | `tech-stack/tech_stack_graph.json` + `.md` |
+| 编码风格 | `coding-style` | 命名约定、代码组织、测试实践推断 | `coding-style/coding_style_graph.json` + `.md` |
+| 数据流 | `data-flow` | API 路由推断请求链路、actor/action/target | `data-flow/data_flow_graph.json` + `.md` |
+| 测试覆盖 | `test-coverage` | 测试文件分析、覆盖率推断 | `test-coverage/test_coverage_graph.json` + `.md` |
+| 事件总线 | `event-bus` | WebSocket/EventEmitter 事件机制分析 | `event-bus/event_bus_graph.json` + `.md` |
+
+### 13.3 双路径设计
 
 | 路径 | 触发条件 | 实现 | 适用项目 |
 |------|---------|------|----------|
-| 静态分析 | `agent_id` 为空 | `gen_knowledge_graph.py` 子进程，Python AST 解析 | Python 项目 |
-| Agent 驱动 | `agent_id` 非空 | `AgentExecutor` + Prompt 模板 + `code_collector` 上下文 | 任意语言 |
+| 静态分析 | `agent_id` 为空 | `gen_knowledge_graph.py` 子进程，Python AST + 文件启发式分析 | Python 项目（全部 10 类） |
+| Agent 驱动 | `agent_id` 非空 | `AgentExecutor` + 10 个 Prompt 模板 + `code_collector` 上下文 | 任意语言（全部 10 类） |
 
-**静态分析路径**复用 `scripts/gen_knowledge_graph.py`，内置 4 个解析器：
-- `ModuleGraphParser` — Python AST 解析 import 语句和类/函数符号
-- `ApiGraphParser` — FastAPI 路由装饰器扫描
-- `DbSchemaParser` — SQLite DDL 解析 + ORM 模型补充
-- `ConceptGraphParser` — 从前三类数据推导业务概念
+**静态分析路径**复用 `scripts/gen_knowledge_graph.py`，内置 10 个分析器：
 
-**Agent 驱动路径**通过 `AgentExecutor` 调用已配置的 Agent CLI（Codex/Claude/Qoder），Agent 在仓库目录下读取代码文件并生成 JSON，服务层读取 JSON 后复用 `MarkdownRenderer` 渲染 Markdown 并写入 `_meta.json`。
+| 分析器 | 数据来源 | 推断方式 |
+|--------|---------|----------|
+| `ModuleGraphParser` | Python AST | 解析 import 语句和类/函数符号 |
+| `ApiGraphParser` | Python AST | FastAPI 路由装饰器扫描 |
+| `DbSchemaParser` | SQL DDL + ORM 模型 | SQLite DDL 解析 + 字段/外键推断 |
+| `ConceptGraphParser` | 前三类数据 | 业务概念推导（实体/关系/领域） |
+| `ArchitectureAnalyzer` | 目录结构 + Docker 配置 | 系统层次划分、部署架构推断 |
+| `TechStackAnalyzer` | package.json / requirements.txt 等 | 语言/框架/工具链推断 |
+| `CodingStyleAnalyzer` | 代码文件命名与组织 | 命名约定、代码规范、测试实践推断 |
+| `DataFlowAnalyzer` | API 路由定义 | 请求链路 actor → action → target |
+| `TestCoverageAnalyzer` | 测试文件扫描 | 覆盖率推断、测试文件分布统计 |
+| `EventBusAnalyzer` | WebSocket/EventEmitter 代码 | 事件注册/发射/监听关系分析 |
 
-### 13.3 服务层
+**Agent 驱动路径**通过 `AgentExecutor` 调用已配置的 Agent CLI（Codex/Claude/Qoder），Agent 在仓库目录下读取代码文件并生成 JSON，服务层读取 JSON 后进行类型检查（确保为 dict），通过 `MarkdownRenderer` 渲染 Markdown 并写入 `_meta.json`。若 JSON 不是 dict 或渲染失败，自动降级使用 Agent 直接生成的 `.md` 文件。
+
+### 13.4 前端进度指示器
+
+知识图谱生成过程中，前端 `KnowledgeGraphCard` 展示实时进度：
+
+- **旋转图标** — 标题旁显示 spinning SVG，附「生成中」文字和 done/total 计数
+- **进度弹窗** — 点击图标弹出进度对话框，含进度条、实时日志和错误信息
+- **自动弹出** — 点击「立即生成」按钮后自动打开进度窗口
+- **状态轮询** — 定时调用 `GET /api/knowledge/{scope}/{id}/status` 获取进度
+
+### 13.5 服务层
 
 | 模块 | 职责 |
 |------|------|
-| [knowledge_service.py](backend/services/knowledge_service.py) | 图谱文件 CRUD、异步生成任务调度、版本管理、ZIP 导出 |
+| [knowledge_service.py](backend/services/knowledge_service.py) | 图谱文件 CRUD、异步生成任务调度、版本管理、ZIP 导出、Agent JSON 类型检查与渲染降级 |
 | [knowledge.py](backend/api/knowledge.py) | REST API 路由、scope 解析（project/group） |
-| [KnowledgeGraphCard.tsx](packages/views/src/knowledge/KnowledgeGraphCard.tsx) | 前端图谱文件浏览、Markdown 编辑、Agent 选择器 |
+| [KnowledgeGraphCard.tsx](packages/views/src/knowledge/KnowledgeGraphCard.tsx) | 前端图谱文件浏览、Markdown 编辑、Agent 选择器、生成进度指示器 |
 
-### 13.4 版本号管理
+### 13.6 版本号管理
 
 每次成功生成后 `_meta.json` 中的 `version` 自动递增。前端 Header 展示当前版本号。任务状态保存在内存（`_jobs` dict），支持进度轮询。
 
-### 13.5 API 路由
+### 13.7 API 路由
 
 | 路由 | 方法 | 说明 |
 |------|------|------|
@@ -769,28 +925,198 @@ GET /api/sessions/{session_id}/artifacts
 | `/api/knowledge/{scope}/{id}/file` | GET | 读取单个文件内容 |
 | `/api/knowledge/{scope}/{id}/file` | PUT | 保存 Markdown 编辑 |
 | `/api/knowledge/{scope}/{id}/file` | DELETE | 删除文件 |
-| `/api/knowledge/{scope}/{id}/status` | GET | 查询生成任务状态 |
+| `/api/knowledge/{scope}/{id}/status` | GET | 查询生成任务状态（含 done/total 进度） |
 | `/api/knowledge/{scope}/{id}/generate` | POST | 触发生成（参数：`graph_type`, `agent_id`） |
 | `/api/knowledge/{scope}/{id}/export` | GET | ZIP 导出 `.knowledge/` 目录 |
 
-### 13.6 Prompt 模板
+`graph_type` 可选值：`all` / `module` / `api` / `db` / `concept` / `architecture` / `tech-stack` / `coding-style` / `data-flow` / `test-coverage` / `event-bus`（共 11 个，含 all）。
 
-Agent 驱动路径使用 `scripts/llm_analyzer.py` 中的 4 个 Prompt 模板：
+### 13.8 Prompt 模板
+
+Agent 驱动路径使用 `scripts/llm_analyzer.py` 中的 10 个 Prompt 模板：
 
 | 模板 | 用途 | 格式化变量 |
 |------|------|----------|
 | `MODULE_ANALYSIS_PROMPT` | 模块依赖分析 | `{repo_info}` |
 | `API_ANALYSIS_PROMPT` | API 接口分析 | `{repo_info}` |
 | `SCHEMA_ANALYSIS_PROMPT` | 数据库 Schema 分析 | `{repo_info}` |
+| `ARCHITECTURE_ANALYSIS_PROMPT` | 系统架构分析 | `{repo_info}` |
+| `TECH_STACK_ANALYSIS_PROMPT` | 技术栈分析 | `{repo_info}` |
+| `CODING_STYLE_ANALYSIS_PROMPT` | 编码风格分析 | `{repo_info}` |
+| `DATA_FLOW_ANALYSIS_PROMPT` | 数据流分析 | `{repo_info}` |
+| `TEST_COVERAGE_ANALYSIS_PROMPT` | 测试覆盖分析 | `{repo_info}` |
+| `EVENT_BUS_ANALYSIS_PROMPT` | 事件总线分析 | `{repo_info}` |
 | `CONCEPT_ANALYSIS_PROMPT` | 业务概念推导 | `{module_graph}`, `{api_graph}`, `{schema_graph}` |
 
 仓库上下文由 `scripts/code_collector.py` 的 `build_repo_context()` 构建（语言检测 + 文件树 + 关键文件内容截断）。
 
 ---
 
-## 14. 部署架构
+## 14. 代码查看编辑器、Git 审计与冲突解决
 
-### 14.1 开发环境
+### 14.1 代码查看编辑器
+
+独立页面 `/projects/[id]/files`，提供仓库级代码浏览与编辑能力：
+
+- **文件树浏览** — 左侧目录树，支持展开/折叠、文件名搜索
+- **Monaco Editor 多标签** — 同时打开多个文件，标签页切换
+- **主题切换** — 白底/黑底两种主题
+- **全屏模式** — 沉浸式编辑
+- **Ctrl+S 保存** — 快捷键直接写回文件
+
+**后端 API**：
+
+| 路由 | 方法 | 说明 |
+|------|------|------|
+| `/api/files/tree` | GET | 获取文件树结构 |
+| `/api/files/content` | GET/PUT | 读取/写入文件内容 |
+
+### 14.2 Git 审计信息展示
+
+独立页面 `/projects/[id]/audit`，提供四个维度的 Git 变更审计：
+
+| Tab | 功能 | 筛选能力 |
+|-----|------|----------|
+| 按提交 | 提交列表 + 点击查看 diff | 分支、工作项、时间范围 |
+| 按文件 | 文件粒度变更统计 | 分支、工作项、时间范围 |
+| 按工作项 | 工作项关联的变更汇总 | 时间范围 |
+| 按会话 | 会话关联的 commit + diff | 时间范围 |
+
+**核心交互**：
+
+- 时间范围筛选：今天 / 最近3天 / 7天 / 30天 / 全部
+- 未提交变更展示：支持提交、撤销、忽略操作
+- Diff 查看：左右分栏模式（文件列表 + diff 内容）
+- DiffViewer：支持 Inline/Side-by-side 切换、全屏、文件目录可折叠/展开
+
+**后端 API**：
+
+| 路由 | 方法 | 说明 |
+|------|------|------|
+| `/api/projects/{id}/git/commits` | GET | 提交列表（支持分支/工作项/时间筛选） |
+| `/api/projects/{id}/git/changes` | GET | 变更分组统计（按分支/工作项/会话） |
+| `/api/projects/{id}/git/diff` | GET | 获取 diff 内容 |
+| `/api/projects/{id}/git/branches` | GET | 分支列表 |
+| `/api/projects/{id}/git/uncommitted` | GET | 未提交变更列表 |
+| `/api/projects/{id}/git/commit` | POST | 提交文件 |
+| `/api/projects/{id}/git/discard` | POST | 撤销修改 |
+| `/api/projects/{id}/git/ignore` | POST | 忽略文件 |
+
+**数据源**：
+
+直接调用 `git log` / `git diff` 命令，基于项目 `root` 路径执行。支持通过 commit message 中的 `[task:xxx]` / `[session:xxx]` 标记关联到 Tide 实体，实现按工作项/会话维度的变更聚合。
+
+**权限过滤**：
+
+- 项目级查看需具备项目成员权限
+- Session 维度聚合按用户过滤（仅显示该用户的 git 提交）
+
+### 14.3 合并冲突解决 UI
+
+与工作流 `git_merge` 节点集成，提供可视化冲突解决能力：
+
+- **冲突文件列表** — 展示所有冲突文件及状态
+- **三方 diff 查看** — base / ours / theirs 对比
+- **规则化解决** — 保留源分支 / 保留目标分支 / 手动编辑
+- **AI 智能解决** — Agent + 规则混合模式，自动分析并解决冲突
+
+**后端 API**：
+
+| 路由 | 方法 | 说明 |
+|------|------|------|
+| `/api/files/diff` | GET | 获取文件 diff |
+| `/api/files/conflict-detail` | GET | 获取冲突详情（base/ours/theirs） |
+| `/api/files/resolve-conflict` | POST | 规则化解决冲突 |
+| `/api/files/ai-resolve-conflict` | POST | AI 智能解决冲突 |
+
+### 14.4 会话发现增强
+
+会话发现服务 [session_discovery.py](backend/services/session_discovery.py) 支持多源合成：
+
+- **Qoder IDE 客户端** — 扫描 `~/.qoder/cache/projects/` 目录
+- **Codex CLI** — 解析 Codex 会话文件
+- **精确路径匹配** — 以项目工作目录为准，移除宽泛内容匹配
+- **DB + 文件系统去重** — 数据库 conversations 表与文件系统合成，按 session_id 去重
+
+### 14.5 数据流：Git 审计
+
+```
+浏览器 (/projects/[id]/audit)          FastAPI                  Git CLI
+  │  选择 Tab / 筛选条件         │                          │
+  │ ───────────────────────► │ GET /git/commits          │
+  │                          │   ?branch=&since=&work_item= │
+  │                          │ ──────────────────────► │ git log --format
+  │                          │ ◄────────────────────── │ 解析结果
+  │  JSON commits[]          │                          │
+  │ ◄─────────────────────── │                          │
+  │                          │                          │
+  │  点击 commit 查看 diff    │ GET /git/diff?commit=     │
+  │ ───────────────────────► │ ──────────────────────► │ git diff / git show
+  │  diff content             │ ◄────────────────────── │
+  │ ◄─────────────────────── │                          │
+  │                          │                          │
+  │  未提交变更操作           │ POST /git/commit          │
+  │  (提交/撤销/忽略)       │ POST /git/discard          │
+  │ ───────────────────────► │ ──────────────────────► │ git add + commit / checkout
+  │  操作结果               │ ◄────────────────────── │
+  │ ◄─────────────────────── │                          │
+```
+
+---
+
+## 15. A2A Bridge 远程 Agent
+
+支持通过 A2A（Agent-to-Agent）协议在远程服务器部署 Agent CLI，实现多进程扩展和跨机器执行。
+
+### 15.1 架构
+
+```
+Tide Backend ←→ A2A Client ←→ HTTP/SSE ←→ A2A Bridge ←→ Agent CLI
+     │                                         │
+     └── task 状态同步                          └── Git 自动同步
+```
+
+### 15.2 Bridge 核心模块（`a2a-bridge/`）
+
+| 模块 | 职责 |
+|------|------|
+| [main.py](a2a-bridge/main.py) | FastAPI 入口 + JSON-RPC 2.0 路由 |
+| [executor.py](a2a-bridge/executor.py) | CLI 子进程执行器 + 生命周期管理 |
+| [git_manager.py](a2a-bridge/git_manager.py) | Git worktree 管理（fetch/checkout/push） |
+| [agent_card.py](a2a-bridge/agent_card.py) | Agent Card 自描述（能力声明） |
+| [event_parser.py](a2a-bridge/event_parser.py) | CLI stream-json 输出解析 |
+
+### 15.3 执行时序
+
+1. Tide 创建任务 → A2A Client 发送 `tasks/send` RPC
+2. Bridge 接收 → git fetch + checkout task branch
+3. Bridge 启动 CLI → SSE 流式返回执行事件
+4. CLI 完成 → Bridge auto commit + push
+5. Tide 接收完成事件 → 更新任务状态
+
+### 15.4 与本地 Agent 对比
+
+| 维度 | 本地 Agent | 远程 Agent (A2A) |
+|------|-----------|------------------|
+| 代码获取 | 直接访问本地 worktree | Bridge git fetch + checkout |
+| 隔离方式 | git worktree add | 独立 task branch |
+| 变更回传 | 本地 commit | Bridge auto push |
+| 并发控制 | 单进程受限 | 多 Pod 独立扩缩容 |
+
+### 15.5 集成层
+
+| 模块 | 职责 |
+|------|------|
+| [backend/runtime/a2a_client.py](backend/runtime/a2a_client.py) | A2A 客户端封装，JSON-RPC 调用 + SSE 流接收 |
+| [backend/runtime/adapters.py](backend/runtime/adapters.py) | `A2AAdapter` 统一适配，与本地 Agent 共享接口 |
+| [backend/api/remote_agents.py](backend/api/remote_agents.py) | 远程 Agent 管理 API（注册/列表/健康检查） |
+| [backend/services/a2a_discovery.py](backend/services/a2a_discovery.py) | 服务发现与健康检查（定期心跳 + Agent Card 拉取） |
+
+---
+
+## 16. 部署架构
+
+### 16.1 开发环境
 
 ```bash
 # 后端（含 Lark Listener / Scheduler / WS Hub）
@@ -800,7 +1126,7 @@ uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 cd apps/web && yarn dev
 ```
 
-### 14.2 生产部署
+### 16.2 生产部署
 
 单进程后端 + 静态前端最小化部署：
 
@@ -815,7 +1141,7 @@ docker-compose.yml
 
 ---
 
-## 15. 设计原则回顾
+## 17. 设计原则回顾
 
 1. **不重造 Agent 运行时** — 复用 `AGENT_ADAPTERS`（codex/claude/qoder），后端只做控制面。
 2. **Polymorphic Actor** — `actor_type + actor_id` 统一人和 Agent，避免特殊端点。

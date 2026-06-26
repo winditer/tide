@@ -1,0 +1,126 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-06-26T03:00:00Z",
+  "generator": "manual+static",
+  "naming_conventions": {
+    "python": {
+      "files": "snake_case.py（e.g. `task_service.py`, `event_emitter.py`, `card_action_handler.py`）",
+      "modules_packages": "snake_case；按业务域水平拆分（`api/`、`services/`、`runtime/`）",
+      "classes": "PascalCase（e.g. `WSHub`, `EventEmitter`, `ConversationInfo`, `TideAdapter`）",
+      "functions_methods": "snake_case，async 协程同样使用 snake_case",
+      "constants": "UPPER_SNAKE_CASE（e.g. `APP_ID`, `LARK_DOMAIN`, `TIDE_JWT_SECRET`, `ROLE_HIERARCHY`）",
+      "private": "前缀单下划线 `_extract_bearer`, `_record_event`",
+      "event_names": "点分小写（e.g. `task.created`, `workflow.node.completed`, `lark.task.created`）"
+    },
+    "typescript": {
+      "files": "kebab-case（e.g. `git-audit.ts`, `use-work-items.ts`, `WorkItemBoard.tsx`），Page 组件用 `page.tsx`/`layout.tsx`",
+      "components": "PascalCase（e.g. `ActiveProjects`, `GitAuditPage`, `KnowledgeGraphCard`）",
+      "hooks": "`use-xxx.ts` 文件 + `useXxx` 导出（e.g. `useWorkItems`, `useGitAudit`）",
+      "api_modules": "kebab-case 文件，导出 camelCase 函数（e.g. `fetchKnowledgeGraph`）",
+      "types_interfaces": "PascalCase；类型定义集中在 `packages/core/src/types/`",
+      "constants": "UPPER_SNAKE_CASE（环境变量）/ camelCase（局部）"
+    },
+    "sql_db": {
+      "tables_columns": "snake_case，单复数：表用复数（`tasks`, `actors`, `project_members`）；外键列 `<table>_id`",
+      "primary_key": "TEXT（业务 ID/UUID）",
+      "timestamps": "`created_at`, `updated_at`，默认 `CURRENT_TIMESTAMP`"
+    }
+  },
+  "code_organization": {
+    "monorepo": {
+      "structure": "Yarn Workspaces：根 `apps/*` + `packages/*`",
+      "frontend_apps": "`apps/web` — Next.js App Router 主应用",
+      "frontend_packages": {
+        "@tide/ui": "Radix 包装的基础组件",
+        "@tide/views": "业务视图组件，按域目录划分（dashboard / kanban / workflows / plans 等）",
+        "@tide/core": "API client + hooks + providers + zustand store + 类型"
+      },
+      "backend_layout": {
+        "backend/main.py": "FastAPI 入口 + lifespan",
+        "backend/api/": "30 个 Router（按业务域拆文件）",
+        "backend/services/": "业务编排单元（31 个模块；多数为单例实例）",
+        "backend/runtime/": "CLI 适配器、a2a_client、plan/task runtime、git utils、config",
+        "backend/db/": "engine.py + init.sql",
+        "backend/models/schemas.py": "Pydantic 请求/响应模型",
+        "backend/core/": "JWT/bcrypt 工具 + 认证依赖",
+        "backend/tests/": "pytest（async）",
+        "backend/scripts/": "一次性脚本（migrate_*、init_admin、import_*）"
+      },
+      "integration_services": {
+        "a2a-bridge/": "独立 FastAPI 服务（JSON-RPC A2A 协议）",
+        "tide_ws.py": "已废弃；保留作为迁移参考（顶部 DEPRECATED 注释）"
+      }
+    },
+    "dependency_direction": "api → services → runtime / db；前端 web → views → ui + core；禁止反向依赖。",
+    "singletons": "服务层倾向暴露模块级单例（e.g. `task_service`, `ws_hub`, `event_emitter`, `auth_service`, `schedule_service`, `plan_executor`）。"
+  },
+  "type_and_interface": {
+    "python": [
+      "广泛使用 `typing.Optional` / `list[str]` 等类型注解",
+      "Pydantic v2 model 用于 API schema（`backend/models/schemas.py`）",
+      "`from __future__ import annotations` 在 core/security.py / core/dependencies.py 等模块出现"
+    ],
+    "typescript": [
+      "`strict: true`（apps/web/tsconfig.json）",
+      "类型集中在 `packages/core/src/types/index.ts` 并由 `@tide/core/types` 导出",
+      "API 模块导出 `Promise<T>` 函数 + 与类型搭配的 React Query hooks"
+    ]
+  },
+  "error_handling": {
+    "python": [
+      "FastAPI 抛 `HTTPException(status_code, detail)`；权限错误用 401/403",
+      "异常包装：try/except + `logger.exception(...)`（e.g. `backend/main.py::lifespan`）",
+      "数据库失败采用宽松回退（如 `auth_service.ensure_admin_exists` 失败仅打日志）"
+    ],
+    "typescript": [
+      "fetch client 统一抛错，由 React Query 状态承接（`isError`/`error`）",
+      "组件层用条件渲染 + lucide-react 图标提示"
+    ]
+  },
+  "testing": {
+    "framework": "pytest（asyncio）",
+    "location": "backend/tests/",
+    "naming": "`test_<module>.py` + `test_<功能>` 函数",
+    "fixtures": "backend/tests/conftest.py 集中提供（数据库、临时目录、模拟服务）",
+    "count": 14,
+    "frontend_tests": "暂未观察到前端单元测试（无 jest/vitest 配置）"
+  },
+  "comments_and_docs": {
+    "python": "中文 docstring（\"\"\"...\"\"\"）描述模块/类/函数职责；关键算法/外部协议处加详细注释；不写显而易见的 WHAT，注重 WHY",
+    "typescript": "组件顶部偶有 JSDoc；样式注释多见于条件分支",
+    "project_docs": [
+      "ARCHITECTURE.md（顶层架构）",
+      "README.md（介绍 + 启动）",
+      "DEPLOYMENT_ARCHITECTURE.md / DEPLOYMENT_QUICK_REFERENCE.md",
+      "A2A_DEPLOYMENT_PLAN.md / A2A_INTEGRATION.md",
+      "ROADMAP.md / DEVELOPMENT.md / SCHEDULES.md",
+      "backend/README.md / apps/web/README.md / a2a-bridge/README.md",
+      ".knowledge/* 知识图谱"
+    ]
+  },
+  "formatting_and_linting": {
+    "python": "未发现 pyproject.toml / ruff.toml / black 配置——风格依靠代码评审保持一致（snake_case + 类型注解）",
+    "typescript": [
+      "`next lint`（apps/web/package.json:scripts:lint）",
+      "`tsconfig.json` strict: true",
+      "Tailwind 风格通过 clsx + tailwind-merge 合并",
+      "未发现独立的 .eslintrc 或 .prettierrc"
+    ],
+    "editor": ".gitignore + .env / .env.example 模式"
+  },
+  "conventions_observed": [
+    "服务模块顶部以中文 docstring 说明职责",
+    "通过 `lifespan` 而非已废弃的 `@app.on_event` 启动子服务",
+    "WS 广播使用 channel + 全局 `all` 双投递（`ws_hub.broadcast`）",
+    "Event payload 字段固定 `type`/`task_id`/`workspace_id`/`updates`，时间戳由 hub 注入",
+    "DB 迁移采用 `init.sql` + `ensure_column` 增量列添加，而非 Alembic",
+    "前端遵守 App Router 文件式路由（`apps/web/app/<route>/page.tsx`）",
+    "三个 packages 通过 `exports` 字段精细暴露子路径（避免 `*`）"
+  ],
+  "anti_patterns_to_avoid": [
+    "继续修改 `tide_ws.py`（已废弃，仅作迁移参考）",
+    "把 secret 写入代码——`config.py` 强制从 env / .env 注入",
+    "跨层反向 import（api 不能被 services / runtime 引入）",
+    "在 services 层直接读 request——必须由 api 层下传"
+  ]
+}

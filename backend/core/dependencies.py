@@ -209,3 +209,85 @@ def require_role(required_role: str) -> Callable:
         return current_user
 
     return check_role
+
+
+async def resolve_lark_user(open_id: str) -> Optional[dict]:
+    """根据 Lark open_id 查询 users 表，返回与 get_optional_user 相同格式的 user dict。
+
+    未找到返回 None。
+    """
+    if not open_id:
+        return None
+    async with async_session_factory() as session:
+        result = await session.execute(
+            text(
+                "SELECT id, username, role, status, display_name, email"
+                " FROM users WHERE lark_open_id = :open_id LIMIT 1"
+            ),
+            {"open_id": open_id},
+        )
+        row = result.fetchone()
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "username": row[1],
+        "role": row[2],
+        "status": row[3],
+        "display_name": row[4],
+        "email": row[5],
+    }
+
+
+class LarkPermissionDenied(Exception):
+    """Lark 端权限检查失败异常"""
+
+    def __init__(self, reason: str = "permission_denied"):
+        self.reason = reason
+        super().__init__(reason)
+
+
+async def check_lark_permission(
+    open_id: str,
+    project_id: Optional[str] = None,
+    require_write: bool = True,
+) -> Optional[dict]:
+    """Lark 端统一权限检查。
+
+    Returns:
+        user dict 或 None（当 TIDE_REQUIRE_AUTH=0 且用户未绑定时）
+    Raises:
+        LarkPermissionDenied: 当权限检查失败时
+    """
+    from backend.runtime.config import TIDE_REQUIRE_AUTH, LARK_ALLOWED_OPEN_IDS
+
+    # 白名单前置检查
+    if LARK_ALLOWED_OPEN_IDS and open_id not in LARK_ALLOWED_OPEN_IDS:
+        raise LarkPermissionDenied("not_in_whitelist")
+
+    user = await resolve_lark_user(open_id)
+
+    # 认证模式下，未绑定用户拒绝
+    if TIDE_REQUIRE_AUTH and user is None:
+        raise LarkPermissionDenied("user_not_bound")
+
+    # 未启用认证时，直接放行
+    if not TIDE_REQUIRE_AUTH:
+        return user
+
+    # 用户被禁用
+    if user and user.get("status") == "disabled":
+        raise LarkPermissionDenied("user_disabled")
+
+    # admin 直接放行
+    if user and user.get("role") == "admin":
+        return user
+
+    # 项目级写权限检查
+    if require_write and project_id and user:
+        try:
+            await check_project_write_permission(project_id, user)
+        except HTTPException:
+            raise LarkPermissionDenied("project_permission_denied")
+
+    return user

@@ -17,7 +17,7 @@ from backend.api.agents import router as agents_router
 from backend.api.events import router as events_router
 from backend.api.dashboard import router as dashboard_router
 from backend.api.projects import router as projects_router
-from backend.api.sessions import router as sessions_router
+from backend.api.sessions import router as sessions_router, usage_router
 from backend.api.schedules import router as schedules_router
 from backend.services.schedule_service import schedule_service
 from backend.services.lark_listener import lark_listener
@@ -74,6 +74,27 @@ async def lifespan(app: FastAPI):
     except Exception:  # noqa: BLE001
         logger.exception("recover_orphaned_tasks failed")
 
+    # 扫描 Qoder IDE 会话并估算 token 用量（后台异步执行，不阻塞启动）
+    async def _sync_qoder_tokens():
+        try:
+            from backend.services.session_discovery import sync_session_token_usage
+            await sync_session_token_usage()
+        except Exception:  # noqa: BLE001
+            logger.exception("sync_session_token_usage failed")
+
+    # 首次启动立即同步一次
+    asyncio.create_task(_sync_qoder_tokens())
+
+    # 注册周期任务：每 5 分钟同步 Qoder IDE 会话 token 用量
+    from apscheduler.triggers.interval import IntervalTrigger
+
+    schedule_service.scheduler.add_job(
+        _sync_qoder_tokens,
+        trigger=IntervalTrigger(minutes=5),
+        id="sync_qoder_token_usage",
+        replace_existing=True,
+    )
+
     # Lark WebSocket 监听器（可选启动：未配置凭据时静默跳过，运行 Web-only 模式）
     from backend.runtime.config import LARK_EVENT_QUEUE_MAXSIZE
     lark_event_queue: asyncio.Queue = asyncio.Queue(maxsize=LARK_EVENT_QUEUE_MAXSIZE)
@@ -110,6 +131,7 @@ app.include_router(events_router)
 app.include_router(dashboard_router)
 app.include_router(projects_router)
 app.include_router(sessions_router)
+app.include_router(usage_router)
 app.include_router(schedules_router)
 app.include_router(plans_router)
 app.include_router(workflows_router)

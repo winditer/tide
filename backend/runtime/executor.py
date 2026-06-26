@@ -440,57 +440,63 @@ class AgentExecutor:
 
             # 任务结束（无论成败）均尝试写入 token 成本。
             # 失败任务的 token 消耗仍应被记录，仅在解析不到有效 token 时跳过。
-            cost_model = model or adapter.default_model or adapter.id
+            cost_model = model or adapter.default_model or adapter.id or "codex"
+            logger.info(
+                "[executor] task=%s cost_model=%s (model=%r, adapter.default_model=%r, adapter.id=%r)",
+                task_id, cost_model, model, adapter.default_model, adapter.id,
+            )
             try:
-                if claude_token_input > 0 or claude_token_output > 0 or claude_cost_usd > 0:
-                    # Claude CLI 的 result 事件提供了精确数据，优先使用
-                    from backend.services.cost_service import cost_service
-                    await cost_service.update_task_cost(
-                        task_id=task_id,
-                        input_tokens=claude_token_input,
-                        output_tokens=claude_token_output,
-                        model=cost_model,
-                    )
-                    # 同步让后续 metadata 上报使用 Claude 汇总值
-                    token_input_total = claude_token_input
-                    token_output_total = claude_token_output
-                elif token_input_total or token_output_total:
-                    # 通用解析路径（Claude 以外的 CLI）
-                    # TODO: Codex CLI 的 ``--json`` 输出不携带 token；Qoder CLI 输出 input_tokens=0
-                    # 为客户端 Bug，两者都需等待 CLI 升级后才能采集到精确数值。
-                    from backend.services.cost_service import cost_service
-                    await cost_service.update_task_cost(
-                        task_id=task_id,
-                        input_tokens=token_input_total,
-                        output_tokens=token_output_total,
-                        model=cost_model,
-                    )
-                else:
-                    # 降级估算路径：Claude 精确数据与通用解析均未获取到 token，
-                    # 使用 tiktoken 对 prompt 和输出文本进行估算。
-                    # 适用于当前 Codex/Qoder CLI 未提供有效 token 数据的场景。
+                # 确定最终使用的 token 数值：
+                # 1) Claude/Qoder CLI result 事件的精确 token（含 cache）
+                # 2) 通用 JSON 解析累计的 token
+                # 3) tiktoken 估算降级
+                final_input_tokens = 0
+                final_output_tokens = 0
+                reported_cost: Optional[float] = None
+
+                if claude_token_input > 0 or claude_token_output > 0:
+                    # Claude CLI result 事件提供了精确 token（含 cache 部分）
+                    final_input_tokens = claude_token_input
+                    final_output_tokens = claude_token_output
+                    if claude_cost_usd > 0:
+                        reported_cost = claude_cost_usd
+                elif token_input_total > 0 or token_output_total > 0:
+                    # 通用 JSON 解析路径
+                    final_input_tokens = token_input_total
+                    final_output_tokens = token_output_total
+
+                # 当 CLI 没有提供有效 token 时，使用 tiktoken 估算。
+                # 这涵盖：Qoder CLI token=0 bug、Codex CLI 不带 token 的情况。
+                if final_input_tokens == 0 and final_output_tokens == 0:
                     from backend.runtime.adapters import estimate_token_count
 
-                    est_input = estimate_token_count(prompt)
-                    est_output = (
+                    final_input_tokens = estimate_token_count(prompt)
+                    final_output_tokens = (
                         estimate_token_count("\n".join(p for p in output_parts if p))
                         if output_parts
                         else 0
                     )
-                    if est_input > 0 or est_output > 0:
-                        token_input_total = est_input
-                        token_output_total = est_output
-                        from backend.services.cost_service import cost_service
-                        await cost_service.update_task_cost(
-                            task_id=task_id,
-                            input_tokens=est_input,
-                            output_tokens=est_output,
-                            model=cost_model,
-                        )
+                    # 如果 CLI 上报了成本但未提供 token，仍使用上报成本
+                    if claude_cost_usd > 0:
+                        reported_cost = claude_cost_usd
+                    if final_input_tokens > 0 or final_output_tokens > 0:
                         logger.info(
                             "[executor] task=%s token estimated: in=%d out=%d",
-                            task_id, est_input, est_output,
+                            task_id, final_input_tokens, final_output_tokens,
                         )
+
+                token_input_total = final_input_tokens
+                token_output_total = final_output_tokens
+
+                if final_input_tokens > 0 or final_output_tokens > 0 or (reported_cost and reported_cost > 0):
+                    from backend.services.cost_service import cost_service
+                    await cost_service.update_task_cost(
+                        task_id=task_id,
+                        input_tokens=final_input_tokens,
+                        output_tokens=final_output_tokens,
+                        model=cost_model,
+                        reported_cost_usd=reported_cost,
+                    )
             except Exception as _e:  # noqa: BLE001
                 logger.warning("[executor] update_task_cost failed task=%s: %s", task_id, _e)
 

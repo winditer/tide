@@ -149,11 +149,20 @@ async def move_card(
 async def get_work_item_board(
     project_id: str = Query(..., description="项目 ID"),
     version_id: Optional[str] = Query(None, description="版本筛选"),
+    status: Optional[str] = Query(None, description="状态筛选"),
+    search: Optional[str] = Query(None, description="关键词搜索"),
+    assignee: Optional[str] = Query(None, description="负责人筛选"),
+    group_id: Optional[str] = Query(None, description="项目组筛选"),
     current_user=Depends(get_optional_user),
 ):
     """工作项看板：按 workflow 可见节点划列。"""
     return await work_item_service.get_work_item_board(
-        project_id, version_id=version_id
+        project_id,
+        version_id=version_id,
+        status=status,
+        search=search,
+        assignee=assignee,
+        group_id=group_id,
     )
 
 

@@ -9,17 +9,76 @@ import logging
 import re
 from typing import Optional
 
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 from sqlalchemy import text as sa_text
 
+from backend.core.dependencies import get_optional_user
 from backend.runtime.git_utils import git_command, git_log_files, git_diff_full
 from backend.db.engine import async_session_factory
 from pathlib import Path
 
 router = APIRouter(prefix="/api/projects", tags=["git-audit"])
 logger = logging.getLogger("tide.api.git_audit")
+
+
+# ── 角色过滤辅助函数 ────────────────────────────────────────────────────────────
+
+
+async def _should_filter_by_user(project_id: str, current_user: Optional[dict]) -> bool:
+    """判断当前用户是否需要按个人数据过滤。
+
+    不过滤的情况：
+    - 未登录（未启用强制认证）
+    - 系统 admin（users.role == 'admin'）
+    - 项目 admin（project_members.role == 'admin'）
+    - 项目 viewer（project_members.role == 'viewer'）
+    - 项目无成员记录（未配置成员管理）
+
+    需要过滤：项目 member
+    """
+    if not current_user:
+        return False
+    # 系统 admin
+    if current_user.get("role") == "admin":
+        return False
+    # 查询项目角色
+    async with async_session_factory() as session:
+        result = await session.execute(
+            sa_text(
+                "SELECT role FROM project_members"
+                " WHERE project_id = :pid AND user_id = :uid LIMIT 1"
+            ),
+            {"pid": project_id, "uid": current_user["id"]},
+        )
+        row = result.fetchone()
+    if not row:
+        # 项目无成员记录，不过滤
+        return False
+    # admin 或 viewer 不过滤
+    if row[0] in ("admin", "viewer"):
+        return False
+    # member 需要过滤
+    return True
+
+
+def _get_user_git_identities(current_user: Optional[dict]) -> list[str]:
+    """获取用户可能的 git author 标识（用于 --author 匹配）。
+
+    git --author 支持正则匹配，会匹配 author name 或 email 中包含该字符串的提交。
+    返回优先级从高到低的标识列表（email > display_name > username）。
+    """
+    if not current_user:
+        return []
+    identities: list[str] = []
+    if current_user.get("email"):
+        identities.append(current_user["email"])
+    if current_user.get("display_name"):
+        identities.append(current_user["display_name"])
+    if current_user.get("username") and current_user["username"] not in identities:
+        identities.append(current_user["username"])
+    return identities
 
 
 def _decode_project_path(project_id: str) -> str:
@@ -144,7 +203,7 @@ async def get_project_commits(
     work_item_id: Optional[str] = Query(None, description="按工作项分支筛选"),
     all_branches: bool = Query(False, description="搜索所有分支（用于会话级跨分支查询）"),
 ):
-    """获取项目的 commit 列表（含修改文件）。"""
+    """获取项目的 commit 列表（含修改文件）。展示项目级全量数据，不做用户过滤。"""
     cwd = _decode_project_path(project_id)
     if not Path(cwd).is_dir():
         raise HTTPException(status_code=404, detail=f"项目路径不存在: {cwd}")
@@ -176,6 +235,7 @@ async def get_project_changes(
     group_by: str = Query("branch", description="聚合维度: work_item | session | branch"),
     since: Optional[str] = Query(None, description="起始时间"),
     until: Optional[str] = Query(None, description="截止时间"),
+    current_user: Optional[dict] = Depends(get_optional_user),
 ):
     """按维度聚合变更统计。
 
@@ -193,7 +253,9 @@ async def get_project_changes(
     if group_by == "work_item":
         results = await _group_by_work_item(project_id, cwd, since, until)
     elif group_by == "session":
-        results = await _group_by_session(project_id, cwd, since, until)
+        # 按会话 Tab 保留用户过滤
+        should_filter = await _should_filter_by_user(project_id, current_user)
+        results = await _group_by_session(project_id, cwd, since, until, current_user if should_filter else None)
     else:
         results = await _group_by_branch(cwd, since, until)
 
@@ -220,9 +282,11 @@ async def _branch_stats(
     main_branch: Optional[str],
     since: Optional[str] = None,
     until: Optional[str] = None,
+    author: Optional[str] = None,
 ) -> Optional[dict]:
     """统计某个分支相对于主分支的 commit 数、文件变更、增删行数。
 
+    当 author 非空时，只统计该作者的提交。
     返回 None 表示该分支不存在或无 commits。
     """
     # 先确认分支存在
@@ -243,6 +307,8 @@ async def _branch_stats(
         args.append(f"--since={since}")
     if until:
         args.append(f"--until={until}")
+    if author:
+        args.append(f"--author={author}")
 
     code, log_out = await git_command(Path(cwd), args, timeout=15)
     if code != 0:
@@ -259,21 +325,24 @@ async def _branch_stats(
     files_changed = 0
 
     if main_branch and branch_name != main_branch:
+        diff_args = ["log", "--numstat", "--format=", f"{main_branch}..{branch_name}"]
+        if author:
+            diff_args.append(f"--author={author}")
         code, stat_out = await git_command(
-            Path(cwd),
-            ["diff", "--shortstat", f"{main_branch}...{branch_name}"],
-            timeout=15,
+            Path(cwd), diff_args, timeout=15,
         )
         if code == 0 and stat_out:
-            m = re.search(r"(\d+) files? changed", stat_out)
-            if m:
-                files_changed = int(m.group(1))
-            m = re.search(r"(\d+) insertions?\(\+\)", stat_out)
-            if m:
-                additions = int(m.group(1))
-            m = re.search(r"(\d+) deletions?\(-\)", stat_out)
-            if m:
-                deletions = int(m.group(1))
+            for line in stat_out.splitlines():
+                line = line.strip()
+                if not line or "\t" not in line:
+                    continue
+                parts = line.split("\t")
+                if len(parts) >= 3:
+                    add_str = parts[0].strip()
+                    del_str = parts[1].strip()
+                    additions += int(add_str) if add_str.isdigit() else 0
+                    deletions += int(del_str) if del_str.isdigit() else 0
+                    files_changed += 1
 
     return {
         "commit_count": commit_count,
@@ -287,11 +356,13 @@ async def _time_range_stats(
     cwd: str,
     time_since: Optional[str] = None,
     time_until: Optional[str] = None,
+    author: Optional[str] = None,
 ) -> Optional[dict]:
     """统计指定时间范围内的 git commit 变更。
 
     使用 git log --after/--before 按时间窗口检索 commit，
     并用 --numstat 汇总文件变更、增删行数。
+    当 author 非空时，只统计该作者的提交。
     适用于会话级统计（按 created_at ~ last_active 时间窗口匹配 commit）。
 
     Returns:
@@ -305,6 +376,8 @@ async def _time_range_stats(
         args.append(f"--after={time_since}")
     if time_until:
         args.append(f"--before={time_until}")
+    if author:
+        args.append(f"--author={author}")
 
     code, output = await git_command(Path(cwd), args, timeout=30)
     if code != 0:
@@ -351,16 +424,18 @@ async def _group_by_work_item(
     since: Optional[str],
     until: Optional[str],
 ) -> list[dict]:
-    """按工作项分组：从 DB 查询工作项，关联其 branch_name 统计 Git 变更。"""
+    """按工作项分组：从 DB 查询工作项，关联其 branch_name 统计 Git 变更。
+
+    展示项目级全量数据，不做用户过滤。
+    """
     from backend.runtime.git_utils import work_item_branch_name
 
     main_branch = await _get_main_branch(cwd)
 
     # 1. 查询当前项目的工作项及其关联的分支（通过 transitions -> tasks）
     async with async_session_factory() as session:
-        rows = await session.execute(
-            sa_text("""
-                SELECT wi.id, wi.title,
+        base_sql = """
+                SELECT wi.id, wi.title, wi.assignee,
                        t.branch_name AS task_branch
                 FROM work_items wi
                 LEFT JOIN work_item_transitions wit ON wit.work_item_id = wi.id
@@ -369,9 +444,10 @@ async def _group_by_work_item(
                     AND t.branch_name != ''
                 WHERE wi.project_id = :project_id
                 ORDER BY wi.created_at DESC
-            """),
-            {"project_id": project_id},
-        )
+        """
+        params: dict = {"project_id": project_id}
+
+        rows = await session.execute(sa_text(base_sql), params)
         all_rows = rows.fetchall()
 
     # 2. 合并：每个工作项可能有多条 transition 记录，取第一个有效 branch
@@ -380,12 +456,12 @@ async def _group_by_work_item(
         wi_id = row[0]
         if wi_id in work_items:
             # 已有记录，若当前还没 branch 则尝试填充
-            if not work_items[wi_id]["branch"] and row[2]:
-                work_items[wi_id]["branch"] = row[2]
+            if not work_items[wi_id]["branch"] and row[3]:
+                work_items[wi_id]["branch"] = row[3]
         else:
             work_items[wi_id] = {
                 "title": row[1],
-                "branch": row[2] or "",
+                "branch": row[3] or "",
             }
 
     # 3. 对没有从 transitions 获得 branch 的工作项，使用约定分支名
@@ -425,10 +501,12 @@ async def _group_by_session(
     cwd: str,
     since: Optional[str],
     until: Optional[str],
+    filter_user: Optional[dict] = None,
 ) -> list[dict]:
     """按会话分组：复用 session_discovery 获取项目下所有会话，补充 Git 变更统计。
 
     数据源与主菜单会话列表一致（DB + 文件系统扫描合并），确保展示一致性。
+    当 filter_user 非空时，只统计该用户的 git 提交，并隐藏无关会话。
     """
     from backend.services.session_discovery import discover_sessions
 
@@ -534,6 +612,12 @@ async def _group_by_session(
     merged_sessions.sort(key=lambda x: x.get("last_active") or "", reverse=True)
 
     # 7. 对每个会话统计 git 变更
+    author_filter: Optional[str] = None
+    if filter_user:
+        identities = _get_user_git_identities(filter_user)
+        if identities:
+            author_filter = identities[0]
+
     results: list[dict] = []
     for s in merged_sessions:
         sid = s["session_id"]
@@ -544,7 +628,7 @@ async def _group_by_session(
 
         # 方式 1：尝试用关联的分支统计（tasks 表中有 branch_name 的情况）
         for branch in branches:
-            stats = await _branch_stats(cwd, branch, main_branch, since, until)
+            stats = await _branch_stats(cwd, branch, main_branch, since, until, author=author_filter)
             if stats and (best_stats is None or stats["commit_count"] > best_stats["commit_count"]):
                 best_stats = stats
                 used_branch = branch
@@ -562,7 +646,7 @@ async def _group_by_session(
                 if until and (not effective_until or until < effective_until):
                     effective_until = until
                 best_stats = await _time_range_stats(
-                    cwd, effective_since, effective_until
+                    cwd, effective_since, effective_until, author=author_filter
                 )
 
         if best_stats is None:
@@ -572,6 +656,10 @@ async def _group_by_session(
                 "additions": 0,
                 "deletions": 0,
             }
+
+        # 当启用过滤时，跳过无提交的会话
+        if filter_user and best_stats["commit_count"] == 0:
+            continue
 
         results.append({
             "name": s["title"],
@@ -591,7 +679,7 @@ async def _group_by_branch(
     since: Optional[str],
     until: Optional[str],
 ) -> list[dict]:
-    """按分支分组：列出所有分支的变更统计（原有逻辑）。"""
+    """按分支分组：列出所有分支的变更统计。展示项目级全量数据，不做用户过滤。"""
     code, branches_output = await git_command(
         Path(cwd), ["branch", "--format=%(refname:short)"], timeout=10
     )
@@ -627,6 +715,12 @@ async def get_uncommitted_changes(
     cwd = _decode_project_path(project_id)
     if not Path(cwd).is_dir():
         raise HTTPException(status_code=404, detail=f"项目路径不存在: {cwd}")
+
+    # 获取当前分支名
+    code_br, branch_output = await git_command(
+        Path(cwd), ["rev-parse", "--abbrev-ref", "HEAD"], timeout=5
+    )
+    current_branch = branch_output.strip() if code_br == 0 else None
 
     code, output = await git_command(
         Path(cwd), ["status", "--porcelain"], timeout=10
@@ -672,7 +766,7 @@ async def get_uncommitted_changes(
             "staged": staged,
         })
 
-    return {"files": files, "total": len(files)}
+    return {"files": files, "total": len(files), "current_branch": current_branch}
 
 
 @router.get("/{project_id}/git/diff/{commit_hash}")

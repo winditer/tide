@@ -3,8 +3,19 @@ import { apiClient, API_BASE_URL, buildAuthHeaders } from "./client";
 /** 知识图谱所属范围：单个项目 / 项目组 */
 export type KnowledgeScope = "project" | "group";
 
-/** 图谱类型：全部 / 模块依赖 / API / 数据库 / 业务概念 */
-export type KnowledgeGraphType = "all" | "module" | "api" | "db" | "concept";
+/** 知识图谱类型 */
+export type KnowledgeGraphType =
+  | "all"
+  | "module"
+  | "api"
+  | "db"
+  | "concept"
+  | "architecture"
+  | "tech-stack"
+  | "coding-style"
+  | "data-flow"
+  | "test-coverage"
+  | "event-bus";
 
 /** 任务状态：空闲 / 待启动 / 运行中 / 完成 / 失败 */
 export type KnowledgeJobStatus =

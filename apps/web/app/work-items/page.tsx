@@ -468,6 +468,7 @@ export default function WorkItemsPage() {
         <WorkItemBoard
           projectId={effectiveProjectId}
           versionId={boardVersionId}
+          filters={filters}
           onCardClick={handleCardClick}
           versionMap={versionMap}
           groupBy={groupBy}

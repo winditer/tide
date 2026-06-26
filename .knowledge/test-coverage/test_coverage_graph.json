@@ -1,0 +1,84 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-06-26T03:00:00Z",
+  "generator": "manual+static",
+  "test_framework": "pytest (asyncio)",
+  "test_root": "backend/tests/",
+  "totals": {
+    "test_files": 14,
+    "test_cases": 96,
+    "lines_of_code": 2200
+  },
+  "config": {
+    "fixtures": "backend/tests/conftest.py",
+    "async_runner": "pytest-asyncio (默认 mode=auto，根据 async def 自动识别)",
+    "frontend_tests": null
+  },
+  "test_files": [
+    {"file": "backend/tests/test_api_tasks.py", "cases": 8, "loc": 98, "targets": ["backend.main:app", "backend.api.tasks", "backend.services.task_service"], "type": "integration"},
+    {"file": "backend/tests/test_db_init.py", "cases": 4, "loc": 79, "targets": ["backend.db.engine.init_db"], "type": "unit"},
+    {"file": "backend/tests/test_git_config.py", "cases": 8, "loc": 79, "targets": ["backend.runtime.git_utils"], "type": "unit"},
+    {"file": "backend/tests/test_git_merge_node.py", "cases": 10, "loc": 248, "targets": ["backend.services.workflow_engine git merge 节点"], "type": "integration"},
+    {"file": "backend/tests/test_kanban.py", "cases": 7, "loc": 157, "targets": ["backend.api.kanban", "backend.services.kanban_service"], "type": "integration"},
+    {"file": "backend/tests/test_lark_permission.py", "cases": 11, "loc": 237, "targets": ["backend.core.dependencies", "backend.services.auth_service"], "type": "unit"},
+    {"file": "backend/tests/test_plan_service.py", "cases": 6, "loc": 88, "targets": ["backend.services.plan_service"], "type": "unit"},
+    {"file": "backend/tests/test_project_groups.py", "cases": 22, "loc": 526, "targets": ["backend.services.project_group_service", "backend.services.plan_service"], "type": "integration"},
+    {"file": "backend/tests/test_projects_chat_count.py", "cases": 1, "loc": 55, "targets": ["backend.api.projects"], "type": "integration"},
+    {"file": "backend/tests/test_schedule_service.py", "cases": 9, "loc": 134, "targets": ["backend.services.schedule_service:ScheduleService"], "type": "unit"},
+    {"file": "backend/tests/test_task_service.py", "cases": 5, "loc": 101, "targets": ["backend.services.task_service"], "type": "unit"},
+    {"file": "backend/tests/test_work_item_service.py", "cases": 3, "loc": 114, "targets": ["backend.services.work_item_service:WorkItemService"], "type": "unit"},
+    {"file": "backend/tests/test_workflow_engine.py", "cases": 7, "loc": 166, "targets": ["backend.services.workflow_engine:WorkflowEngine"], "type": "unit"},
+    {"file": "backend/tests/test_ws_hub.py", "cases": 5, "loc": 118, "targets": ["backend.services.ws_hub:WSHub"], "type": "unit"},
+    {"file": "tests/test_lark_reference_context.py", "cases": "若干", "loc": "—", "targets": ["tide_ws.py (deprecated)"], "type": "legacy"}
+  ],
+  "coverage_matrix": {
+    "by_layer": [
+      {"layer": "backend.api", "modules": 30, "tested_modules": 4, "test_files": ["test_api_tasks", "test_kanban", "test_projects_chat_count"], "coverage_estimate_pct": 13},
+      {"layer": "backend.services", "modules": 31, "tested_modules": 10, "test_files": ["test_task_service", "test_plan_service", "test_workflow_engine", "test_schedule_service", "test_kanban", "test_work_item_service", "test_project_groups", "test_ws_hub", "test_git_merge_node", "test_lark_permission(auth)"], "coverage_estimate_pct": 32},
+      {"layer": "backend.runtime", "modules": 8, "tested_modules": 1, "test_files": ["test_git_config"], "coverage_estimate_pct": 13},
+      {"layer": "backend.db", "modules": 1, "tested_modules": 1, "test_files": ["test_db_init"], "coverage_estimate_pct": 100},
+      {"layer": "backend.core", "modules": 2, "tested_modules": 1, "test_files": ["test_lark_permission"], "coverage_estimate_pct": 50},
+      {"layer": "backend.models", "modules": 1, "tested_modules": 0, "test_files": [], "coverage_estimate_pct": 0},
+      {"layer": "frontend (apps/web + packages/*)", "modules": "众多", "tested_modules": 0, "test_files": [], "coverage_estimate_pct": 0}
+    ]
+  },
+  "tested_modules_detail": [
+    {"module": "backend.services.task_service", "files": ["test_api_tasks.py", "test_task_service.py"]},
+    {"module": "backend.services.plan_service", "files": ["test_plan_service.py", "test_project_groups.py"]},
+    {"module": "backend.services.workflow_engine", "files": ["test_workflow_engine.py", "test_git_merge_node.py"]},
+    {"module": "backend.services.schedule_service", "files": ["test_schedule_service.py"]},
+    {"module": "backend.services.kanban_service", "files": ["test_kanban.py"]},
+    {"module": "backend.services.work_item_service", "files": ["test_work_item_service.py"]},
+    {"module": "backend.services.project_group_service", "files": ["test_project_groups.py"]},
+    {"module": "backend.services.ws_hub", "files": ["test_ws_hub.py"]},
+    {"module": "backend.core.dependencies", "files": ["test_lark_permission.py"]},
+    {"module": "backend.runtime.git_utils", "files": ["test_git_config.py", "test_git_merge_node.py"]},
+    {"module": "backend.db.engine", "files": ["test_db_init.py"]},
+    {"module": "backend.main:app", "files": ["test_api_tasks.py", "test_kanban.py", "test_projects_chat_count.py"]}
+  ],
+  "coverage_gaps": [
+    {"module": "backend.services.auth_service", "reason": "JWT 登录 / 刷新 / OAuth 流程缺直接单元测试", "priority": "high"},
+    {"module": "backend.services.approval_service", "reason": "审批生命周期未覆盖", "priority": "high"},
+    {"module": "backend.services.plan_executor", "reason": "Plan 异步执行/恢复/失败重试无单测", "priority": "high"},
+    {"module": "backend.services.lark_listener / lark_bridge / message_handler / card_action_handler / card_builder", "reason": "Lark 桥接整链缺单测，仅 tide_ws 时代旧测试", "priority": "high"},
+    {"module": "backend.services.event_emitter", "reason": "事件发射 / DB 写入路径缺单测", "priority": "medium"},
+    {"module": "backend.services.hook_engine", "reason": "Hook 触发 / security alert 缺单测", "priority": "medium"},
+    {"module": "backend.services.knowledge_service", "reason": "知识库读取/生成路径缺单测", "priority": "medium"},
+    {"module": "backend.services.security_scanner / rule_service / skill_service", "reason": "安全 / 规则 / 技能服务缺单测", "priority": "medium"},
+    {"module": "backend.services.cost_service", "reason": "tiktoken 计费路径缺单测", "priority": "low"},
+    {"module": "backend.services.conversation_service / chat_state / archive_service", "reason": "会话状态/归档逻辑缺单测", "priority": "medium"},
+    {"module": "backend.services.project_discovery / session_discovery / a2a_discovery", "reason": "扫描/发现服务缺单测", "priority": "medium"},
+    {"module": "backend.api.* (26/30 路由)", "reason": "auth/admin/agents/approvals/conversations/dashboard/events/files/git_audit/hooks/knowledge/lark_*/plans/projects/project_groups/project_members/remote_agents/rules/schedules/security/sessions/skills/versions/work_items/workflows/ws 等路由无端到端测试", "priority": "high"},
+    {"module": "frontend packages/*", "reason": "无 jest/vitest 配置，前端组件/hook 完全无单测", "priority": "high"},
+    {"module": "a2a-bridge/", "reason": "独立 FastAPI 服务无单测", "priority": "medium"}
+  ],
+  "run_commands": [
+    {"name": "运行所有后端测试", "cmd": "pytest backend/tests -q"},
+    {"name": "单文件运行", "cmd": "pytest backend/tests/test_workflow_engine.py -q"},
+    {"name": "前端 lint（无单测）", "cmd": "yarn lint"}
+  ],
+  "ci": {
+    "config_files_found": [],
+    "notes": "仓库中未发现 GitHub Actions / GitLab CI / 其他 CI 配置文件。"
+  }
+}

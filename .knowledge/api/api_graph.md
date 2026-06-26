@@ -1,8 +1,8 @@
 # API 接口图谱
 
-> 生成时间: 2026-06-24T02:53:15Z | Router: 26 | Endpoint: 188
+> 生成时间: 2026-06-26T02:33:51Z | Router: 28 | Endpoint: 205
 
-> 方法分布: `DELETE`: 19 | `GET`: 87 | `PATCH`: 3 | `POST`: 63 | `PUT`: 16
+> 方法分布: `DELETE`: 19 | `GET`: 96 | `PATCH`: 3 | `POST`: 70 | `PUT`: 17
 
 ## admin
 
@@ -106,6 +106,40 @@
 | 方法 | 路径 | 函数 | 描述 |
 |------|------|------|------|
 | **GET** | `/api/events` | `get_events` | 获取事件列表（用于重连后补偿） |
+
+## files
+
+- **prefix**: `/api/files`
+- **tags**: files
+- **file**: `backend/api/files.py`
+
+| 方法 | 路径 | 函数 | 描述 |
+|------|------|------|------|
+| **GET** | `/api/files/content` | `read_file_content` | 读取本地文件内容并返回纯文本。 |
+| **GET** | `/api/files/tree` | `list_directory_tree` | 列出目录树，返回目录结构 JSON。 |
+| **PUT** | `/api/files/content` | `save_file_content` | 保存文件内容。 |
+| **GET** | `/api/files/diff` | `get_diff` | 获取 unified diff。不传 ref 时返回工作区未提交的 diff。 |
+| **GET** | `/api/files/conflict-detail` | `get_conflict_detail` | 获取冲突文件详情（base/ours/theirs/conflict_markers）。 |
+| **POST** | `/api/files/resolve-conflict` | `resolve_conflict` | 解决单个文件冲突：写入 resolved_content 并 git add。 |
+| **POST** | `/api/files/ai-resolve-conflict` | `ai_resolve_conflict` | AI 解决冲突：通过 Agent CLI 分析三方内容并返回合并结果。 |
+
+## git_audit
+
+- **prefix**: `/api/projects`
+- **tags**: git-audit
+- **file**: `backend/api/git_audit.py`
+- **service**: `backend.services.session_discovery`
+
+| 方法 | 路径 | 函数 | 描述 |
+|------|------|------|------|
+| **GET** | `/api/projects/{project_id}/git/branches` | `get_project_branches` | 获取项目的 Git 分支列表。 |
+| **GET** | `/api/projects/{project_id}/git/commits` | `get_project_commits` | 获取项目的 commit 列表（含修改文件）。展示项目级全量数据，不做用户过滤。 |
+| **GET** | `/api/projects/{project_id}/git/changes` | `get_project_changes` | 按维度聚合变更统计。 |
+| **GET** | `/api/projects/{project_id}/git/uncommitted` | `get_uncommitted_changes` | 获取项目当前工作区未提交的改动（包含未暂存和已暂存文件）。 |
+| **GET** | `/api/projects/{project_id}/git/diff/{commit_hash}` | `get_commit_diff` | 获取特定 commit 的完整 diff。 |
+| **POST** | `/api/projects/{project_id}/git/commit` | `git_commit_files` | 提交文件：git add <files> && git commit -m <message>。 |
+| **POST** | `/api/projects/{project_id}/git/discard` | `git_discard_files` | 撤销文件修改：对 tracked 文件用 git restore，对 untracked 文件删除。 |
+| **POST** | `/api/projects/{project_id}/git/ignore` | `git_ignore_files` | 将文件路径追加到 .gitignore。 |
 
 ## hooks
 
@@ -352,6 +386,8 @@
 | **POST** | `/api/sessions/{session_id}/archive` | `archive_session` | 归档会话（软操作，不删除任何文件/数据）。 |
 | **POST** | `/api/sessions/{session_id}/unarchive` | `unarchive_session` | 取消会话归档。 |
 | **GET** | `/api/sessions/{session_id}/artifacts` | `get_session_artifacts` | 汇总会话关联产物。 |
+| **POST** | `/api/sessions/{session_id}/usage` | `report_session_usage` | 上报单个会话的 token 消耗数据（支持累加）。 |
+| **POST** | `/api/sessions/batch` | `report_usage_batch` | 批量上报多个会话的 token 消耗数据。 |
 
 ## skills
 

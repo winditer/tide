@@ -963,6 +963,7 @@ async def git_log_files(
     since: str | None = None,
     until: str | None = None,
     all_branches: bool = False,
+    author: str | None = None,
 ) -> tuple[int, str]:
     """获取 commit 列表及每个 commit 修改的文件（含增删行数）。
 
@@ -970,6 +971,7 @@ async def git_log_files(
     numstat 每行格式：additions\tdeletions\tpath（二进制文件为 -\t-\tpath）。
 
     当 all_branches=True 时添加 ``--all`` 以搜索所有分支（用于会话级跨分支查询）。
+    当 author 非空时添加 ``--author=<author>`` 过滤提交作者。
     """
     args: list[str] = [
         "log",
@@ -983,6 +985,8 @@ async def git_log_files(
         args.append(f"--since={since}")
     if until:
         args.append(f"--until={until}")
+    if author:
+        args.append(f"--author={author}")
     if branch:
         args.append(branch)
     return await git_command(Path(cwd), args, timeout=30)

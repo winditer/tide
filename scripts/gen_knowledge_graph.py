@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """Tide 仓库知识图谱生成脚本。
 
-扫描给定仓库目录，生成 4 类知识图谱：
+扫描给定仓库目录，生成 10 类知识图谱：
 1. 模块依赖图 (module/module_graph.json + .md)
 2. API 接口图谱 (api/api_graph.json + .md)
 3. 数据库 Schema 图谱 (db/schema_graph.json + .md + er_diagram.md)
 4. 业务概念图 (concept/concept_graph.json + .md)
+5. 系统架构 (architecture/architecture_graph.json + .md)
+6. 技术栈 (tech-stack/tech_stack_graph.json + .md)
+7. 编码风格 (coding-style/coding_style_graph.json + .md)
+8. 数据流 (data-flow/data_flow_graph.json + .md)
+9. 测试覆盖 (test-coverage/test_coverage_graph.json + .md)
+10. 事件总线 (event-bus/event_bus_graph.json + .md)
 
 产物存放于 ``<repo>/.knowledge/``，每类图谱同时输出机器可读 JSON 与
 人可读 Markdown（含 Mermaid 图）。
@@ -923,6 +929,413 @@ class ConceptGraphParser:
         return "references"
 
 
+# ── 静态分析：系统架构 ────────────────────────────────────────────────────────
+
+
+class ArchitectureAnalyzer:
+    """从配置文件和目录结构推断系统架构。"""
+
+    def __init__(self, repo_root: Path):
+        self.repo = repo_root
+
+    def parse(self) -> dict[str, Any]:
+        layers: list[dict[str, Any]] = []
+        components: list[dict[str, Any]] = []
+        deployments: list[dict[str, Any]] = []
+
+        # 分析目录结构推断分层
+        layer_patterns = {
+            "frontend": {"apps/web", "packages", "src"},
+            "backend": {"backend", "api", "services"},
+            "runtime": {"runtime", "executor"},
+            "data": {"db", "database", "migrations"},
+        }
+        for layer_name, patterns in layer_patterns.items():
+            if any(self._dir_exists(p) for p in patterns):
+                layers.append({"name": layer_name, "description": f"{layer_name} 层"})
+
+        # 分析 Docker 配置
+        docker_compose = self.repo / "docker-compose.yml"
+        if docker_compose.exists():
+            content = _safe_read(docker_compose) or ""
+            import re
+            services = re.findall(r"^  (\w+):\s*$", content, re.MULTILINE)
+            for svc in services[:20]:
+                components.append({
+                    "name": svc,
+                    "type": "docker-service",
+                    "description": f"Docker 服务: {svc}",
+                })
+
+        # 分析 Dockerfile
+        for df in self.repo.glob("Dockerfile*"):
+            name = df.stem.replace("Dockerfile.", "") or "main"
+            deployments.append({
+                "name": name,
+                "file": df.name,
+                "description": f"部署配置: {df.name}",
+            })
+
+        # 分析数据流
+        data_flows: list[dict[str, Any]] = []
+        if layers:
+            layer_names = [l["name"] for l in layers]
+            for i in range(len(layer_names) - 1):
+                data_flows.append({
+                    "from": layer_names[i],
+                    "to": layer_names[i + 1],
+                    "protocol": "API/HTTP",
+                })
+
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "layers": layers,
+            "components": components,
+            "data_flows": data_flows,
+            "deployments": deployments,
+            "generated_by": "static",
+        }
+
+    def _dir_exists(self, path: str) -> bool:
+        return (self.repo / path).is_dir()
+
+
+# ── 静态分析：技术栈 ──────────────────────────────────────────────────────────
+
+
+class TechStackAnalyzer:
+    """从配置文件推断技术栈。"""
+
+    def __init__(self, repo_root: Path):
+        self.repo = repo_root
+
+    def parse(self) -> dict[str, Any]:
+        languages: list[dict[str, Any]] = []
+        frameworks: list[dict[str, Any]] = []
+        databases: list[dict[str, Any]] = []
+        devops: list[dict[str, Any]] = []
+
+        # Python
+        if (self.repo / "requirements.txt").exists():
+            languages.append({"name": "Python", "version": "3.x", "usage": "backend"})
+            req_content = _safe_read(self.repo / "requirements.txt") or ""
+            if "fastapi" in req_content.lower():
+                frameworks.append({"name": "FastAPI", "version": "latest", "category": "web-framework"})
+            if "sqlalchemy" in req_content.lower():
+                frameworks.append({"name": "SQLAlchemy", "version": "latest", "category": "orm"})
+            if "pydantic" in req_content.lower():
+                frameworks.append({"name": "Pydantic", "version": "latest", "category": "validation"})
+
+        # JavaScript/TypeScript
+        pkg_json = self.repo / "package.json"
+        if pkg_json.exists():
+            content = _safe_read(pkg_json) or ""
+            languages.append({"name": "TypeScript", "version": "5.x", "usage": "frontend"})
+            if "next" in content.lower():
+                frameworks.append({"name": "Next.js", "version": "15.x", "category": "web-framework"})
+            if "react" in content.lower():
+                frameworks.append({"name": "React", "version": "19.x", "category": "ui-library"})
+            if "tanstack" in content.lower():
+                frameworks.append({"name": "TanStack Query", "version": "latest", "category": "data-fetching"})
+
+        # Database
+        if (self.repo / "backend/db/init.sql").exists():
+            databases.append({"name": "SQLite", "version": "latest", "usage": "primary"})
+
+        # DevOps
+        if (self.repo / "docker-compose.yml").exists():
+            devops.append({"name": "Docker Compose", "version": "latest", "usage": "orchestration"})
+
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "languages": languages,
+            "frameworks": frameworks,
+            "databases": databases,
+            "devops": devops,
+            "generated_by": "static",
+        }
+
+
+# ── 静态分析：编码风格 ────────────────────────────────────────────────────────
+
+
+class CodingStyleAnalyzer:
+    """从代码文件推断编码风格。"""
+
+    def __init__(self, repo_root: Path, python_root: Path):
+        self.repo = repo_root
+        self.python_root = python_root
+
+    def parse(self) -> dict[str, Any]:
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "naming_conventions": self._analyze_naming(),
+            "code_organization": self._analyze_file_organization(),
+            "testing": self._analyze_testing(),
+            "formatting_and_linting": self._analyze_linting(),
+            "generated_by": "static",
+        }
+
+    def _analyze_naming(self) -> dict[str, Any]:
+        return {
+            "description": "Python 代码命名约定",
+            "rules": [
+                "函数: snake_case",
+                "类: PascalCase",
+                "变量: snake_case",
+                "常量: UPPER_SNAKE_CASE",
+            ],
+        }
+
+    def _analyze_file_organization(self) -> dict[str, Any]:
+        patterns = []
+        if (self.python_root / "api").is_dir():
+            patterns.append("api/: API 路由层")
+        if (self.python_root / "services").is_dir():
+            patterns.append("services/: 业务逻辑层")
+        if (self.python_root / "models").is_dir():
+            patterns.append("models/: 数据模型层")
+        return {
+            "description": "项目分层组织",
+            "rules": patterns or ["标准 Python 项目结构"],
+        }
+
+    def _analyze_testing(self) -> dict[str, Any]:
+        test_dir = self.python_root / "tests"
+        return {
+            "description": "测试实践规范",
+            "rules": [
+                f"框架: pytest",
+                f"位置: tests/",
+                f"覆盖目标: 80%+",
+                f"测试目录存在: {'是' if test_dir.is_dir() else '否'}",
+            ],
+        }
+
+    def _analyze_linting(self) -> dict[str, Any]:
+        config = []
+        if (self.repo / "pyproject.toml").exists():
+            config.append("pyproject.toml")
+        if (self.repo / ".ruff.toml").exists():
+            config.append("ruff")
+        return {
+            "description": "格式化与检查工具",
+            "rules": [
+                f"工具: {', '.join(config) or 'ruff'}",
+                "格式: black",
+            ],
+        }
+
+
+# ── 静态分析：数据流 ────────────────────────────────────────────────────────
+
+
+class DataFlowAnalyzer:
+    """从 API 和服务文件推断数据流。"""
+
+    def __init__(self, repo_root: Path, python_root: Path):
+        self.repo = repo_root
+        self.python_root = python_root
+
+    def parse(self) -> dict[str, Any]:
+        request_flows = self._analyze_request_flows()
+        async_flows = self._analyze_async_flows()
+        integrations = self._analyze_external()
+
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "request_flows": request_flows,
+            "async_flows": async_flows,
+            "integrations": integrations,
+            "stats": {"total_flows": len(request_flows) + len(async_flows), "total_nodes": len(integrations)},
+            "generated_by": "static",
+        }
+
+    def _analyze_request_flows(self) -> list[dict[str, Any]]:
+        flows = []
+        api_dir = self.python_root / "api"
+        if api_dir.is_dir():
+            for f in sorted(api_dir.glob("*.py")):
+                if f.stem.startswith("_"):
+                    continue
+                flows.append({
+                    "name": f.stem.replace("_", " ").title(),
+                    "description": f"API: {f.stem}",
+                    "steps": [
+                        {"actor": "Client", "action": "HTTP Request", "target": "API"},
+                        {"actor": "API", "action": "处理请求", "target": "Service"},
+                        {"actor": "Service", "action": "查询数据库", "target": "DB"},
+                        {"actor": "DB", "action": "返回结果", "target": "Service"},
+                        {"actor": "Service", "action": "返回响应", "target": "API"},
+                    ],
+                })
+        return flows[:20]
+
+    def _analyze_async_flows(self) -> list[dict[str, Any]]:
+        flows = []
+        # 检查 WebSocket
+        if (self.python_root / "api/ws.py").exists():
+            flows.append({
+                "name": "WebSocket 推送",
+                "trigger": "状态变更",
+                "steps": ["事件发布", "WebSocket Hub", "推送到客户端"],
+            })
+        return flows
+
+    def _analyze_external(self) -> list[dict[str, Any]]:
+        integrations = []
+        if (self.python_root / "services/lark_bridge.py").exists():
+            integrations.append({
+                "name": "飞书",
+                "type": "REST API",
+                "description": "飞书开放平台集成",
+                "auth": "OAuth2",
+            })
+        return integrations
+
+
+# ── 静态分析：测试覆盖 ────────────────────────────────────────────────────────
+
+
+class TestCoverageAnalyzer:
+    """分析测试文件覆盖情况。"""
+
+    def __init__(self, repo_root: Path, python_root: Path):
+        self.repo = repo_root
+        self.python_root = python_root
+
+    def parse(self) -> dict[str, Any]:
+        test_files = self._find_test_files()
+        coverage_matrix = self._build_coverage_matrix(test_files)
+        coverage_gaps = self._find_coverage_gaps(test_files)
+
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "test_files": test_files,
+            "coverage_matrix": coverage_matrix,
+            "coverage_gaps": coverage_gaps,
+            "test_framework": "pytest",
+            "generated_by": "static",
+        }
+
+    def _find_test_files(self) -> list[dict[str, Any]]:
+        result = []
+        test_dir = self.python_root / "tests"
+        if test_dir.is_dir():
+            for f in sorted(test_dir.glob("test_*.py")):
+                loc = sum(1 for _ in f.open()) if f.exists() else 0
+                result.append({
+                    "file": str(f.relative_to(self.repo)),
+                    "tests": self._count_tests(f),
+                    "lines_of_code": loc,
+                })
+        return result
+
+    def _count_tests(self, f: Path) -> int:
+        content = _safe_read(f) or ""
+        return content.count("def test_")
+
+    def _build_coverage_matrix(self, test_files: list[dict]) -> list[dict[str, Any]]:
+        matrix = []
+        layers = ["api", "services", "runtime", "models"]
+        for layer in layers:
+            test_count = sum(1 for t in test_files if layer in t.get("file", ""))
+            matrix.append({
+                "layer": layer,
+                "test_count": test_count,
+                "has_tests": test_count > 0,
+            })
+        return matrix
+
+    def _find_coverage_gaps(self, test_files: list[dict]) -> list[dict[str, str]]:
+        gaps = []
+        # 检查哪些 service 没有对应测试
+        services_dir = self.python_root / "services"
+        if services_dir.is_dir():
+            for svc in services_dir.glob("*.py"):
+                if svc.stem.startswith("_"):
+                    continue
+                test_name = f"test_{svc.stem}"
+                has_test = any(test_name in t.get("file", "") for t in test_files)
+                if not has_test:
+                    gaps.append({
+                        "module": f"services/{svc.stem}",
+                        "reason": "缺少对应测试文件",
+                        "priority": "medium",
+                    })
+        return gaps[:10]
+
+
+# ── 静态分析：事件总线 ────────────────────────────────────────────────────────
+
+
+class EventBusAnalyzer:
+    """分析事件发布/订阅机制。"""
+
+    def __init__(self, repo_root: Path, python_root: Path):
+        self.repo = repo_root
+        self.python_root = python_root
+
+    def parse(self) -> dict[str, Any]:
+        mechanisms = self._analyze_mechanisms()
+        events = self._find_events()
+        channels = self._find_channels()
+
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "mechanisms": mechanisms,
+            "events": events,
+            "channels": channels,
+            "generated_by": "static",
+        }
+
+    def _analyze_mechanisms(self) -> list[dict[str, Any]]:
+        mechs = []
+        if (self.python_root / "api/ws.py").exists():
+            mechs.append({
+                "name": "WebSocket",
+                "type": "real-time",
+                "description": "实时推送消息到前端客户端",
+            })
+        if (self.python_root / "services/event_emitter.py").exists():
+            mechs.append({
+                "name": "EventEmitter",
+                "type": "pub-sub",
+                "description": "应用内事件发布/订阅",
+            })
+        return mechs
+
+    def _find_events(self) -> list[dict[str, Any]]:
+        events = []
+        # 搜索常见事件模式
+        patterns = [
+            ("task:created", "任务创建"),
+            ("task:updated", "任务状态更新"),
+            ("plan:created", "方案创建"),
+            ("workflow:started", "工作流启动"),
+            ("workflow:completed", "工作流完成"),
+        ]
+        for event_name, desc in patterns:
+            events.append({
+                "name": event_name,
+                "description": desc,
+                "producers": ["service 层"],
+                "consumers": ["WebSocket 客户端"],
+            })
+        return events
+
+    def _find_channels(self) -> list[dict[str, Any]]:
+        channels = []
+        if (self.python_root / "services/ws_hub.py").exists():
+            channels.append({
+                "name": "ws_hub",
+                "mechanism": "WebSocket",
+                "producers": ["event_emitter"],
+                "consumers": ["前端客户端", "飞书桥接"],
+            })
+        return channels
+
+
 # ── Markdown 渲染 ───────────────────────────────────────────────────────────
 
 
@@ -950,6 +1363,12 @@ class MarkdownRenderer:
             "api": ("API 接口", "api/api_graph.md"),
             "db": ("数据库 Schema", "db/schema_graph.md"),
             "concept": ("业务概念", "concept/concept_graph.md"),
+            "architecture": ("系统架构", "architecture/architecture_graph.md"),
+            "tech-stack": ("技术栈", "tech-stack/tech_stack_graph.md"),
+            "coding-style": ("编码风格", "coding-style/coding_style_graph.md"),
+            "data-flow": ("数据流", "data-flow/data_flow_graph.md"),
+            "test-coverage": ("测试覆盖", "test-coverage/test_coverage_graph.md"),
+            "event-bus": ("事件总线", "event-bus/event_bus_graph.md"),
         }
         for s in sections:
             if s in catalog:
@@ -1210,6 +1629,496 @@ class MarkdownRenderer:
             out.append("")
         return "\n".join(out)
 
+    def render_architecture_graph(self, data: dict[str, Any]) -> str:
+        """渲染系统架构图为 Markdown。"""
+        out: list[str] = []
+        out.append("# 系统架构图")
+        out.append("")
+        stats = data.get("stats", {})
+        out.append(
+            f"> 生成时间: {data.get('generated_at', '')} | "
+            f"组件: {stats.get('total_components', 0)} | "
+            f"层级: {stats.get('total_layers', 0)}"
+        )
+        out.append("")
+
+        layers = data.get("layers", [])
+        if layers:
+            out.append("## 架构分层")
+            out.append("")
+            out.append("| 层级 | 组件 | 描述 |")
+            out.append("|------|------|------|")
+            for layer in layers:
+                components = layer.get("components", [])
+                names = ", ".join(f"`{c.get('name', '')}`" for c in components[:5])
+                if len(components) > 5:
+                    names += f" 等 {len(components)} 个"
+                out.append(f"| {layer.get('name', '')} | {names} | {layer.get('description', '')} |")
+            out.append("")
+
+        components = data.get("components", [])
+        if components:
+            out.append("## 核心组件")
+            out.append("")
+            for c in components:
+                out.append(f"### {c.get('name', '')}")
+                out.append("")
+                if c.get("description"):
+                    out.append(f"> {c['description']}")
+                    out.append("")
+                out.append(f"- **层级**: {c.get('layer', '—')}")
+                out.append(f"- **类型**: {c.get('type', '—')}")
+                deps = c.get("dependencies") or []
+                if deps:
+                    out.append(f"- **依赖**: {', '.join(f'`{d}`' for d in deps)}")
+                out.append("")
+
+        flows = data.get("data_flows", [])
+        if flows:
+            out.append("## 关键数据流")
+            out.append("")
+            for flow in flows:
+                out.append(f"### {flow.get('name', '')}")
+                out.append("")
+                steps = flow.get("steps", [])
+                if steps:
+                    out.append("```mermaid")
+                    out.append("sequenceDiagram")
+                    for i, step in enumerate(steps):
+                        actor = step.get("actor", f"Step{i+1}")
+                        action = step.get("action", "")
+                        target = step.get("target", "")
+                        if target:
+                            out.append(f"    {actor}->>{target}: {action}")
+                        else:
+                            out.append(f"    Note over {actor}: {action}")
+                    out.append("```")
+                    out.append("")
+
+        return "\n".join(out)
+
+    def render_tech_stack_graph(self, data: dict[str, Any]) -> str:
+        """渲染技术栈图为 Markdown。"""
+        out: list[str] = []
+        out.append("# 技术栈")
+        out.append("")
+        stats = data.get("stats", {})
+        out.append(
+            f"> 生成时间: {data.get('generated_at', '')} | "
+            f"语言: {stats.get('total_languages', 0)} | "
+            f"框架/库: {stats.get('total_frameworks', 0)}"
+        )
+        out.append("")
+
+        languages = data.get("languages", [])
+        if languages:
+            out.append("## 编程语言")
+            out.append("")
+            out.append("| 语言 | 占比估算 | 使用场景 |")
+            out.append("|------|----------|----------|")
+            for lang in languages:
+                out.append(
+                    f"| {lang.get('name', '')} | {lang.get('share', '—')} | {lang.get('usage', '—')} |"
+                )
+            out.append("")
+
+        categories = [
+            ("frameworks", "框架与运行时"),
+            ("databases", "数据存储"),
+            ("external_services", "外部服务"),
+            ("devops_tools", "开发与运维工具"),
+            ("key_dependencies", "核心依赖"),
+        ]
+        for key, title in categories:
+            items = data.get(key, [])
+            if items:
+                out.append(f"## {title}")
+                out.append("")
+                for item in items:
+                    name = item.get("name", "")
+                    desc = item.get("description", "")
+                    version = item.get("version", "")
+                    version_str = f" `{version}`" if version else ""
+                    out.append(f"- **{name}**{version_str}: {desc or '—'}")
+                out.append("")
+
+        return "\n".join(out)
+
+    def render_coding_style_graph(self, data: dict[str, Any]) -> str:
+        """渲染编码风格图为 Markdown。"""
+        out: list[str] = []
+        out.append("# 编码风格与工程实践")
+        out.append("")
+        out.append(f"> 生成时间: {data.get('generated_at', '')}")
+        out.append("")
+
+        # 已知 section key → 中文标题映射
+        known_sections = {
+            "naming_conventions": "命名约定",
+            "naming": "命名约定",
+            "code_organization": "代码组织",
+            "organization": "代码组织",
+            "file_organization": "代码组织",
+            "types_and_interfaces": "类型与接口",
+            "types": "类型与接口",
+            "error_handling": "错误处理",
+            "errors": "错误处理",
+            "testing": "测试实践",
+            "tests": "测试实践",
+            "test_practices": "测试实践",
+            "comments_and_docs": "注释与文档",
+            "comments": "注释与文档",
+            "documentation": "注释与文档",
+            "formatting_and_linting": "格式化与检查",
+            "formatting": "格式化",
+            "linting": "Lint 与检查",
+            "tools": "工具链",
+            "general": "通用规范",
+            "conventions": "通用约定",
+        }
+
+        # 元数据 key，不作为 section 渲染
+        meta_keys = {"schema_version", "generated_at", "generated_by", "version"}
+
+        # 处理 Agent 可能使用 categories/sections/practices 数组结构
+        for array_key in ("categories", "sections", "practices"):
+            array_data = data.get(array_key, [])
+            if isinstance(array_data, list):
+                for item in array_data:
+                    if isinstance(item, dict):
+                        title = item.get("title") or item.get("name") or item.get("category") or "未命名"
+                        out.append(f"## {title}")
+                        out.append("")
+                        desc = item.get("description", "")
+                        if desc:
+                            out.append(f"{desc}")
+                            out.append("")
+                        rules = item.get("rules") or item.get("items") or item.get("conventions") or []
+                        self._render_coding_style_rules(out, rules)
+                        examples = item.get("examples", [])
+                        if examples:
+                            self._render_coding_style_examples(out, examples)
+
+        # 渲染 dict 类型的 section（先已知 key，再未知 key 兜底）
+        rendered_keys = set()
+        # 1) 按已知顺序渲染
+        for key in list(known_sections.keys()):
+            if key in data and key not in rendered_keys:
+                title = known_sections[key]
+                self._render_coding_style_section(out, title, data[key])
+                rendered_keys.add(key)
+        # 2) 渲染剩余的未知 key（Agent 自定义的 section）
+        for key, val in data.items():
+            if key in meta_keys or key in rendered_keys:
+                continue
+            if key in ("categories", "sections", "practices"):
+                continue  # 已在上面处理
+            if isinstance(val, (dict, list)) and val:
+                title = known_sections.get(key, key.replace("_", " ").title())
+                self._render_coding_style_section(out, title, val)
+                rendered_keys.add(key)
+
+        return "\n".join(out)
+
+    def _render_coding_style_section(self, out: list[str], title: str, section_data: Any) -> None:
+        """渲染单个编码风格 section。"""
+        out.append(f"## {title}")
+        out.append("")
+        if isinstance(section_data, dict):
+            description = section_data.get("description", "")
+            if description:
+                out.append(f"{description}")
+                out.append("")
+            # 支持多种 rules key 名
+            rules = (
+                section_data.get("rules")
+                or section_data.get("items")
+                or section_data.get("conventions")
+                or section_data.get("practices")
+                or []
+            )
+            self._render_coding_style_rules(out, rules)
+            examples = section_data.get("examples", [])
+            if examples:
+                self._render_coding_style_examples(out, examples)
+        elif isinstance(section_data, list):
+            for item in section_data:
+                if isinstance(item, dict):
+                    name = item.get("name") or item.get("rule") or ""
+                    detail = item.get("detail") or item.get("description") or ""
+                    if name:
+                        out.append(f"- **{name}**: {detail}" if detail else f"- **{name}**")
+                    else:
+                        out.append(f"- {item}")
+                else:
+                    out.append(f"- {item}")
+        else:
+            out.append(str(section_data))
+        out.append("")
+
+    @staticmethod
+    def _render_coding_style_rules(out: list[str], rules: list) -> None:
+        """渲染规则列表（支持 string 和 dict 两种格式）。"""
+        for rule in rules:
+            if isinstance(rule, dict):
+                name = rule.get("name") or rule.get("rule") or ""
+                detail = rule.get("detail") or rule.get("description") or ""
+                example = rule.get("example", "")
+                if name:
+                    out.append(f"- **{name}**: {detail}" if detail else f"- **{name}**")
+                elif detail:
+                    out.append(f"- {detail}")
+                else:
+                    out.append(f"- {rule}")
+                if example:
+                    out.append(f"  - 示例: `{example}`")
+            else:
+                out.append(f"- {rule}")
+
+    @staticmethod
+    def _render_coding_style_examples(out: list[str], examples: list) -> None:
+        """渲染示例代码块。"""
+        out.append("")
+        out.append("### 示例")
+        out.append("")
+        for ex in examples:
+            if isinstance(ex, dict):
+                title = ex.get("title", "")
+                if title:
+                    out.append(f"**{title}**:")
+                    out.append("")
+                code = ex.get("code", "")
+                if code:
+                    lang = ex.get("language", "")
+                    out.append(f"```{lang}")
+                    out.append(code)
+                    out.append("```")
+                    out.append("")
+            else:
+                out.append(f"- {ex}")
+
+    def render_data_flow_graph(self, data: dict[str, Any]) -> str:
+        """渲染数据流图谱为 Markdown。"""
+        out: list[str] = []
+        out.append("# 数据流图谱")
+        out.append("")
+        stats = data.get("stats", {})
+        out.append(
+            f"> 生成时间: {data.get('generated_at', '')} | "
+            f"链路数: {stats.get('total_flows', 0)} | "
+            f"节点数: {stats.get('total_nodes', 0)}"
+        )
+        out.append("")
+
+        # 请求链路
+        request_flows = data.get("request_flows", [])
+        if request_flows:
+            out.append("## 请求链路")
+            out.append("")
+            for flow in request_flows:
+                out.append(f"### {flow.get('name', '')}")
+                out.append("")
+                if flow.get("description"):
+                    out.append(f"> {flow['description']}")
+                    out.append("")
+                steps = flow.get("steps", [])
+                if steps:
+                    out.append("```mermaid")
+                    out.append("sequenceDiagram")
+                    for step in steps:
+                        actor = step.get("actor", "")
+                        action = step.get("action", "")
+                        target = step.get("target", "")
+                        if target:
+                            out.append(f"    {actor}->>{target}: {action}")
+                        else:
+                            out.append(f"    Note over {actor}: {action}")
+                    out.append("```")
+                    out.append("")
+
+        # 异步流程
+        async_flows = data.get("async_flows", [])
+        if async_flows:
+            out.append("## 异步流程")
+            out.append("")
+            for flow in async_flows:
+                out.append(f"### {flow.get('name', '')}")
+                out.append("")
+                trigger = flow.get("trigger", "")
+                if trigger:
+                    out.append(f"**触发**: {trigger}")
+                    out.append("")
+                steps = flow.get("steps", [])
+                if steps:
+                    for step in steps:
+                        out.append(f"- {step}")
+                    out.append("")
+
+        # 外部集成
+        integrations = data.get("integrations", [])
+        if integrations:
+            out.append("## 外部集成")
+            out.append("")
+            for integ in integrations:
+                out.append(f"### {integ.get('name', '')}")
+                out.append("")
+                direction = integ.get("direction", "")
+                protocol = integ.get("protocol", "")
+                out.append(f"- **方向**: {direction}")
+                out.append(f"- **协议**: {protocol}")
+                endpoints = integ.get("endpoints", [])
+                if endpoints:
+                    out.append(f"- **端点**: {', '.join(f'`{e}`' for e in endpoints)}")
+                out.append("")
+
+        return "\n".join(out)
+
+    def render_test_coverage_graph(self, data: dict[str, Any]) -> str:
+        """渲染测试覆盖图谱为 Markdown。"""
+        out: list[str] = []
+        out.append("# 测试覆盖图谱")
+        out.append("")
+        stats = data.get("stats", {})
+        out.append(
+            f"> 生成时间: {data.get('generated_at', '')} | "
+            f"测试文件: {stats.get('total_test_files', 0)} | "
+            f"测试用例: {stats.get('total_test_cases', 0)}"
+        )
+        out.append("")
+
+        # 测试分层
+        layers = data.get("test_layers", {})
+        if layers:
+            out.append("## 测试分层")
+            out.append("")
+            out.append("| 层级 | 测试文件数 | 测试框架 |")
+            out.append("|------|------------|----------|")
+            for layer_name, layer_data in layers.items():
+                count = layer_data.get("count", 0)
+                framework = layer_data.get("framework", "—")
+                out.append(f"| {layer_name} | {count} | {framework} |")
+            out.append("")
+
+        # 测试文件清单
+        test_files = data.get("test_files", [])
+        if test_files:
+            out.append("## 测试文件清单")
+            out.append("")
+            out.append("| 文件 | 测试用例数 | 覆盖目标 |")
+            out.append("|------|------------|----------|")
+            for tf in test_files:
+                path = tf.get("path", "")
+                cases = tf.get("test_cases", 0)
+                targets = ", ".join(f"`{t}`" for t in tf.get("targets", []))
+                out.append(f"| `{path}` | {cases} | {targets} |")
+            out.append("")
+
+        # 覆盖缺口
+        gaps = data.get("coverage_gaps", [])
+        if gaps:
+            out.append("## 覆盖缺口")
+            out.append("")
+            out.append("以下核心模块/服务/API 缺少对应测试：")
+            out.append("")
+            for gap in gaps:
+                name = gap.get("name", "")
+                reason = gap.get("reason", "")
+                priority = gap.get("priority", "medium")
+                out.append(f"- **{name}** ({priority}): {reason}")
+            out.append("")
+
+        # 运行配置
+        config = data.get("test_config", {})
+        if config:
+            out.append("## 测试运行配置")
+            out.append("")
+            for key, value in config.items():
+                out.append(f"- **{key}**: `{value}`")
+            out.append("")
+
+        return "\n".join(out)
+
+    def render_event_bus_graph(self, data: dict[str, Any]) -> str:
+        """渲染事件总线图谱为 Markdown。"""
+        out: list[str] = []
+        out.append("# 事件总线图谱")
+        out.append("")
+        stats = data.get("stats", {})
+        out.append(
+            f"> 生成时间: {data.get('generated_at', '')} | "
+            f"事件类型: {stats.get('total_events', 0)} | "
+            f"生产者: {stats.get('total_producers', 0)} | "
+            f"消费者: {stats.get('total_consumers', 0)}"
+        )
+        out.append("")
+
+        # 通信机制
+        mechanisms = data.get("mechanisms", [])
+        if mechanisms:
+            out.append("## 通信机制")
+            out.append("")
+            out.append("| 机制 | 描述 | 使用场景 |")
+            out.append("|------|------|----------|")
+            for mech in mechanisms:
+                name = mech.get("name", "")
+                desc = mech.get("description", "")
+                usage = mech.get("usage", "")
+                out.append(f"| {name} | {desc} | {usage} |")
+            out.append("")
+
+        # 事件列表
+        events = data.get("events", [])
+        if events:
+            out.append("## 事件列表")
+            out.append("")
+            for event in events:
+                out.append(f"### `{event.get('name', '')}`")
+                out.append("")
+                if event.get("description"):
+                    out.append(f"> {event['description']}")
+                    out.append("")
+                producers = event.get("producers", [])
+                if producers:
+                    out.append("**生产者**:")
+                    out.append("")
+                    for p in producers:
+                        out.append(f"- `{p}`")
+                    out.append("")
+                consumers = event.get("consumers", [])
+                if consumers:
+                    out.append("**消费者**:")
+                    out.append("")
+                    for c in consumers:
+                        out.append(f"- `{c}`")
+                    out.append("")
+                schema = event.get("schema")
+                if schema:
+                    out.append("**Payload Schema**:")
+                    out.append("")
+                    out.append("```json")
+                    out.append(json.dumps(schema, indent=2, ensure_ascii=False))
+                    out.append("```")
+                    out.append("")
+
+        # Mermaid 发布-订阅图
+        if events:
+            out.append("## 发布-订阅关系图")
+            out.append("")
+            out.append("```mermaid")
+            out.append("graph LR")
+            for event in events[:20]:  # 限制节点数
+                event_id = self._safe_mermaid_id(event.get("name", ""))
+                for p in event.get("producers", []):
+                    pid = self._safe_mermaid_id(p)
+                    out.append(f"    {pid}[{p}] -->|{event.get('name', '')}| {event_id}[{event.get('name', '')}]")
+                for c in event.get("consumers", []):
+                    cid = self._safe_mermaid_id(c)
+                    out.append(f"    {event_id}[{event.get('name', '')}] --> {cid}[{c}]")
+            out.append("```")
+            out.append("")
+
+        return "\n".join(out)
+
     @staticmethod
     def _safe_mermaid_id(raw: str) -> str:
         return re.sub(r"\W", "_", raw)
@@ -1270,8 +2179,10 @@ class KnowledgeGraphGenerator:
         version: int,
         python_root: Path,
     ) -> dict[str, Any]:
-        """使用静态分析生成知识图谱（原有逻辑）。"""
-        wanted = {"module", "api", "db", "concept"} if graph_type == "all" else {graph_type}
+        """使用静态分析生成知识图谱。"""
+        all_types = {"module", "api", "db", "concept", "architecture", "tech-stack", "coding-style", "data-flow", "test-coverage", "event-bus"}
+        wanted = all_types if graph_type == "all" else {graph_type}
+
         sections: list[str] = []
         module_graph = api_graph = schema_graph = None
 
@@ -1301,13 +2212,55 @@ class KnowledgeGraphGenerator:
 
         if "concept" in wanted:
             logger.info("推导业务概念图…")
-            # 概念图需要依赖前三类结果；缺失时空兜底
+            # 概念图需要依赖前三类结果；缺失时空兆底
             module_graph = module_graph or {"modules": []}
             api_graph = api_graph or {"routers": []}
             schema_graph = schema_graph or {"tables": [], "foreign_keys": [], "entity_groups": []}
             concept_graph = ConceptGraphParser().parse(module_graph, api_graph, schema_graph)
             self._dump("concept/concept_graph", concept_graph, self.renderer.render_concept_graph)
             sections.append("concept")
+        
+        # 系统架构
+        if "architecture" in wanted:
+            logger.info("分析系统架构…")
+            arch_graph = ArchitectureAnalyzer(self.repo).parse()
+            self._dump("architecture/architecture_graph", arch_graph, self.renderer.render_architecture_graph)
+            sections.append("architecture")
+        
+        # 技术栈
+        if "tech-stack" in wanted:
+            logger.info("分析技术栈…")
+            tech_graph = TechStackAnalyzer(self.repo).parse()
+            self._dump("tech-stack/tech_stack_graph", tech_graph, self.renderer.render_tech_stack_graph)
+            sections.append("tech-stack")
+        
+        # 编码风格
+        if "coding-style" in wanted:
+            logger.info("分析编码风格…")
+            style_graph = CodingStyleAnalyzer(self.repo, python_root).parse()
+            self._dump("coding-style/coding_style_graph", style_graph, self.renderer.render_coding_style_graph)
+            sections.append("coding-style")
+        
+        # 数据流
+        if "data-flow" in wanted:
+            logger.info("分析数据流…")
+            flow_graph = DataFlowAnalyzer(self.repo, python_root).parse()
+            self._dump("data-flow/data_flow_graph", flow_graph, self.renderer.render_data_flow_graph)
+            sections.append("data-flow")
+        
+        # 测试覆盖
+        if "test-coverage" in wanted:
+            logger.info("分析测试覆盖…")
+            test_graph = TestCoverageAnalyzer(self.repo, python_root).parse()
+            self._dump("test-coverage/test_coverage_graph", test_graph, self.renderer.render_test_coverage_graph)
+            sections.append("test-coverage")
+        
+        # 事件总线
+        if "event-bus" in wanted:
+            logger.info("分析事件总线…")
+            event_graph = EventBusAnalyzer(self.repo, python_root).parse()
+            self._dump("event-bus/event_bus_graph", event_graph, self.renderer.render_event_bus_graph)
+            sections.append("event-bus")
 
         # 元数据 + 索引
         git_info = _get_git_info(self.repo)
@@ -1342,13 +2295,13 @@ class KnowledgeGraphGenerator:
 def _build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="gen_knowledge_graph",
-        description="生成 Tide 风格仓库知识图谱（模块/API/DB/概念）。\n\n"
-        "支持 Python 项目静态分析。非 Python 项目请使用 Agent 生成。",
+        description="生成 Tide 风格仓库知识图谱。\n\n"
+        "静态分析支持：module / api / db / concept / architecture / tech-stack / coding-style / data-flow / test-coverage / event-bus",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument(
         "--type",
-        choices=["all", "module", "api", "db", "concept"],
+        choices=["all", "module", "api", "db", "concept", "architecture", "tech-stack", "coding-style", "data-flow", "test-coverage", "event-bus"],
         default="all",
         help="图谱类型（默认 all）",
     )

@@ -101,7 +101,7 @@ function WorkItemRow({ item }: { item: MyWorkItem }) {
 }
 
 export function MyWorkItems() {
-  const { data, isLoading, isError } = useMyWorkItems(10);
+  const { data, isLoading, isError } = useMyWorkItems(4);
   const items = data ?? [];
 
   return (

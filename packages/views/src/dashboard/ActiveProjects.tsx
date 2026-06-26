@@ -6,7 +6,7 @@ import { useActiveProjects } from "@tide/core";
 import { formatRelativeTime } from "./format-time";
 
 export function ActiveProjects() {
-  const { data, isLoading, isError } = useActiveProjects(5);
+  const { data, isLoading, isError } = useActiveProjects(3);
   const projects = data ?? [];
 
   return (

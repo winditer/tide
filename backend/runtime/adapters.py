@@ -492,14 +492,14 @@ def parse_codex_json_event(line: str) -> tuple[str, str]:
 
     # ── Codex CLI ≤ 0.135 旧版事件格式 ──
     if typ == "session_meta":
-        return "session_id", payload.get("id", "")
+        return "session_id", str(payload.get("id", ""))
 
     if typ == "event_msg":
         event_type = payload.get("type", "")
         if event_type == "agent_message":
-            return "message", payload.get("message", "")
+            return "message", str(payload.get("message", ""))
         if event_type == "task_complete":
-            return "complete", payload.get("last_agent_message", "")
+            return "complete", str(payload.get("last_agent_message", ""))
         if event_type == "user_message":
             return "skip", ""
 
@@ -513,14 +513,15 @@ def parse_codex_json_event(line: str) -> tuple[str, str]:
             return ("progress", f"思考中：{short_text(text, 300)}") if text else ("progress", "思考中…")
         if item_type == "function_call":
             name = payload.get("name", "tool")
-            args = short_text(payload.get("arguments", ""), 240)
+            args = short_text(str(payload.get("arguments", "")), 240)
             return "progress", f"调用工具：{name}\n{args}".strip()
         if item_type == "function_call_output":
             output = payload.get("output", "")
-            return "tool_output", f"工具结果：\n{short_text(output, 900)}"
+            return "tool_output", f"工具结果：\n{short_text(str(output), 900)}"
 
     if typ in ("agent_message", "assistant_message", "message"):
-        return "message", obj.get("message") or obj.get("text") or ""
+        msg = obj.get("message") or obj.get("text") or ""
+        return "message", str(msg)
     if typ in ("exec_command_begin", "command_begin", "tool_call"):
         return "progress", short_text(line.strip(), 500)
     if typ in ("exec_command_output", "command_output", "tool_output"):

@@ -887,11 +887,11 @@ class TaskService:
     # ── startup recovery ──────────────────────────────
 
     async def recover_orphaned_tasks(self) -> int:
-        """服务重启时将残留的 running/queued 状态任务标记为 failed。
+        """服务重启时将残留的 running/queued 状态任务标记为 cancelled。
 
         服务器重启后，内存中的 TASKS 字典为空，但 DB 中可能残留
         status='running' 或 'queued' 的任务（进程已丢失）。
-        将它们标记为 failed 以保持 Dashboard 统计与 Agent 状态一致。
+        将它们标记为 cancelled 以避免在任务列表中突出展示。
         """
         async with async_session_factory() as session:
             result = await session.execute(
@@ -907,7 +907,7 @@ class TaskService:
             now = self._now_iso()
             await session.execute(
                 text(
-                    "UPDATE tasks SET status = 'failed',"
+                    "UPDATE tasks SET status = 'cancelled',"
                     " result = COALESCE(result || char(10), '') || :reason,"
                     " completed_at = :now"
                     " WHERE status IN ('running', 'queued')"
@@ -917,7 +917,7 @@ class TaskService:
             await session.commit()
 
         logger.info(
-            "Recovered %d orphaned task(s) to 'failed' status.",
+            "Recovered %d orphaned task(s) to 'cancelled' status.",
             len(orphaned),
         )
         return len(orphaned)

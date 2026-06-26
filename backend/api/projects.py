@@ -38,7 +38,6 @@ from backend.runtime.git_utils import git_clone
 from backend.services import project_discovery
 from backend.services.archive_service import archive_store, resolve_show_archived
 from backend.services.session_discovery import (
-    _session_references_project,
     discover_chats,
     discover_sessions,
 )
@@ -673,17 +672,10 @@ async def get_project_sessions(
 def _project_chats(cwd: str, agent_id: Optional[str] = None) -> list[dict]:
     """返回与项目 ``cwd`` 内容相关、但 ``project_root`` 为空的普通对话列表。
 
-    通过扫描 chat 会话文件首部内容判定是否引用了当前项目（路径/项目名）。
+    discover_sessions 已在内部完成精确项目路径匹配，
+    此处直接返回 discover_chats 结果即可。
     """
-    items = discover_chats(agent_id=agent_id)
-    result: list[dict] = []
-    for it in items:
-        file_path = it.get("file")
-        if not file_path:
-            continue
-        if _session_references_project(file_path, cwd):
-            result.append(it)
-    return result
+    return discover_chats(agent_id=agent_id)
 
 
 @router.get("/{project_id}/chats")

@@ -1,0 +1,241 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-06-26T03:00:00Z",
+  "generator": "manual+static",
+  "summary": "Tide 是面向 AI 编码代理（Codex / Claude / Qoder / 第三方 A2A Agent）的多智能体任务编排与协同平台，覆盖飞书桥接、计划/工作流执行、看板、审计与知识图谱。",
+  "layers": [
+    {
+      "name": "presentation",
+      "title": "表现层（Frontend）",
+      "path_prefixes": ["apps/web/app/", "packages/views/src/", "packages/ui/src/"],
+      "description": "Next.js 15 App Router + React 19；@tide/ui 基础组件、@tide/views 业务视图、@tide/core API/Hook/Store。"
+    },
+    {
+      "name": "client-sdk",
+      "title": "客户端 SDK（packages/core）",
+      "path_prefixes": ["packages/core/src/"],
+      "description": "fetch client、React Query hooks、Zustand auth store、WebSocket provider，统一与后端 REST/WS 交互。"
+    },
+    {
+      "name": "api",
+      "title": "API 路由层",
+      "path_prefixes": ["backend/api/"],
+      "description": "FastAPI Router 30 个，按业务域拆分，提供 REST 与 WebSocket 端点。"
+    },
+    {
+      "name": "service",
+      "title": "业务服务层",
+      "path_prefixes": ["backend/services/"],
+      "description": "任务/计划/工作流/看板/审批/调度/Lark 桥接/知识库等核心业务编排逻辑，31 个模块。"
+    },
+    {
+      "name": "runtime",
+      "title": "运行时层",
+      "path_prefixes": ["backend/runtime/"],
+      "description": "Codex/Claude/Qoder CLI 适配器、A2A 客户端、Plan/Task 执行器、Git 工具、配置加载。"
+    },
+    {
+      "name": "data",
+      "title": "数据持久化层",
+      "path_prefixes": ["backend/db/", "backend/models/"],
+      "description": "SQLAlchemy async + aiosqlite；init.sql 显式建表 + ensure_column 做增量迁移；Pydantic schemas。"
+    },
+    {
+      "name": "integration",
+      "title": "外部集成层",
+      "path_prefixes": ["a2a-bridge/", "backend/services/lark_bridge.py", "backend/services/lark_listener.py", "backend/api/lark_bridge.py", "backend/api/lark_callback.py"],
+      "description": "Lark IM/Card 长连接 + 回调；A2A JSON-RPC 桥接（独立 FastAPI）；CLI 子进程；CC Switch 反向代理。"
+    },
+    {
+      "name": "deployment",
+      "title": "部署/运维",
+      "path_prefixes": ["Dockerfile.backend", "Dockerfile.frontend", "Dockerfile.cc-switch", "docker-compose.yml"],
+      "description": "三容器（backend/frontend/cc-switch）+ 共享卷；可挂载到 .tide/nginx-storming.conf。"
+    }
+  ],
+  "components": [
+    {
+      "name": "@tide/web",
+      "layer": "presentation",
+      "type": "next-app",
+      "path": "apps/web",
+      "responsibility": "Next.js App Router 主应用：登录、看板、工作流、计划、会话、项目、审计。",
+      "depends_on": ["@tide/core", "@tide/ui", "@tide/views"]
+    },
+    {
+      "name": "@tide/ui",
+      "layer": "presentation",
+      "type": "library",
+      "path": "packages/ui",
+      "responsibility": "基础 UI 组件（Radix UI 包装）。",
+      "depends_on": ["@radix-ui/*", "lucide-react", "clsx", "tailwind-merge"]
+    },
+    {
+      "name": "@tide/views",
+      "layer": "presentation",
+      "type": "library",
+      "path": "packages/views",
+      "responsibility": "业务视图：Dashboard、Kanban、Workflow Canvas、Plans、Schedules、Git Audit、Knowledge、Work Items、Code Editor。",
+      "depends_on": ["@tide/core", "@tide/ui", "@monaco-editor/react", "@hello-pangea/dnd"]
+    },
+    {
+      "name": "@tide/core",
+      "layer": "client-sdk",
+      "type": "library",
+      "path": "packages/core",
+      "responsibility": "前端 API SDK：fetch client、20 个 REST 模块、React Query hooks、Zustand auth store、WS provider。",
+      "depends_on": ["@tanstack/react-query", "zustand"]
+    },
+    {
+      "name": "backend.main",
+      "layer": "api",
+      "type": "fastapi-app",
+      "path": "backend/main.py",
+      "responsibility": "FastAPI 入口：注册 router、init_db、启动 schedule、恢复 active plan、CORS。",
+      "depends_on": ["backend.api.*", "backend.services.schedule_service", "backend.services.plan_executor", "backend.services.auth_service"]
+    },
+    {
+      "name": "backend.api",
+      "layer": "api",
+      "type": "router-package",
+      "path": "backend/api/",
+      "responsibility": "30 个业务 router（tasks/plans/workflows/work_items/kanban/projects/sessions/schedules/auth/admin/approvals/lark_*/knowledge/git_audit/security/rules/skills/hooks/files/dashboard/conversations/agents/events/versions/ws）。",
+      "depends_on": ["backend.services.*", "backend.core.dependencies", "backend.core.security", "backend.db.engine"]
+    },
+    {
+      "name": "backend.services",
+      "layer": "service",
+      "type": "service-package",
+      "path": "backend/services/",
+      "responsibility": "task/plan/workflow/work_item/kanban/auth/approval/schedule/skill/rule/security_scanner/hook_engine/knowledge/cost/event_emitter/ws_hub/lark_bridge/lark_listener/message_handler/card_*/conversation/chat_state/archive/project_group/project_discovery/session_discovery/a2a_discovery/ai_decompose/plan_executor/workflow_engine 等 31 个模块。",
+      "depends_on": ["backend.runtime.*", "backend.db.engine", "backend.models.schemas"]
+    },
+    {
+      "name": "backend.runtime",
+      "layer": "runtime",
+      "type": "runtime-package",
+      "path": "backend/runtime/",
+      "responsibility": "Codex/Claude/Qoder CLI 适配器、a2a_client、plan_runtime、task_runtime、git_utils、config。",
+      "depends_on": ["lark_oapi"]
+    },
+    {
+      "name": "backend.db.engine",
+      "layer": "data",
+      "type": "db-engine",
+      "path": "backend/db/engine.py",
+      "responsibility": "SQLAlchemy async engine + session factory + init_db（执行 init.sql + 增量 ensure_column）。",
+      "depends_on": ["sqlalchemy", "aiosqlite"]
+    },
+    {
+      "name": "tide-cc-switch",
+      "layer": "integration",
+      "type": "sidecar",
+      "path": "Dockerfile.cc-switch",
+      "responsibility": "CC Switch 反向代理；Claude/Codex CLI 经由 Anthropic/OpenAI 兼容接口路由；监听 15721/15722/15723。",
+      "depends_on": []
+    },
+    {
+      "name": "a2a-bridge",
+      "layer": "integration",
+      "type": "fastapi-sidecar",
+      "path": "a2a-bridge/",
+      "responsibility": "独立 FastAPI 服务，实现 A2A 协议（agent.json + JSON-RPC message/send / stream / tasks/get / tasks/cancel）。",
+      "depends_on": ["fastapi", "uvicorn"]
+    },
+    {
+      "name": "lark-bridge",
+      "layer": "integration",
+      "type": "websocket-listener",
+      "path": "backend/services/lark_listener.py + lark_bridge.py",
+      "responsibility": "lark-oapi 长连接接收消息/卡片交互；message_handler 解析并触发任务/审批；card_builder 生成飞书卡片。",
+      "depends_on": ["lark_oapi"]
+    }
+  ],
+  "data_flows": [
+    {
+      "id": "user_chat_request",
+      "title": "用户在 Web 端发起任务",
+      "steps": [
+        "Web (apps/web) → @tide/core fetch client",
+        "POST /api/tasks (backend.api.tasks)",
+        "task_service.create_task (services)",
+        "task_runtime / executor (runtime, 启动 Codex/Claude/Qoder 子进程)",
+        "event_emitter.emit_task_created / task_output",
+        "ws_hub.broadcast('tasks' | 'task:{id}')",
+        "前端 ws-provider 收到事件 → React Query 失效 → UI 刷新"
+      ]
+    },
+    {
+      "id": "lark_inbound_message",
+      "title": "飞书消息进入并创建任务",
+      "steps": [
+        "Lark IM → lark-oapi WS / Lark 回调 → lark_listener / api.lark_callback",
+        "message_handler.on_text / on_card_action",
+        "task_service.create_task + card_builder.build_task_card",
+        "lark_bridge.send_card / patch_message 回写飞书",
+        "event_emitter.emit_lark_task_* + ws_hub.broadcast"
+      ]
+    },
+    {
+      "id": "plan_workflow_run",
+      "title": "Plan / Workflow 执行",
+      "steps": [
+        "POST /api/plans/{id}/start 或 /api/workflows/{id}/run",
+        "plan_executor / workflow_engine 解析节点 DAG",
+        "对每个节点调用 task_service.create_task → runtime 执行",
+        "节点完成 emit plan.task.completed / workflow.node.completed",
+        "全部完成后状态回写 DB 并广播 schedule/plan/workflow run completed"
+      ]
+    },
+    {
+      "id": "scheduled_job",
+      "title": "定时任务（APScheduler）",
+      "steps": [
+        "backend/main.py lifespan → schedule_service.start()",
+        "APScheduler 触发 → schedule_service 执行 schedule run",
+        "调用 plan_executor / workflow_engine 启动一次计划",
+        "emit schedule.run.started / completed"
+      ]
+    },
+    {
+      "id": "a2a_external_agent",
+      "title": "第三方 A2A Agent 调用",
+      "steps": [
+        "a2a-bridge:/a2a (JSON-RPC) ← runtime.a2a_client 或外部客户端",
+        "executor 调起子代理（Codex/Claude/Qoder）",
+        "通过 SSE / JSON-RPC stream 返回事件",
+        "Tide 后端通过 services.a2a_discovery 注册 / 调用"
+      ]
+    }
+  ],
+  "deployments": [
+    {
+      "name": "tide-backend",
+      "image": "tide-backend:latest",
+      "dockerfile": "Dockerfile.backend",
+      "ports": ["8000:8000"],
+      "volumes": ["tide-data", "tide-runtime", "tide-agent-home", "tide-qoder-home", "tide-claude-home"],
+      "depends_on": ["tide-cc-switch"]
+    },
+    {
+      "name": "tide-frontend",
+      "image": "tide-frontend:latest",
+      "dockerfile": "Dockerfile.frontend",
+      "ports": ["3000:3000"],
+      "env": {"API_BACKEND_URL": "http://backend:8000", "NEXT_PUBLIC_BASE_PATH": "/tide"},
+      "depends_on": ["tide-backend"]
+    },
+    {
+      "name": "tide-cc-switch",
+      "image": "tide-cc-switch:latest",
+      "dockerfile": "Dockerfile.cc-switch",
+      "ports": ["15721:15721", "15722:15722", "15723:15723"]
+    }
+  ],
+  "external_services": [
+    {"name": "Lark/Feishu Open API", "protocol": "WS + HTTPS", "purpose": "IM 消息、卡片交互、长连接事件"},
+    {"name": "Anthropic API (via CC Switch)", "protocol": "HTTPS", "purpose": "Claude CLI 调用"},
+    {"name": "OpenAI compatible (via CC Switch)", "protocol": "HTTPS", "purpose": "Codex 调用"},
+    {"name": "Third-party A2A Agents", "protocol": "JSON-RPC over HTTP", "purpose": "外部 Agent 协作"}
+  ]
+}

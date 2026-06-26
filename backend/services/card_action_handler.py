@@ -43,7 +43,14 @@ from typing import Any, Optional
 
 from sqlalchemy import text
 
+from backend.core.dependencies import (
+    check_cwd_write_permission,
+    check_lark_permission,
+    LarkPermissionDenied,
+    resolve_lark_user,
+)
 from backend.db.engine import async_session_factory
+from backend.runtime.config import LARK_ALLOWED_OPEN_IDS, TIDE_REQUIRE_AUTH
 from backend.services.card_builder import (
     build_dashboard_card,
     build_plan_card,
@@ -304,6 +311,27 @@ class CardActionHandler:
         chat_id: str = "",
         message_id: str = "",
     ) -> Optional[dict]:
+        # === 权限前置检查 ===
+        # 白名单检查
+        if LARK_ALLOWED_OPEN_IDS and operator_id not in LARK_ALLOWED_OPEN_IDS:
+            return self._permission_denied_card("您不在操作白名单中")
+
+        # 身份解析
+        current_user: Optional[dict] = None
+        if TIDE_REQUIRE_AUTH:
+            try:
+                current_user = await check_lark_permission(operator_id)
+            except LarkPermissionDenied as e:
+                if e.reason == "user_not_bound":
+                    return self._permission_denied_card("您的飞书账号尚未绑定 Tide 系统")
+                elif e.reason == "user_disabled":
+                    return self._permission_denied_card("您的账号已被禁用")
+                else:
+                    return self._permission_denied_card("权限不足")
+        else:
+            current_user = await resolve_lark_user(operator_id)
+
+        # === 解析并分发 ===
         parsed = parse_action_value(action_value)
         if not parsed:
             logger.warning("unknown card action_value: %s", action_value)
@@ -313,7 +341,7 @@ class CardActionHandler:
 
         verb, id1, id2 = parsed
         try:
-            return await self._dispatch(verb, id1, id2, operator_id, chat_id)
+            return await self._dispatch(verb, id1, id2, operator_id, chat_id, current_user)
         except Exception:
             logger.exception(
                 "card action failed: verb=%s id1=%s id2=%s", verb, id1, id2
@@ -333,16 +361,17 @@ class CardActionHandler:
         id2: Optional[str],
         operator_id: str,
         chat_id: str,
+        current_user: Optional[dict] = None,
     ) -> Optional[dict]:
         # —— Task 单 ID ——
         if verb == "task_stop":
-            return await self._task_action(id1, action="stop")
+            return await self._task_action(id1, action="stop", current_user=current_user)
         if verb == "task_approve":
-            return await self._task_action(id1, action="approve")
+            return await self._task_action(id1, action="approve", current_user=current_user)
         if verb == "task_reject":
-            return await self._task_action(id1, action="reject")
+            return await self._task_action(id1, action="reject", current_user=current_user)
         if verb == "task_retry":
-            return await self._task_action(id1, action="retry")
+            return await self._task_action(id1, action="retry", current_user=current_user)
         if verb == "task_refresh":
             return await self._build_task_card_or_notice(id1)
         if verb == "task_detail":
@@ -350,6 +379,9 @@ class CardActionHandler:
 
         # —— Plan 单 ID ——
         if verb == "plan_stop":
+            denied = await self._check_plan_write(id1, current_user)
+            if denied:
+                return denied
             await plan_service.stop_plan(id1)
             return await self._build_plan_card_or_notice(id1)
         if verb == "plan_refresh":
@@ -357,15 +389,24 @@ class CardActionHandler:
         if verb == "plan_detail":
             return await self._build_plan_card_or_notice(id1)
         if verb == "plan_retry_failed":
+            denied = await self._check_plan_write(id1, current_user)
+            if denied:
+                return denied
             return await self._plan_retry_failed(id1)
 
         # —— Plan 子任务（双 ID）——
         if verb in ("plan_task_stop", "plan_task_cancel"):
             assert id2
+            denied = await self._check_plan_write(id1, current_user)
+            if denied:
+                return denied
             await task_service.stop_task(id2)
             return await self._build_plan_card_or_notice(id1)
         if verb == "plan_task_retry":
             assert id2
+            denied = await self._check_plan_write(id1, current_user)
+            if denied:
+                return denied
             await plan_service.retry_task(id1, id2)
             return await self._build_plan_card_or_notice(id1)
         if verb == "plan_task_detail":
@@ -373,6 +414,9 @@ class CardActionHandler:
             return await self._build_task_detail_card(id2)
         if verb == "plan_approve":
             assert id2
+            denied = await self._check_plan_write(id1, current_user)
+            if denied:
+                return denied
             # 尝试通过 approval_service 审批（持久化流程）
             pending = await approval_service.get_pending_by_task(id2)
             if pending:
@@ -382,6 +426,9 @@ class CardActionHandler:
             return await self._build_plan_card_or_notice(id1)
         if verb == "plan_reject":
             assert id2
+            denied = await self._check_plan_write(id1, current_user)
+            if denied:
+                return denied
             # 尝试通过 approval_service 拒绝（持久化流程）
             pending = await approval_service.get_pending_by_task(id2)
             if pending:
@@ -412,7 +459,23 @@ class CardActionHandler:
 
     # ── 任务动作 ─────────────────────────────────────────────────
 
-    async def _task_action(self, task_id: str, action: str) -> Optional[dict]:
+    async def _task_action(
+        self, task_id: str, action: str, current_user: Optional[dict] = None
+    ) -> Optional[dict]:
+        # 项目级写权限检查
+        if TIDE_REQUIRE_AUTH and current_user:
+            async with async_session_factory() as session:
+                result = await session.execute(
+                    text("SELECT cwd FROM tasks WHERE id = :tid LIMIT 1"),
+                    {"tid": task_id},
+                )
+                row = result.fetchone()
+            if row and row[0]:
+                try:
+                    await check_cwd_write_permission(row[0], current_user)
+                except Exception:
+                    return self._permission_denied_card("您没有该项目的操作权限")
+
         if action == "stop":
             await task_service.stop_task(task_id)
         elif action == "approve":
@@ -480,6 +543,36 @@ class CardActionHandler:
             "plan_retry_failed plan=%s retried=%d", plan_id[:8], retry_count
         )
         return await self._build_plan_card_or_notice(plan_id)
+
+    # ── 权限辅助 ──────────────────────────────────────────────────
+
+    def _permission_denied_card(self, message: str) -> dict:
+        """返回权限不足的提示 toast。"""
+        return {
+            "toast": {
+                "type": "warning",
+                "content": f"⚠️ {message}",
+            }
+        }
+
+    async def _check_plan_write(
+        self, plan_id: str, current_user: Optional[dict]
+    ) -> Optional[dict]:
+        """检查 plan 的项目级写权限，无权限返回提示卡片，否则返回 None。"""
+        if not TIDE_REQUIRE_AUTH or not current_user:
+            return None
+        async with async_session_factory() as session:
+            result = await session.execute(
+                text("SELECT cwd FROM plans WHERE id = :pid LIMIT 1"),
+                {"pid": plan_id},
+            )
+            row = result.fetchone()
+        if row and row[0]:
+            try:
+                await check_cwd_write_permission(row[0], current_user)
+            except Exception:
+                return self._permission_denied_card("您没有该项目的操作权限")
+        return None
 
     # ── Dashboard 子视图 ─────────────────────────────────────────
 
