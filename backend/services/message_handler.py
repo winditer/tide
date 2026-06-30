@@ -17,6 +17,9 @@ import re
 import time
 from typing import Any, Optional
 
+from sqlalchemy import text as sa_text
+
+from backend.db.engine import async_session_factory
 from backend.services.lark_listener import LarkEvent
 from backend.services.lark_bridge import lark_bridge
 from backend.services.conversation_service import conversation_service
@@ -53,6 +56,27 @@ class MessageHandler:
         self._task_service = None  # lazy import 避免循环依赖
         self._running = False
         self._consumer_task: Optional[asyncio.Task] = None
+        self._seen_message_ids: set[str] = set()  # 防止 ws 重连后重复创建任务
+        self._boot_time_ms: int = int(time.time() * 1000)  # 毫秒级启动时间
+        self._dedup_loaded: bool = False  # 标记是否已从 DB 加载历史 message_id
+
+    async def _ensure_dedup_loaded(self):
+        """首次调用时从 DB 加载近期 message_id 到内存去重集合，避免重启后重复创建任务"""
+        if self._dedup_loaded:
+            return
+        self._dedup_loaded = True
+        try:
+            async with async_session_factory() as session:
+                result = await session.execute(sa_text(
+                    "SELECT source_message_id FROM tasks "
+                    "WHERE source_message_id IS NOT NULL "
+                    "AND created_at > datetime('now', '-24 hours')"
+                ))
+                for row in result.fetchall():
+                    self._seen_message_ids.add(row[0])
+            logger.info("[message_handler] Loaded %d seen message_ids from DB", len(self._seen_message_ids))
+        except Exception:
+            logger.debug("[message_handler] Failed to load seen message_ids", exc_info=True)
 
     @property
     def task_service(self):
@@ -298,6 +322,45 @@ class MessageHandler:
 
     async def _cmd_create_task(self, chat_id: str, prompt: str, event: LarkEvent, current_user: Optional[dict] = None):
         """创建任务"""
+        # 从 DB 加载历史去重集合（首次懒加载）
+        await self._ensure_dedup_loaded()
+
+        # 基于 Lark message_id 去重，防止 ws 重连后历史消息重复创建任务
+        message_id = event.message_id
+        if message_id:
+            if message_id in self._seen_message_ids:
+                logger.info("[message_handler] Skipping duplicate task creation for message_id=%s", message_id)
+                return
+            self._seen_message_ids.add(message_id)
+
+        # 基于消息创建时间过滤：忽略服务启动之前的旧消息（Lark 重连重推）
+        msg_create_time = event.create_time
+        if msg_create_time and msg_create_time < self._boot_time_ms - 10000:  # 10秒容差
+            logger.info(
+                "[message_handler] Skipping old message (create_time=%d < boot_time=%d), message_id=%s",
+                msg_create_time, self._boot_time_ms, message_id or "?"
+            )
+            return
+
+        # 启动冷却期：boot 后 15 秒内忽略所有 Lark 触发的任务创建
+        # 防止 WebSocket 重连时重推的消息绕过其他过滤
+        if (int(time.time() * 1000) - self._boot_time_ms) < 15000:
+            # 在冷却期内，只允许 source_message_id 去重集合中不存在的消息通过
+            # 额外检查：用 prompt 内容做近似去重
+            async with async_session_factory() as sess:
+                result = await sess.execute(
+                    sa_text(
+                        "SELECT 1 FROM tasks WHERE prompt = :prompt AND created_at > datetime('now', '-24 hours') LIMIT 1"
+                    ),
+                    {"prompt": prompt},
+                )
+                if result.fetchone():
+                    logger.info(
+                        "[message_handler] Skipping duplicate prompt during cooldown, message_id=%s",
+                        message_id or "?",
+                    )
+                    return
+
         # 项目级写权限检查
         if TIDE_REQUIRE_AUTH and current_user:
             project_id = await self._resolve_active_project_id(chat_id)
@@ -346,6 +409,17 @@ class MessageHandler:
                 conversation_id=conversation_id,
             )
             task_id = (task.get("id", "") or "")
+            # 持久化 source_message_id 到 DB，用于跨重启去重
+            if message_id and task_id:
+                try:
+                    async with async_session_factory() as session:
+                        await session.execute(
+                            sa_text("UPDATE tasks SET source_message_id = :mid WHERE id = :tid"),
+                            {"mid": message_id, "tid": task_id},
+                        )
+                        await session.commit()
+                except Exception:
+                    logger.debug("[message_handler] Failed to persist source_message_id", exc_info=True)
             logger.info(
                 "Task created from Lark: task_id=%s agent=%s",
                 task_id[:8],

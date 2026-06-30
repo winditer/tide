@@ -74,6 +74,26 @@ async def lifespan(app: FastAPI):
     except Exception:  # noqa: BLE001
         logger.exception("recover_orphaned_tasks failed")
 
+    # 清理幽灵审批：任务已完成但审批仍 pending 的不一致记录
+    try:
+        from backend.services.approval_service import approval_service
+        orphaned = await approval_service.cleanup_orphaned_approvals()
+        if orphaned:
+            logger.info("Cleaned up %d orphaned pending approvals on startup", orphaned)
+    except Exception:  # noqa: BLE001
+        logger.exception("cleanup_orphaned_approvals failed")
+
+    # 清理所有会话的 session_id（重启后旧 session 不可恢复）
+    try:
+        from backend.db.engine import async_session_factory
+        from sqlalchemy import text as _sa_text
+        async with async_session_factory() as session:
+            await session.execute(_sa_text("UPDATE conversations SET session_id = NULL WHERE session_id IS NOT NULL"))
+            await session.commit()
+        logger.info("Cleared stale conversation session_ids on startup")
+    except Exception:  # noqa: BLE001
+        logger.exception("clear conversation session_ids failed")
+
     # 扫描 Qoder IDE 会话并估算 token 用量（后台异步执行，不阻塞启动）
     async def _sync_qoder_tokens():
         try:

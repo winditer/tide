@@ -45,6 +45,8 @@ async def init_db():
             await db.execute("ALTER TABLE tasks ADD COLUMN retry_count INTEGER DEFAULT 0")
         if "agent_final_output" not in task_columns:
             await db.execute("ALTER TABLE tasks ADD COLUMN agent_final_output TEXT")
+        if "source_message_id" not in task_columns:
+            await db.execute("ALTER TABLE tasks ADD COLUMN source_message_id TEXT")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_group ON tasks(group_id)")
 
         # approvals 表升级（兑容旧版 schema）

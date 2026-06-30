@@ -530,6 +530,21 @@ class TaskService:
         # 单独跟踪 agent 的 "output" 类型事件（即 agent 的自然语言回复），
         # 与 "tool_output"、"progress" 区分开，用于下游节点获取 agent 最终结论。
         agent_output_chunks: list[str] = []
+
+        # 守卫：执行前确认任务仍为活跃状态（防止 recover 后的异步任务竞争）
+        async with async_session_factory() as _guard_session:
+            _guard_result = await _guard_session.execute(
+                text("SELECT status FROM tasks WHERE id = :tid"),
+                {"tid": task_id},
+            )
+            _guard_row = _guard_result.fetchone()
+            if not _guard_row or _guard_row[0] in ("cancelled", "completed", "failed", "stopped", "rejected"):
+                logger.warning(
+                    "[task_service] _run_agent_real aborted: task %s already in terminal state '%s'",
+                    task_id[:8], (_guard_row[0] if _guard_row else "NOT_FOUND"),
+                )
+                return
+
         try:
             async for event in agent_executor.run_task(
                 task_id=task_id,
@@ -986,7 +1001,7 @@ class TaskService:
             result = await session.execute(
                 text(
                     "SELECT id, workspace_id"
-                    " FROM tasks WHERE status IN ('running', 'queued')"
+                    " FROM tasks WHERE status IN ('running', 'queued', 'review')"
                 ),
             )
             orphaned = [dict(row._mapping) for row in result.fetchall()]

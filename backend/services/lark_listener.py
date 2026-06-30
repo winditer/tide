@@ -42,6 +42,7 @@ class LarkEvent:
     sender_id: str = ""
     attachments: list[dict] = field(default_factory=list)
     raw_data: dict = field(default_factory=dict)
+    create_time: int = 0  # 消息创建时间（毫秒时间戳）
 
 
 class LarkListener:
@@ -174,6 +175,11 @@ class LarkListener:
                     content_json=content_json,
                 )
 
+            # 提取消息创建时间
+            create_time = getattr(message, "create_time", 0) or 0
+            if isinstance(create_time, str):
+                create_time = int(create_time) if create_time.isdigit() else 0
+
             lark_event = LarkEvent(
                 event_type="text_message",
                 chat_id=chat_id,
@@ -182,6 +188,7 @@ class LarkListener:
                 sender_id=sender_id,
                 attachments=attachments,
                 raw_data={"msg_type": msg_type},
+                create_time=create_time,
             )
 
             logger.info(

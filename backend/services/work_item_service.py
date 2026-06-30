@@ -1426,6 +1426,19 @@ class WorkItemService:
         try:
             from backend.services.approval_service import approval_service
 
+            # 幂等性检查：如果已有 pending 审批，直接返回
+            existing_approvals = await approval_service.get_by_task(item["id"])
+            pending_approval = next(
+                (a for a in existing_approvals if a["status"] == "pending"),
+                None
+            )
+            if pending_approval:
+                logger.info(
+                    "Approval already pending for work item %s (approval_id=%s), skipping creation",
+                    item["id"][:8], pending_approval["id"][:8]
+                )
+                return
+
             # 清理同一工作项下旧的 pending 审批，防止累积过期记录
             cancelled_count = await approval_service.cleanup_task_approvals(item["id"])
             if cancelled_count > 0:

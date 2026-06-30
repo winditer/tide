@@ -450,6 +450,33 @@ class ApprovalService:
             await session.commit()
             return result.rowcount
 
+    async def cleanup_orphaned_approvals(self) -> int:
+        """清理孤立的 pending 审批记录。
+
+        孤立条件：
+        1. 审批状态为 pending，但关联任务已完成（completed_at IS NOT NULL）
+        2. 审批状态为 pending，但关联任务状态已为终态
+        3. 审批状态为 pending，但关联任务不存在
+        """
+        async with async_session_factory() as session:
+            result = await session.execute(
+                text("""
+                    UPDATE approvals SET status = 'cancelled', resolved_at = datetime('now')
+                    WHERE status = 'pending'
+                    AND (
+                        task_id IN (
+                            SELECT id FROM tasks
+                            WHERE status IN ('completed', 'failed', 'stopped', 'cancelled', 'rejected')
+                               OR completed_at IS NOT NULL
+                        )
+                        OR task_id NOT IN (SELECT id FROM tasks)
+                    )
+                """)
+            )
+            count = result.rowcount
+            await session.commit()
+            return count
+
     # ── 辅助方法 ───────────────────────────────────────────
 
     # ── 辅助方法 ──────────────────────────────────
