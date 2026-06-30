@@ -743,6 +743,67 @@ INSERT OR IGNORE → project_members  INSERT OR IGNORE → project_members
 
 选择项目组时，自动使用 primary 项目的 `cwd` 作为实际执行路径。Session 和 Task 的 `group_id` 字段用于标记其所属项目组。
 
+### 11.9 工作项智能路由
+
+#### 概述
+
+当项目组工作项进入工作流的 Agent 节点时，系统会基于工作项需求和项目知识图谱，通过 LLM 分析推荐合适的目标子项目，避免全量派发造成的资源浪费。
+
+#### 触发条件
+
+智能路由在以下条件同时满足时触发：
+1. 工作项关联了项目组（存在 `group_id`）
+2. 环境变量 `WORKITEM_SMART_ROUTING=true`
+3. 当前 Agent 节点的 `routingTrigger` 配置未显式设为 `false`
+
+#### 两阶段工作流（方案 C）
+
+为提升路由准确度，支持在工作流中配置两阶段 Agent 节点：
+
+```
+┌─────────────┐     ┌─────────────────┐     ┌──────────────┐
+│  Stage 节点  │ ──▶ │ Agent① 方案生成  │ ──▶ │ Agent② 路由  │ ──▶ ...
+│             │     │ routingTrigger   │     │ routingTrigger│
+│             │     │ = false          │     │ = true       │
+└─────────────┘     └─────────────────┘     └──────────────┘
+```
+
+- **Agent① (routingTrigger=false)**：走单仓模式，在主项目 cwd 下生成技术方案，输出保存到 `work_item_transitions.output`
+- **Agent② (routingTrigger=true)**：获取前序 Agent 输出（技术方案），结合项目知识图谱做路由决策，然后向选中的子项目派发跨仓库 Plan
+
+#### 路由决策流程
+
+1. 从知识图谱获取项目组各子项目的模块摘要
+2. 构建路由 prompt：工作项标题 + 描述 + 前序技术方案（截断至 `ROUTING_PROPOSAL_MAX_CHARS`，默认 3000 字符）
+3. 调用 Agent CLI（subprocess 隔离）执行 LLM 分析
+4. 解析返回的 JSON 结构获取推荐项目列表和置信度
+5. 置信度 ≥ 阈值时采纳推荐结果；否则 fallback 为全量派发
+
+#### 核心服务
+
+| 服务 | 文件 | 职责 |
+|------|------|------|
+| `GroupRouteService` | `backend/services/group_route_service.py` | LLM 路由分析、prompt 构建、结果解析 |
+| `WorkItemService._trigger_group_agent_node()` | `backend/services/work_item_service.py` | 路由触发入口、Plan 派发 |
+| `WorkItemService._extract_prev_agent_output()` | `backend/services/work_item_service.py` | 从 workflow context 提取前序 Agent 输出 |
+
+#### 环境变量配置
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `WORKITEM_SMART_ROUTING` | `true` | 启用/禁用智能路由 |
+| `WORKITEM_SMART_ROUTING_TIMEOUT` | `30` | LLM 调用超时（秒）|
+| `WORKITEM_SMART_ROUTING_CONFIDENCE` | `0.6` | 置信度阈值 |
+| `ROUTING_PROPOSAL_MAX_CHARS` | `3000` | 前序技术方案截断长度 |
+
+#### 工作流节点配置
+
+Agent 节点的 `data` 中新增 `routingTrigger` 布尔字段：
+- `true` 或未设置（默认）：执行路由决策
+- `false`：跳过路由，走单仓模式（适用于方案生成等前置节点）
+
+向后兼容：旧工作流节点无此字段时保持原有行为（自动路由）。
+
 ---
 
 ## 12. 工作项 AI 分解 与 浮动聊天产物展示
@@ -1149,3 +1210,107 @@ docker-compose.yml
 4. **不依赖 Redis** — 单节点自托管只需 SQLite + 进程内 Hub。
 5. **每步持久化** — 节点状态实时写 DB，crash-safe。
 6. **双入口并存** — Web 是第一入口，Lark Bridge 保留为辅助通道；缺凭据自动降级。
+
+---
+
+## 18. 分支流转机制
+
+### 18.1 概述
+
+Tide 工作流系统通过 Git Worktree 实现代码隔离，确保不同 Agent 任务在独立分支上工作，最终通过 Git Merge 节点合入目标分支。
+
+### 18.2 工作区隔离（useWorktree）
+
+Agent 节点支持 `useWorktree` 配置（默认 `true`），决定 Agent 的工作方式：
+
+| 配置 | 工作目录 | 工作分支 | branch_name | 自动提交 |
+|------|---------|---------|-------------|----------|
+| `useWorktree=true` | `.tide/worktrees/wi-{id[:8]}` | `tide/wi-{id[:8]}` | 有值 | ✓ 任务完成后自动 commit |
+| `useWorktree=false` | 项目根目录 | 当前 HEAD 分支 | NULL | ✗ 不自动提交 |
+
+#### 启用隔离（默认）
+
+- 创建独立 worktree 和分支
+- Agent 所有改动在隔离分支上
+- 任务完成后自动 `git add -A && git commit`
+- 分支信息持久化到 `tasks.branch_name`，供下游 Git Merge 使用
+
+#### 未启用隔离
+
+- Agent 直接在项目主分支（当前 HEAD）上工作
+- 不创建 worktree/分支，不自动提交
+- `tasks.branch_name = NULL`
+- Git Merge 节点无法识别该任务的分支
+
+### 18.3 Plan 任务的分支
+
+Plan 任务始终创建独立 worktree：
+
+- 路径：`.tide/worktrees/{plan_id}-{task_id}`
+- 分支：`tide/{plan_id}-{task_id}`
+- Plan 完成后通过 cherry-pick 合并到主分支
+- Plan 的 worktree 留存（需手动清理）
+
+### 18.4 Git Merge 节点
+
+#### 源分支解析（sourceBranch）
+
+按优先级查找：
+
+1. 从 `work_item_transitions` 表查询最近一个 `branch_name` 不为空的关联任务
+2. 节点配置的 `sourceBranch` 手动值
+3. Fallback：`tide/wi-{工作项ID[:8]}`（工作项默认分支名）
+
+#### 目标分支（targetBranch）
+
+- 未配置时默认为 `tide/wi-{工作项ID[:8]}`（工作项分支）
+- **建议显式配置为 `main` 或其他目标分支**，避免自合并
+
+#### 合并后清理
+
+合并成功后自动执行：
+
+- `git worktree remove --force`
+- `git branch -D`（如果配置了 deleteSource）
+
+### 18.5 推荐配置
+
+#### ✅ 推荐：方案输出 + 代码执行分离
+
+```
+agent1(useWorktree=false, 仅输出方案文本)
+  → agent2(useWorktree=true 或 Plan, 写代码)
+  → git_merge(targetBranch=main)
+```
+
+- 方案 Agent 无需隔离（不修改代码文件）
+- 代码 Agent 在隔离分支工作
+- Git Merge 显式指定合入 main
+
+#### ✅ 推荐：全隔离模式
+
+```
+agent1(useWorktree=true)
+  → agent2(useWorktree=true)
+  → git_merge(targetBranch=main)
+```
+
+#### ⚠️ 避免：全无隔离 + 无配置
+
+```
+agent1(useWorktree=false)
+  → agent2(useWorktree=false)
+  → git_merge(未配置)
+```
+
+所有改动在主分支，git_merge 无法找到源分支，会失败。
+
+### 18.6 常见场景分析
+
+| 场景 | agent1 | agent2 | git_merge 行为 |
+|------|--------|--------|---------------|
+| 项目组 + 方案(隔离) + Plan | 有分支 | Plan 独立分支 | Plan分支 → 工作项分支 ✅ |
+| 项目组 + 方案(无隔离) + Plan | NULL | Plan 独立分支 | Plan分支 → fallback分支 ⚠️ |
+| 项目 + 双无隔离 | NULL | NULL | 无源分支，失败 ❌ |
+| 项目 + 方案(隔离) + 代码(无隔离) | 有分支 | NULL | 自合并（源=目标）⚠️ |
+| 项目 + 方案(无隔离) + 代码(隔离) | NULL | 有分支 | 自合并（源=目标）⚠️ |

@@ -8,6 +8,11 @@ import {
   gitCommit,
   gitDiscard,
   gitIgnore,
+  createBranch,
+  deleteBranch,
+  pushBranch,
+  pullBranch,
+  createMergeRequest,
   type GitCommitsParams,
   type GitChangesParams,
   type GitUncommittedResponse,
@@ -117,5 +122,66 @@ export function useGitIgnoreMutation(projectId: string | undefined) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["git-audit", "uncommitted", projectId] });
     },
+  });
+}
+
+/**
+ * 创建分支 mutation。
+ */
+export function useCreateBranch(projectId: string | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ branchName, startPoint }: { branchName: string; startPoint?: string }) =>
+      createBranch(projectId!, branchName, startPoint),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["git-audit", "branches", projectId] });
+    },
+  });
+}
+
+/**
+ * 删除分支 mutation。
+ */
+export function useDeleteBranch(projectId: string | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (branchName: string) => deleteBranch(projectId!, branchName),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["git-audit", "branches", projectId] });
+    },
+  });
+}
+
+/**
+ * 推送分支 mutation。
+ */
+export function usePushBranch(projectId: string | undefined) {
+  return useMutation({
+    mutationFn: ({ branchName, remote }: { branchName: string; remote?: string }) =>
+      pushBranch(projectId!, branchName, remote),
+  });
+}
+
+/**
+ * 拉取分支 mutation。
+ */
+export function usePullBranch(projectId: string | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ branchName, remote }: { branchName?: string; remote?: string }) =>
+      pullBranch(projectId!, branchName, remote),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["git-audit", "commits", projectId] });
+    },
+  });
+}
+
+/**
+ * 创建合并请求 mutation。
+ */
+export function useCreateMergeRequest(projectId: string | undefined) {
+  return useMutation({
+    mutationFn: (params: { source_branch: string; target_branch: string; title: string; description?: string }) =>
+      createMergeRequest(projectId!, params),
   });
 }

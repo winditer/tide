@@ -533,6 +533,13 @@ def parse_codex_json_event(line: str) -> tuple[str, str]:
 # ── Codex CLI 有效模型 key（抽象 tier 名而非原始模型名） ──
 CODEX_VALID_MODEL_KEYS = {"auto", "ultimate", "performance", "efficient", "lite"}
 
+# ── Qoder CLI 有效模型 key（从 qodercli --help 获取） ──
+QODER_VALID_MODEL_KEYS = {
+    "auto", "ultimate", "performance", "efficient", "lite",
+    "qmodel_latest", "qmodel", "gm51model", "kmodel",
+    "dmodel", "dfmodel", "mmodel",
+}
+
 # ── Adapter 注册表（延迟填充，在类定义之后） ──
 _ADAPTER_REGISTRY: dict[str, "AgentAdapter"] = {}
 
@@ -959,6 +966,7 @@ class QoderAdapter(AgentAdapter):
     bin_name = QODER_BIN
     default_model = QODER_MODEL
     timeout_seconds = QODER_TIMEOUT_SECONDS
+    valid_model_keys = QODER_VALID_MODEL_KEYS
 
     def build_command(self, task: CodexTaskRuntime, last_message_file: Optional[Path] = None) -> list[str]:
         argv = [QODER_BIN, "--print", "--output-format", "stream-json", "--cwd", str(task.cwd)]

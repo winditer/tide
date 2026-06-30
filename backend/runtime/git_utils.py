@@ -230,6 +230,41 @@ async def git_diff_summary(cwd: Path) -> str:
     return "\n".join(status_lines)
 
 
+# ── .gitignore 维护 ────────────────────────────────────────────────────────
+
+def ensure_tide_gitignore(repo_root: Path) -> None:
+    """确保 .tide/ 在项目的 .gitignore 中，防止内部目录被 Git 追踪。
+
+    - 若 .gitignore 存在且已包含 `.tide/` 或 `.tide`，跳过。
+    - 若 .gitignore 存在但未包含，追加条目。
+    - 若 .gitignore 不存在，创建并写入条目。
+
+    该函数为同步操作（仅本地文件读写），在 worktree 准备前调用。
+    """
+    gitignore_path = repo_root / ".gitignore"
+    entry = ".tide/"
+
+    try:
+        if gitignore_path.exists():
+            content = gitignore_path.read_text(encoding="utf-8")
+            lines = content.splitlines()
+            if any(line.strip() == entry or line.strip() == ".tide" for line in lines):
+                return  # 已存在
+            # 追加
+            if content and not content.endswith("\n"):
+                content += "\n"
+            content += f"{entry}\n"
+            gitignore_path.write_text(content, encoding="utf-8")
+        else:
+            gitignore_path.write_text(f"{entry}\n", encoding="utf-8")
+    except OSError as e:
+        logger.warning(
+            "[git_utils] ensure_tide_gitignore failed: repo_root=%s error=%s",
+            repo_root,
+            e,
+        )
+
+
 # ── Worktree 管理 ──────────────────────────────────────────────────────────
 
 def _plan_worktree_root(repo_root: Path) -> Path:
@@ -247,6 +282,15 @@ def _plan_branch_name(plan_id: str, task_id: str) -> str:
     """子任务对应的分支名：``tide/{plan_id}-{task_id[:8]}``。"""
     short_task = safe_git_ref_part(task_id)[:8] or "task"
     return f"tide/{safe_git_ref_part(plan_id)}-{short_task}"
+
+
+async def _resolve_base_ref(repo_root: Path) -> str:
+    """优先使用 main/master 作为新分支基点，都不存在时 fallback 到 HEAD。"""
+    for candidate in ("main", "master"):
+        code, _ = await git_command(repo_root, ["rev-parse", "--verify", candidate], timeout=10)
+        if code == 0:
+            return candidate
+    return "HEAD"
 
 
 async def prepare_plan_worktree(
@@ -272,6 +316,9 @@ async def prepare_plan_worktree(
         )
         return Path(""), "", ""
 
+    # 确保 .tide/ 在 .gitignore 中
+    ensure_tide_gitignore(repo_root)
+
     base_head = await git_head(repo_root)
     branch_name = _plan_branch_name(plan_id, task_id)
     worktree = _plan_worktree_path(repo_root, plan_id, task_id)
@@ -295,9 +342,10 @@ async def prepare_plan_worktree(
         )
         return Path(""), "", ""
 
+    base_ref = await _resolve_base_ref(repo_root)
     code, output = await git_command(
         repo_root,
-        ["worktree", "add", "-b", branch_name, str(worktree), "HEAD"],
+        ["worktree", "add", "-b", branch_name, str(worktree), base_ref],
         timeout=60,
     )
     if code != 0:
@@ -309,6 +357,7 @@ async def prepare_plan_worktree(
         )
         return Path(""), "", ""
 
+    logger.info("prepare_plan_worktree: branch=%s base=%s", branch_name, base_ref)
     logger.info(
         "[git_utils] worktree created: plan=%s task=%s branch=%s path=%s",
         plan_id,
@@ -486,6 +535,39 @@ async def _git_merge_in_progress(cwd: Path) -> bool:
     return code == 0
 
 
+async def find_worktree_for_branch(repo_root: Path, branch: str) -> str | None:
+    """查找某个分支对应的 worktree 路径。
+
+    解析 ``git worktree list --porcelain`` 输出，找到 checkout 了指定分支的
+    worktree 路径。如果未找到返回 ``None``。
+    """
+    code, output = await git_command(repo_root, ["worktree", "list", "--porcelain"], timeout=10)
+    if code != 0 or not output:
+        return None
+
+    # porcelain 格式示例：
+    # worktree /path/to/worktree
+    # HEAD abc123
+    # branch refs/heads/some-branch
+    # <blank line>
+    current_path: str | None = None
+    for line in output.splitlines():
+        if line.startswith("worktree "):
+            current_path = line[len("worktree "):].strip()
+        elif line.startswith("branch "):
+            ref = line[len("branch "):].strip()
+            # ref 格式为 refs/heads/branch-name
+            branch_name = ref.removeprefix("refs/heads/")
+            if branch_name == branch and current_path:
+                # 排除主仓库自身（主仓库的 worktree 路径 == repo_root）
+                if Path(current_path).resolve() != repo_root.resolve():
+                    return current_path
+        elif line.strip() == "":
+            current_path = None
+
+    return None
+
+
 async def git_merge_branch(
     repo_root: Path,
     source_branch: str,
@@ -527,6 +609,51 @@ async def git_merge_branch(
                 await git_command(repo_root, ["merge", "--abort"], timeout=30)
         return conflicts
 
+    async def _checkout_or_create_branch(branch: str) -> tuple[int, list[str]]:
+        """checkout 目标分支，若不存在则自动从 main/master 创建。
+
+        Returns:
+            (return_code, output_lines) — 0 表示成功。
+        """
+        lines: list[str] = []
+        code, output = await git_command(repo_root, ["checkout", branch], timeout=60)
+        lines.append(output)
+        if code == 0:
+            return 0, lines
+
+        # 分支不存在，尝试从 main 或 master 自动创建
+        logger.info(
+            "[git_utils] branch '%s' does not exist, attempting auto-create from main/master",
+            branch,
+        )
+        base_branch: str | None = None
+        for candidate in ("main", "master"):
+            chk_code, _ = await git_command(
+                repo_root, ["rev-parse", "--verify", candidate], timeout=10
+            )
+            if chk_code == 0:
+                base_branch = candidate
+                break
+
+        if base_branch is None:
+            lines.append(
+                "Target branch does not exist and no main/master branch found to create from"
+            )
+            return 1, lines
+
+        create_code, create_output = await git_command(
+            repo_root, ["checkout", "-b", branch, base_branch], timeout=60
+        )
+        lines.append(create_output)
+        if create_code != 0:
+            return create_code, lines
+
+        logger.info(
+            "[git_utils] auto-created branch '%s' from '%s'", branch, base_branch
+        )
+        lines.append(f"Auto-created branch '{branch}' from '{base_branch}'")
+        return 0, lines
+
     if strategy == "rebase":
         # 1. checkout source
         code, output = await git_command(
@@ -551,11 +678,9 @@ async def git_merge_branch(
             )
             return False, "\n".join(outputs), conflicts
 
-        # 3. checkout target
-        code, output = await git_command(
-            repo_root, ["checkout", target_branch], timeout=60
-        )
-        outputs.append(output)
+        # 3. checkout target (auto-create if not exists)
+        code, co_lines = await _checkout_or_create_branch(target_branch)
+        outputs.extend(co_lines)
         if code != 0:
             return False, "\n".join(outputs), []
 
@@ -567,11 +692,9 @@ async def git_merge_branch(
         if code != 0:
             return False, "\n".join(outputs), []
     else:
-        # merge / squash 共用：先 checkout target
-        code, output = await git_command(
-            repo_root, ["checkout", target_branch], timeout=60
-        )
-        outputs.append(output)
+        # merge / squash 共用：先 checkout target (auto-create if not exists)
+        code, co_lines = await _checkout_or_create_branch(target_branch)
+        outputs.extend(co_lines)
         if code != 0:
             return False, "\n".join(outputs), []
 
@@ -607,7 +730,7 @@ async def git_merge_branch(
                     return False, "\n".join(outputs), []
         else:  # merge
             code, output = await git_command(
-                repo_root, ["merge", source_branch], timeout=300
+                repo_root, ["merge", "--no-ff", source_branch], timeout=300
             )
             outputs.append(output)
             if code != 0:
@@ -662,6 +785,12 @@ def _work_item_branch_name(work_item_id: str) -> str:
 work_item_branch_name = _work_item_branch_name
 
 
+def version_branch_name(version_name: str) -> str:
+    """版本分支名：feature/{version_name}，如 feature/v1.0。"""
+    safe_name = safe_git_ref_part(version_name) or "unknown"
+    return f"feature/{safe_name}"
+
+
 async def prepare_work_item_worktree(
     work_item_id: str,
     project_path: Path,
@@ -689,6 +818,9 @@ async def prepare_work_item_worktree(
         )
         return Path(""), "", ""
 
+    # 确保 .tide/ 在 .gitignore 中
+    ensure_tide_gitignore(repo_root)
+
     base_head = await git_head(repo_root)
     branch_name = _work_item_branch_name(work_item_id)
     worktree = _work_item_worktree_path(repo_root, work_item_id)
@@ -711,9 +843,10 @@ async def prepare_work_item_worktree(
         )
         return Path(""), "", ""
 
+    base_ref = await _resolve_base_ref(repo_root)
     code, output = await git_command(
         repo_root,
-        ["worktree", "add", "-b", branch_name, str(worktree), "HEAD"],
+        ["worktree", "add", "-b", branch_name, str(worktree), base_ref],
         timeout=60,
     )
     if code != 0:
@@ -724,6 +857,7 @@ async def prepare_work_item_worktree(
         )
         return Path(""), "", ""
 
+    logger.info("prepare_work_item_worktree: branch=%s base=%s", branch_name, base_ref)
     logger.info(
         "[git_utils] work_item worktree created: id=%s branch=%s path=%s",
         work_item_id,

@@ -396,7 +396,6 @@ function UsersPageContent() {
           if (!editing) return;
           try {
             await updateMutation.mutateAsync({ userId: editing.id, body });
-            toast({ title: "已保存", description: editing.username });
             setEditing(null);
           } catch (err) {
             toast({

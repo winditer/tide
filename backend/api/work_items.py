@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel
 
@@ -187,6 +187,29 @@ async def transition_work_item(
             raise HTTPException(status_code=404, detail=message)
         raise HTTPException(status_code=400, detail=message)
     return transition
+
+
+@router.post("/{item_id}/rollback")
+async def rollback_work_item(
+    item_id: str,
+    body: dict = Body(...),
+    current_user=Depends(get_optional_user),
+):
+    """回退工作项到指定节点并重新触发。"""
+    _ensure_not_viewer(current_user)
+    existing = await work_item_service.get_work_item(item_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Work item not found")
+    await check_project_write_permission(existing.get("project_id"), current_user)
+
+    target_node_id = body.get("target_node_id")
+    if not target_node_id:
+        raise HTTPException(status_code=400, detail="target_node_id is required")
+
+    result = await work_item_service.rollback_to_node(item_id, target_node_id)
+    if not result:
+        raise HTTPException(status_code=400, detail="Rollback failed: target node invalid or not found")
+    return result
 
 
 @router.get("/{item_id}/transitions", response_model=list[WorkItemTransitionResponse])

@@ -193,7 +193,9 @@ export default function SettingsRulesPage() {
       } else {
         await apiClient.post<Rule>("/api/rules", body);
       }
-      toast({ title: editing ? "已保存" : "已创建", description: data.name });
+      if (!editing) {
+        toast({ title: "已创建", description: data.name });
+      }
       setDialogOpen(false);
       setEditing(null);
       fetchRules();

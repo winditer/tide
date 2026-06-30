@@ -64,6 +64,12 @@ class TaskService:
             if new_status in ("completed", "failed", "stopped", "rejected", "approved"):
                 sets.append("completed_at = :completed_at")
                 params["completed_at"] = self._now_iso()
+                # 确保 started_at 有值，避免只有 completed_at 而无 started_at
+                sets.append(
+                    "started_at = CASE WHEN started_at IS NULL THEN "
+                    "COALESCE(created_at, :fallback_started) ELSE started_at END"
+                )
+                params["fallback_started"] = self._now_iso()
             if result is not None:
                 sets.append("result = :result")
                 params["result"] = result
@@ -131,8 +137,9 @@ class TaskService:
             except Exception as e:
                 logger.debug("cleanup_task_approvals failed: %s", e)
 
-        # 事件驱动通知 work_item_service（幂等，调用会自动跳过未关联的任务）。
-        if new_status in ("completed", "failed", "stopped", "rejected"):
+        # 事件驱动通知 work_item_service：仅 completed 时推进工作流。
+        # failed/stopped/rejected 不推进，工作项停留在当前节点等待重试或人工介入。
+        if new_status == "completed":
             try:
                 from backend.services.work_item_service import work_item_service
                 logger.info(
@@ -155,6 +162,11 @@ class TaskService:
                     self._short_id(task_id),
                     exc_info=True,
                 )
+        elif new_status in ("failed", "stopped", "rejected"):
+            logger.warning(
+                "Task %s ended with status=%s, work item will NOT advance",
+                self._short_id(task_id), new_status,
+            )
 
         # 任务完成时解析产物并推送 task.artifact 事件到 WS（异步、非阻塞）
         if new_status == "completed":
@@ -515,6 +527,9 @@ class TaskService:
         full_auto: bool = False,
     ):
         """使用 AgentExecutor 执行真实 Agent CLI"""
+        # 单独跟踪 agent 的 "output" 类型事件（即 agent 的自然语言回复），
+        # 与 "tool_output"、"progress" 区分开，用于下游节点获取 agent 最终结论。
+        agent_output_chunks: list[str] = []
         try:
             async for event in agent_executor.run_task(
                 task_id=task_id,
@@ -535,6 +550,9 @@ class TaskService:
                     await event_emitter.emit_task_output(
                         task_id, workspace_id, event.content, event.type
                     )
+                    # 仅收集 agent 的自然语言回复（不含 tool_output/progress）
+                    if event.type == "output" and event.content:
+                        agent_output_chunks.append(event.content)
                 elif event.type == "completed":
                     await self._finish_with_result(
                         task_id, workspace_id, "completed", event.content
@@ -548,6 +566,14 @@ class TaskService:
                         task_id, workspace_id, "stopped", "Cancelled"
                     )
                 elif event.type == "approval_request":
+                    if full_auto:
+                        logger.warning(
+                            "[task_service] approval_request in full_auto mode ignored (not creating approval), task=%s",
+                            task_id[:8],
+                        )
+                        # full_auto 模式下不创建审批记录，不中断执行；
+                        # executor 已经终止了进程，后续事件流会产出 failed/completed。
+                        continue
                     if approved_retry:
                         await self._finish_with_result(
                             task_id,
@@ -597,6 +623,21 @@ class TaskService:
                 task_id, workspace_id, "failed", result=f"Error: {exc}"
             )
         finally:
+            # 将 agent 的自然语言回复单独存储到 agent_final_output 字段，
+            # 供下游工作流节点提取 agent 的最终结论（而非完整日志）。
+            if agent_output_chunks:
+                try:
+                    final_output_text = "\n".join(agent_output_chunks)
+                    async with async_session_factory() as session:
+                        await session.execute(
+                            text(
+                                "UPDATE tasks SET agent_final_output = :output WHERE id = :task_id"
+                            ),
+                            {"output": final_output_text, "task_id": task_id},
+                        )
+                        await session.commit()
+                except Exception:  # noqa: BLE001
+                    logger.debug("Failed to save agent_final_output for task=%s", task_id[:8], exc_info=True)
             with LOCK:
                 TASKS.pop(task_id, None)
 
@@ -776,10 +817,18 @@ class TaskService:
         model = task.get("model") or ""
         prompt = task["prompt"]
 
-        # 重新校验 model（DB 中可能残留无效值）
-        adapter = AGENT_ADAPTERS.get(agent_id)
-        if adapter:
-            model = adapter.normalize_model(model)
+        # model 透传：DB 中已有非空 model 直接使用，仅为空时取默认值
+        if not model:
+            adapter = AGENT_ADAPTERS.get(agent_id)
+            model = adapter.default_model if adapter else "auto"
+
+        # 判断是否为工作项关联任务：若是，必须以 full_auto 模式执行
+        full_auto = await self._is_work_item_task(task_id)
+        if full_auto:
+            logger.info(
+                "[task_service] approve_task: task=%s is work_item linked, using full_auto=True",
+                self._short_id(task_id),
+            )
 
         runtime = CodexTaskRuntime(
             task_id=task_id,
@@ -802,10 +851,44 @@ class TaskService:
             cwd,
             model,
             approved_retry=True,
+            full_auto=full_auto,
         )
         return await self.get_task(task_id)
 
     # ── reject ───────────────────────────────────────────
+
+    async def _is_work_item_task(self, task_id: str) -> bool:
+        """检查任务是否关联到工作项或属于 Plan 子任务。
+
+        工作项关联的任务和 Plan 子任务必须以 full_auto 模式执行，
+        不允许出现审批中断。判断依据：
+        1. work_item_transitions 表中有该 task_id 的记录
+        2. tasks 表中该任务的 plan_id 不为空（即为 Plan 子任务）
+        """
+        try:
+            async with async_session_factory() as session:
+                # 检查是否关联工作项
+                result = await session.execute(
+                    text(
+                        "SELECT 1 FROM work_item_transitions "
+                        "WHERE task_id = :task_id LIMIT 1"
+                    ),
+                    {"task_id": task_id},
+                )
+                if result.fetchone() is not None:
+                    return True
+                # 检查是否为 Plan 子任务（plan_id 非空）
+                result2 = await session.execute(
+                    text(
+                        "SELECT 1 FROM tasks "
+                        "WHERE id = :task_id AND plan_id IS NOT NULL LIMIT 1"
+                    ),
+                    {"task_id": task_id},
+                )
+                return result2.fetchone() is not None
+        except Exception:
+            logger.debug("_is_work_item_task check failed for task=%s", self._short_id(task_id), exc_info=True)
+            return False
 
     async def reject_task(self, task_id: str, reason: str = "") -> Optional[dict]:
         """拒绝审批"""
@@ -833,7 +916,7 @@ class TaskService:
         task = await self.get_task(task_id)
         if not task:
             return None
-        if task["status"] not in ("failed", "stopped", "rejected"):
+        if task["status"] not in ("failed", "stopped", "rejected", "cancelled"):
             return task
 
         old_status = task["status"]
@@ -861,10 +944,18 @@ class TaskService:
         model = task.get("model") or ""
         prompt = task["prompt"]
 
-        # 重新校验 model（DB 中可能残留无效值）
-        adapter = AGENT_ADAPTERS.get(agent_id)
-        if adapter:
-            model = adapter.normalize_model(model)
+        # model 透传：DB 中已有非空 model 直接使用，仅为空时取默认值
+        if not model:
+            adapter = AGENT_ADAPTERS.get(agent_id)
+            model = adapter.default_model if adapter else "auto"
+
+        # 判断是否为工作项关联任务或 Plan 子任务：若是，必须以 full_auto 模式执行
+        full_auto = await self._is_work_item_task(task_id)
+        if full_auto:
+            logger.info(
+                "[task_service] retry_task: task=%s is work_item/plan linked, using full_auto=True",
+                self._short_id(task_id),
+            )
 
         # re-register in memory
         runtime = CodexTaskRuntime(
@@ -879,7 +970,10 @@ class TaskService:
         with LOCK:
             TASKS[task_id] = runtime
 
-        self._schedule_agent_start(task_id, task["workspace_id"], agent_id, prompt, cwd, model)
+        self._schedule_agent_start(
+            task_id, task["workspace_id"], agent_id, prompt, cwd, model,
+            approved_retry=True, full_auto=full_auto,
+        )
 
         return await self.get_task(task_id)
 
@@ -887,39 +981,34 @@ class TaskService:
     # ── startup recovery ──────────────────────────────
 
     async def recover_orphaned_tasks(self) -> int:
-        """服务重启时将残留的 running/queued 状态任务标记为 cancelled。
-
-        服务器重启后，内存中的 TASKS 字典为空，但 DB 中可能残留
-        status='running' 或 'queued' 的任务（进程已丢失）。
-        将它们标记为 cancelled 以避免在任务列表中突出展示。
-        """
+        """服务重启时将中断的任务标记为 cancelled"""
         async with async_session_factory() as session:
             result = await session.execute(
                 text(
-                    "SELECT id, workspace_id FROM tasks"
-                    " WHERE status IN ('running', 'queued')"
+                    "SELECT id, workspace_id"
+                    " FROM tasks WHERE status IN ('running', 'queued')"
                 ),
             )
-            orphaned = result.fetchall()
+            orphaned = [dict(row._mapping) for row in result.fetchall()]
             if not orphaned:
                 return 0
 
-            now = self._now_iso()
-            await session.execute(
-                text(
-                    "UPDATE tasks SET status = 'cancelled',"
-                    " result = COALESCE(result || char(10), '') || :reason,"
-                    " completed_at = :now"
-                    " WHERE status IN ('running', 'queued')"
-                ),
-                {"reason": "[auto-recovery] Task interrupted by server restart.", "now": now},
-            )
-            await session.commit()
+        now = self._now_iso()
+        for task in orphaned:
+            async with async_session_factory() as session:
+                await session.execute(
+                    text("""
+                        UPDATE tasks SET
+                            status = 'cancelled',
+                            result = COALESCE(result || char(10), '') || '[auto-recovery] Task interrupted by server restart.',
+                            completed_at = :now
+                        WHERE id = :task_id
+                    """),
+                    {"task_id": task["id"], "now": now},
+                )
+                await session.commit()
+            logger.info("[auto-recovery] Marked task %s as cancelled", task["id"])
 
-        logger.info(
-            "Recovered %d orphaned task(s) to 'cancelled' status.",
-            len(orphaned),
-        )
         return len(orphaned)
 
 

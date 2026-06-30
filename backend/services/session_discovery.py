@@ -433,6 +433,7 @@ def discover_sessions(
 
 
 def discover_chats(
+    project_cwd: Optional[str] = None,
     agent_id: Optional[str] = None,
     limit: Optional[int] = None,
     offset: int = 0,
@@ -443,6 +444,13 @@ def discover_chats(
     Chat 判定：``project_root`` 为 None（不绑定任何项目）。
     复用 ``_load()`` 的 TTL 缓存，不会重复扫描。
 
+    Args:
+        project_cwd: 可选项目路径。传入时仅返回 cwd 在该路径下的对话。
+        agent_id: 可选 agent 过滤。
+        limit: 分页限制。
+        offset: 分页偏移。
+        force: 强制刷新缓存。
+
     Returns:
         与 ``discover_sessions`` 同结构的字典列表。
     """
@@ -450,6 +458,21 @@ def discover_chats(
 
     # 仅保留 project_root 为空的会话
     items = [it for it in items if not it.get("project_root")]
+
+    # 按项目 cwd 路径过滤：仅保留 cwd 在项目目录下的对话
+    if project_cwd:
+        try:
+            target = str(_normalize_path(Path(project_cwd)))
+        except OSError:
+            target = project_cwd
+        target = target.rstrip("/")
+
+        filtered_items = []
+        for it in items:
+            cwd_val = (it.get("cwd") or "").rstrip("/")
+            if cwd_val and (cwd_val == target or cwd_val.startswith(target + "/")):
+                filtered_items.append(it)
+        items = filtered_items
 
     if agent_id:
         items = [it for it in items if it.get("agent_id") == agent_id]
@@ -924,7 +947,7 @@ async def sync_session_token_usage() -> dict:
                     workspace_id="default",
                     prompt=title,
                     agent_id=sess.get("agent_id", "qoder"),
-                    model=sess.get("agent_id", "qoder"),
+                    model=sess.get("model", "auto"),
                     cwd=cwd,
                     attachments=[],
                     session_id=session_id,
@@ -945,7 +968,7 @@ async def sync_session_token_usage() -> dict:
                 task_id=task_id,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
-                model=sess.get("agent_id", "qoder"),
+                model=sess.get("model", "auto"),
             )
 
             # 更新 synced_message_count（语义：已处理的文件行数）+ completed_at（最后活跃时间）

@@ -308,7 +308,6 @@ export default function RemoteAgentsPage() {
       timeout_ms: input.timeout_ms,
       max_retries: input.max_retries,
     });
-    toast({ title: "已保存", description: input.name });
     setEditing(null);
     await reload();
   };

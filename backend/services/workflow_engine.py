@@ -370,16 +370,25 @@ class WorkflowEngine:
             await self._handle_node_failure(run_id, node, error)
             return
 
-        # 3.1 校验 target_branch：若为空，默认取工作项的 worktree 分支
+        # 3.1 校验 target_branch：若为空，优先使用版本分支，其次工作项 worktree 分支
         if not target_branch:
             wi_id = (context.get("work_item_id", "")
                      or context.get("start", {}).get("input", {}).get("work_item_id", ""))
             if wi_id:
-                target_branch = work_item_branch_name(wi_id)
-                logger.info(
-                    "[workflow] git_merge node: using work item branch as target: %s",
-                    target_branch,
-                )
+                # 优先使用版本分支
+                version_branch = await self._resolve_version_branch_for_work_item(wi_id)
+                if version_branch:
+                    target_branch = version_branch
+                    logger.info(
+                        "[workflow] git_merge node: using version branch as target: %s",
+                        target_branch,
+                    )
+                else:
+                    target_branch = work_item_branch_name(wi_id)
+                    logger.info(
+                        "[workflow] git_merge node: using work item branch as target: %s",
+                        target_branch,
+                    )
             else:
                 target_branch = "main"
 
@@ -468,6 +477,23 @@ class WorkflowEngine:
                 # fail 或 abort：直接标记失败
                 await self._update_node_status(run_id, node_id, "failed", error=error_detail)
                 await self._handle_node_failure(run_id, node, error_detail)
+
+    async def _resolve_version_branch_for_work_item(self, work_item_id: str) -> str:
+        """根据工作项 ID 查询关联版本，返回版本分支名。"""
+        async with async_session_factory() as session:
+            row = await session.execute(
+                text("""
+                    SELECT v.name FROM work_items wi
+                    JOIN versions v ON v.id = wi.version_id
+                    WHERE wi.id = :wi_id AND wi.version_id IS NOT NULL
+                """),
+                {"wi_id": work_item_id}
+            )
+            result = row.fetchone()
+        if not result or not result[0]:
+            return ""
+        from backend.runtime.git_utils import version_branch_name
+        return version_branch_name(result[0])
 
     async def _execute_agent_node(self, run_id: str, node: dict, context: dict):
         """Agent 节点：创建 task 记录 + 真实 Agent CLI 执行 + 完成回调。
@@ -861,9 +887,9 @@ class WorkflowEngine:
         )
         nodes = run_info.get("definition", {}).get("nodes", [])
         node = next((n for n in nodes if n["id"] == node_id), None)
-        # 审批节点的 onFailure 默认 "continue"：拒绝后继续执行下游分支
+        # 审批节点的 onFailure 默认 "abort"：拒绝后停止执行下游分支
         on_failure = (
-            node.get("data", {}).get("onFailure", "continue") if node else "abort"
+            node.get("data", {}).get("onFailure", "abort") if node else "abort"
         )
         if on_failure == "continue":
             await self._execute_next_nodes(run_id, node_id, context)

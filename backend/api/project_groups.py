@@ -1,11 +1,13 @@
 """项目组 API 路由。"""
 
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import PlainTextResponse
 from sqlalchemy import text
 
 from backend.core.dependencies import get_optional_user
@@ -15,7 +17,17 @@ from backend.models.schemas import (
     ProjectGroupMemberAdd,
     ProjectGroupUpdate,
 )
+from pathlib import Path
+
 from backend.runtime.config import TIDE_REQUIRE_AUTH
+from backend.runtime.git_utils import git_command, git_log_files
+from backend.api.git_audit import (
+    _parse_log_output,
+    _group_by_work_item,
+    _group_by_session,
+    _group_by_branch,
+    _group_by_version,
+)
 from backend.services.project_group_service import project_group_service
 from backend.services.workflow_service import workflow_service
 
@@ -470,6 +482,150 @@ async def list_group_versions(
 
     items = [dict(row._mapping) for row in rows]
     return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+# ── 项目组 Git 聚合 ────────────────────────────
+
+
+@router.get("/{group_id}/git/branches")
+async def list_group_branches(group_id: str):
+    """聚合项目组内所有成员项目的 Git 分支（按项目分组）。"""
+    await _ensure_group_exists(group_id)
+    projects = await project_group_service.get_group_projects(group_id)
+    results = []
+    for p in projects:
+        cwd = p.get("cwd")
+        pid = p.get("project_id")
+        name = p.get("name", pid)
+        if not cwd or not Path(cwd).is_dir():
+            continue
+        try:
+            code, output = await git_command(
+                Path(cwd), ["branch", "--format=%(refname:short)"], timeout=10
+            )
+            branches = [b.strip() for b in output.splitlines() if b.strip()] if code == 0 else []
+            code2, cur = await git_command(
+                Path(cwd), ["rev-parse", "--abbrev-ref", "HEAD"], timeout=5
+            )
+            current = cur.strip() if code2 == 0 else None
+            results.append({
+                "project_id": pid,
+                "name": name,
+                "cwd": cwd,
+                "branches": branches,
+                "current": current,
+            })
+        except Exception as exc:
+            logger.warning("list_group_branches: skip %s: %s", name, exc)
+    return {"items": results}
+
+
+@router.get("/{group_id}/git/commits")
+async def list_group_commits(
+    group_id: str,
+    since: Optional[str] = Query(None, description="起始时间 (ISO 格式)"),
+    until: Optional[str] = Query(None, description="截止时间 (ISO 格式)"),
+    limit: int = Query(50, ge=1, le=200, description="最大返回条数"),
+):
+    """聚合项目组内所有成员项目的 Git 提交（按时间倒序）。"""
+    await _ensure_group_exists(group_id)
+    projects = await project_group_service.get_group_projects(group_id)
+    all_commits = []
+    for p in projects:
+        cwd = p.get("cwd")
+        pid = p.get("project_id")
+        name = p.get("name", pid)
+        if not cwd or not Path(cwd).is_dir():
+            continue
+        try:
+            code, output = await git_log_files(
+                cwd=cwd, branch=None, limit=limit, since=since, until=until
+            )
+            if code == 0 and output.strip():
+                commits = _parse_log_output(output)
+                for c in commits:
+                    c["project_id"] = pid
+                    c["project_name"] = name
+                all_commits.extend(commits)
+        except Exception as exc:
+            logger.warning("list_group_commits: skip %s: %s", name, exc)
+    # 按 date 倒序排序，取 limit 条
+    all_commits.sort(key=lambda c: c.get("date", ""), reverse=True)
+    all_commits = all_commits[:limit]
+    return {"commits": all_commits, "total": len(all_commits)}
+
+
+@router.get("/{group_id}/git/changes")
+async def list_group_changes(
+    group_id: str,
+    group_by: str = Query("branch", description="聚合维度: work_item | session | branch | version"),
+    since: Optional[str] = Query(None, description="起始时间"),
+    until: Optional[str] = Query(None, description="截止时间"),
+):
+    """聚合项目组内所有成员项目的 Git 变更统计（按项目分组）。"""
+    await _ensure_group_exists(group_id)
+    if group_by not in ("work_item", "session", "branch", "version"):
+        raise HTTPException(status_code=400, detail="group_by 必须为 work_item / session / branch / version")
+
+    projects = await project_group_service.get_group_projects(group_id)
+    result_projects = []
+    for p in projects:
+        cwd = p.get("cwd")
+        pid = p.get("project_id")
+        name = p.get("name", pid)
+        if not cwd or not Path(cwd).is_dir():
+            continue
+        try:
+            if group_by == "work_item":
+                changes = await _group_by_work_item(pid, cwd, since, until)
+            elif group_by == "session":
+                changes = await _group_by_session(pid, cwd, since, until, None)
+            elif group_by == "version":
+                changes = await _group_by_version(pid, cwd, since, until)
+            else:
+                changes = await _group_by_branch(cwd, since, until)
+            result_projects.append({
+                "project_id": pid,
+                "name": name,
+                "changes": changes,
+            })
+        except Exception as exc:
+            logger.warning("list_group_changes: skip %s: %s", name, exc)
+    return {"projects": result_projects, "group_by": group_by}
+
+
+@router.get("/{group_id}/git/diff/{project_id}/{commit_hash}")
+async def get_group_commit_diff(
+    group_id: str,
+    project_id: str,
+    commit_hash: str,
+    current_user: Optional[dict] = Depends(get_optional_user),
+):
+    """获取项目组内某个成员项目的 commit diff。"""
+    await _ensure_group_exists(group_id)
+
+    # 验证 project_id 属于该项目组
+    projects = await project_group_service.get_group_projects(group_id)
+    matched = next((p for p in projects if p.get("project_id") == project_id), None)
+    if not matched:
+        raise HTTPException(status_code=404, detail="该项目不属于此项目组")
+
+    cwd = matched.get("cwd")
+    if not cwd or not Path(cwd).is_dir():
+        raise HTTPException(status_code=404, detail=f"项目路径不存在: {cwd}")
+
+    # 验证 commit hash 格式
+    if not re.match(r"^[0-9a-fA-F]{7,40}$", commit_hash):
+        raise HTTPException(status_code=400, detail="无效的 commit hash 格式")
+
+    # git show --format= 只显示 diff
+    code, output = await git_command(
+        Path(cwd), ["show", "--format=", commit_hash], timeout=30
+    )
+    if code != 0:
+        raise HTTPException(status_code=404, detail=f"获取 commit diff 失败: {output[:300]}")
+
+    return PlainTextResponse(output)
 
 
 # ── 工作流绑定 ────────────────────────────

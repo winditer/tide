@@ -401,6 +401,52 @@ class PlanExecutor:
             new_status,
         )
 
+        # Plan 完成后，查找关联工作项并触发节点推进
+        if new_status == "completed":
+            await self._advance_linked_work_item(plan_id)
+
+    async def _advance_linked_work_item(self, plan_id: str) -> None:
+        """Plan 完成后，通过 work_item_transitions 查找关联工作项并触发推进。
+
+        幂等安全：on_work_item_task_completed 内部会检查 current_node_id 是否已过，
+        重复调用不会双重推进。
+        """
+        try:
+            async with async_session_factory() as session:
+                row = (await session.execute(
+                    text("""
+                        SELECT wit.work_item_id, wit.to_node_id, t.id as task_id
+                        FROM work_item_transitions wit
+                        JOIN tasks t ON t.id = wit.task_id
+                        WHERE t.plan_id = :plan_id
+                        LIMIT 1
+                    """),
+                    {"plan_id": plan_id},
+                )).fetchone()
+
+            if not row:
+                logger.debug(
+                    "[plan_executor] No linked work item for plan=%s, skip advance.",
+                    plan_id[:8],
+                )
+                return
+
+            mapping = dict(row._mapping)
+            task_id = mapping["task_id"]
+
+            # 延迟导入避免循环依赖
+            from backend.services.work_item_service import work_item_service
+            await work_item_service.on_work_item_task_completed(task_id, "plan_completed")
+            logger.info(
+                "[plan_executor] Triggered work item advance for plan=%s via task=%s",
+                plan_id[:8], task_id[:8],
+            )
+        except Exception as exc:
+            logger.warning(
+                "[plan_executor] Failed to advance work item for plan=%s: %s",
+                plan_id[:8], exc,
+            )
+
     # ── 子任务执行 ─────────────────────────────────────────
 
     async def _run_plan_task(self, plan_id: str, task_id: str) -> None:
@@ -426,14 +472,15 @@ class PlanExecutor:
         if task_workflow_id:
             await self._create_plan_work_item(plan_id, task_id, task, task_workflow_id)
 
-        plan_cwd = Path(plan.get("cwd") or task.get("cwd") or ".")
+        # 优先使用任务级别的 cwd（跨仓库 Plan 场景下每个任务有独立的仓库）
+        task_cwd = Path(task.get("cwd") or plan.get("cwd") or ".")
         worktree_path = ""
         branch_name = ""
-        run_cwd = plan_cwd
+        run_cwd = task_cwd
 
         if PLAN_USE_WORKTREES:
             wt, br, _base = await git_utils.prepare_plan_worktree(
-                plan_id, task_id, plan_cwd
+                plan_id, task_id, task_cwd
             )
             if str(wt):
                 worktree_path = str(wt)
@@ -457,7 +504,8 @@ class PlanExecutor:
         approved_retry = key in self._approved_retry
 
         output_chunks: list[str] = []
-        approval_pending = False
+        agent_output_chunks: list[str] = []  # 仅跟踪 agent 的自然语言回复，排除 tool_output/progress
+        approval_pending = False  # full_auto 模式不会进入审批流程
         final_status: Optional[str] = None
         final_message = ""
         try:
@@ -467,6 +515,7 @@ class PlanExecutor:
                 prompt=prompt,
                 cwd=str(run_cwd),
                 model=model,
+                full_auto=True,
             ):
                 if event.type in ("output", "tool_output", "progress"):
                     if event.content:
@@ -478,40 +527,21 @@ class PlanExecutor:
                             event.content,
                             event.type,
                         )
+                        # 仅收集 agent 的自然语言回复（不含 tool_output/progress）
+                        if event.type == "output":
+                            agent_output_chunks.append(event.content)
                 elif event.type == "session_id":
                     if event.session_id:
                         await self._update_task(task_id, session_id=event.session_id)
                 elif event.type == "approval_request":
-                    if approved_retry:
-                        # 已经是 approved 模式，仍触发 → 视作失败
-                        final_status = "failed"
-                        final_message = event.content or "approval still required"
-                        break
-                    approval_pending = True
-                    await event_emitter.emit_task_approval_request(
-                        task_id, task["workspace_id"], event.content or ""
+                    # plan_executor 始终以 full_auto=True 运行，不应收到审批请求
+                    logger.error(
+                        "[plan_executor] unexpected approval_request in full_auto mode, "
+                        "plan=%s task=%s",
+                        plan_id[:8], task_id[:8],
                     )
-                    await self._update_task(
-                        task_id,
-                        status="review",
-                        result=_truncate(event.content or "需要审批"),
-                    )
-                    await self._emit_status(task, "review")
-                    # 创建持久化审批记录
-                    try:
-                        from backend.services.approval_service import approval_service
-                        await approval_service.create_approval(
-                            task_id=task_id,
-                            workspace_id=task["workspace_id"],
-                            approval_type="agent_permission",
-                            detail={"reason": event.content or "Agent requires approval"},
-                            chat_id=None,
-                            plan_id=plan_id,
-                        )
-                    except Exception:
-                        logger.debug("create_approval in plan failed", exc_info=True)
-                    # 中止当前进程，等待 approve_task 唤醒
-                    await self._executor.cancel_task(task_id)
+                    final_status = "failed"
+                    final_message = event.content or "Unexpected approval request in full_auto mode"
                     break
                 elif event.type == "completed":
                     final_status = "completed"
@@ -552,6 +582,22 @@ class PlanExecutor:
         if approval_pending:
             # 等待 approve_task 触发
             return
+
+        # 将 agent 的自然语言回复单独存储到 agent_final_output，
+        # 供下游工作流节点提取 agent 的最终结论（而非完整日志）。
+        if agent_output_chunks:
+            try:
+                final_output_text = "\n".join(agent_output_chunks)
+                async with async_session_factory() as session:
+                    await session.execute(
+                        text(
+                            "UPDATE tasks SET agent_final_output = :output WHERE id = :task_id"
+                        ),
+                        {"output": final_output_text, "task_id": task_id},
+                    )
+                    await session.commit()
+            except Exception:  # noqa: BLE001
+                logger.debug("Failed to save agent_final_output for task=%s", task_id[:8], exc_info=True)
 
         # 正常结束，进入 finalize（test + diff → review/completed/failed）
         await self._finalize_task(plan_id, task_id, final_status, final_message, run_cwd)
@@ -727,6 +773,13 @@ class PlanExecutor:
         for key, value in fields.items():
             sets.append(f"{key} = :{key}")
             params[key] = value
+        # 当设置 completed_at 时，确保 started_at 有值
+        if "completed_at" in fields and "started_at" not in fields:
+            sets.append(
+                "started_at = CASE WHEN started_at IS NULL THEN "
+                "COALESCE(created_at, :fallback_started) ELSE started_at END"
+            )
+            params["fallback_started"] = _now_iso()
         async with async_session_factory() as session:
             await session.execute(
                 text(f"UPDATE tasks SET {', '.join(sets)} WHERE id = :task_id"),

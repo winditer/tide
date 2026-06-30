@@ -316,6 +316,7 @@ export type {
   WorkItemCreate,
   WorkItemUpdate,
   WorkItemTransition,
+  WorkItemPlanTask,
   WorkItemTriggerType,
   WorkItemSourceType,
   WorkItemPriority,
@@ -505,6 +506,10 @@ export {
   getGroupWorkflow,
   setGroupWorkflow,
   deleteGroupWorkflow,
+  getGroupBranches,
+  getGroupCommits,
+  getGroupChanges,
+  getGroupCommitDiff,
 } from "./api/project-groups";
 export type {
   ProjectGroupSummary,
@@ -519,6 +524,9 @@ export type {
   GroupVersionItem,
   GroupWorkflowBinding,
   PaginatedResponse,
+  GroupBranchProject,
+  GroupCommitItem,
+  GroupChangeProject,
 } from "./api/project-groups";
 export {
   useProjectGroups,
@@ -534,6 +542,9 @@ export {
   useGroupWorkflow,
   useSetGroupWorkflow,
   useDeleteGroupWorkflow,
+  useGroupBranches,
+  useGroupCommits,
+  useGroupChanges,
 } from "./hooks/use-project-groups";
 
 // Project group user members (与项目成员对称的项目组用户成员)
@@ -599,6 +610,11 @@ export {
   gitCommit,
   gitDiscard,
   gitIgnore,
+  createBranch,
+  deleteBranch,
+  pushBranch,
+  pullBranch,
+  createMergeRequest,
 } from "./api/git-audit";
 export type {
   GitCommit,
@@ -618,6 +634,11 @@ export {
   useGitCommitMutation,
   useGitDiscardMutation,
   useGitIgnoreMutation,
+  useCreateBranch,
+  useDeleteBranch,
+  usePushBranch,
+  usePullBranch,
+  useCreateMergeRequest,
 } from "./hooks/use-git-audit";
 
 // Files (code editor)

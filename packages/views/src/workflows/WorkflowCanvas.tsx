@@ -57,7 +57,7 @@ const DEFAULT_LABELS: Record<WorkflowNodeType, string> = {
 function defaultDataFor(type: WorkflowNodeType): Record<string, any> {
   switch (type) {
     case "agent":
-      return { label: "Code Agent", model: "gpt-4", prompt: "" };
+      return { label: "Code Agent", model: "gpt-4", prompt: "", routingTrigger: true };
     case "approval":
       return { label: "Review", approvers: [] };
     case "condition":

@@ -22,6 +22,7 @@ const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "
   completed: "secondary",
   failed: "destructive",
   stopped: "outline",
+  cancelled: "outline",
   approved: "secondary",
   rejected: "destructive",
 };
@@ -33,6 +34,7 @@ const STATUS_LABEL: Record<string, string> = {
   completed: "已完成",
   failed: "失败",
   stopped: "已停止",
+  cancelled: "已取消",
   approved: "已批准",
   rejected: "已拒绝",
 };
@@ -44,14 +46,23 @@ const STATUS_DOT: Record<string, string> = {
   completed: "bg-zinc-900",
   failed: "bg-red-600",
   stopped: "bg-zinc-500",
+  cancelled: "bg-zinc-500",
   approved: "bg-zinc-900",
   rejected: "bg-red-600",
 };
 
+function ensureUtc(iso: string): string {
+  // 如果没有时区信息（没有 Z 或 +/- 偏移），视为 UTC
+  if (!/[Zz]$/.test(iso) && !/[+-]\d{2}:\d{2}$/.test(iso)) {
+    return iso + "Z";
+  }
+  return iso;
+}
+
 function formatFull(iso: string | null | undefined) {
   if (!iso) return "—";
   try {
-    return new Date(iso).toLocaleString("zh-CN");
+    return new Date(ensureUtc(iso)).toLocaleString("zh-CN");
   } catch {
     return iso;
   }
@@ -60,7 +71,7 @@ function formatFull(iso: string | null | undefined) {
 function formatShort(iso: string | null | undefined) {
   if (!iso) return "—";
   try {
-    return new Date(iso).toLocaleString("zh-CN", {
+    return new Date(ensureUtc(iso)).toLocaleString("zh-CN", {
       month: "2-digit",
       day: "2-digit",
       hour: "2-digit",
@@ -296,7 +307,7 @@ export default function TaskDetailPage({
 
   const status = task.status as string;
   const canStop = status === "queued" || status === "running";
-  const canRetry = status === "failed" || status === "stopped" || status === "rejected";
+  const canRetry = status === "failed" || status === "stopped" || status === "rejected" || status === "cancelled";
   const needsApproval = status === "review";
   const attachments = parseAttachments(task.attachments);
 

@@ -52,6 +52,17 @@ export interface WorkItem {
   updated_at: string;
 }
 
+/** Plan 关联的子任务（后端 get_transitions 补充） */
+export interface WorkItemPlanTask {
+  id: string;
+  status: string;
+  prompt?: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  branch_name?: string | null;
+  commit_hash?: string | null;
+}
+
 export interface WorkItemTransition {
   id: string;
   work_item_id: string;
@@ -62,6 +73,10 @@ export interface WorkItemTransition {
   operator?: string;
   output?: string;
   created_at: string;
+  /** 关联 Plan ID（后端自动补充） */
+  plan_id?: string;
+  /** Plan 下所有子任务（后端自动补充） */
+  plan_tasks?: WorkItemPlanTask[];
 }
 
 export interface ProjectSettings {

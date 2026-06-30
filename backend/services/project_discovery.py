@@ -72,6 +72,21 @@ GENERIC_DIRS = {
 # 兼容旧命名 .lark-codex/worktrees 与新命名 .tide/worktrees。
 WORKTREE_PATH_FRAGMENTS = (".tide/worktrees", ".lark-codex/worktrees")
 
+# Codex/Qoder 客户端对话工作目录，不是真正的项目
+_EXCLUDED_PROJECT_PATTERNS = [
+    str(Path.home() / "Documents" / "Codex"),    # Codex Desktop 对话目录
+    str(Path.home() / ".codex"),                   # Codex CLI 内部目录
+    str(Path.home() / ".qoder" / "cache"),         # Qoder 缓存目录
+]
+
+
+def _is_excluded_path(path) -> bool:
+    """判断路径是否属于客户端对话工作目录（非真实项目）。"""
+    if not path:
+        return False
+    s = str(path)
+    return any(s.startswith(pattern) for pattern in _EXCLUDED_PROJECT_PATTERNS)
+
 
 def is_worktree_path(path) -> bool:
     """判断给定路径是否位于 worktrees 目录下（兼容 .tide 和 .lark-codex 命名）。"""
@@ -91,6 +106,7 @@ class SessionRecord:
     cwd: Optional[Path]
     file: Path
     updated_at: float
+    session_source: Optional[str] = None
 
 
 @dataclass
@@ -165,10 +181,11 @@ def _list_jsonl(directory: Path) -> List[Path]:
     return files[:MAX_SESSION_FILES]
 
 
-def _peek_cwd(path: Path, agent_id: str) -> Tuple[Optional[Path], Optional[str]]:
-    """只读取前若干行以提取 cwd 与 session_id。"""
+def _peek_cwd(path: Path, agent_id: str) -> Tuple[Optional[Path], Optional[str], Optional[str]]:
+    """只读取前若干行以提取 cwd、session_id 与 session_source。"""
     cwd: Optional[Path] = None
     session_id: Optional[str] = None
+    session_source: Optional[str] = None
     try:
         with path.open("r", encoding="utf-8", errors="ignore") as f:
             for i, line in enumerate(f):
@@ -192,6 +209,8 @@ def _peek_cwd(path: Path, agent_id: str) -> Tuple[Optional[Path], Optional[str]]
                         c = payload.get("cwd")
                         if c and not cwd:
                             cwd = Path(str(c))
+                        if not session_source:
+                            session_source = payload.get("session_source")
                     elif typ == "turn_context":
                         c = payload.get("cwd")
                         if c and not cwd:
@@ -209,8 +228,8 @@ def _peek_cwd(path: Path, agent_id: str) -> Tuple[Optional[Path], Optional[str]]
                 if cwd and session_id:
                     break
     except OSError:
-        return None, None
-    return cwd, session_id
+        return None, None, None
+    return cwd, session_id, session_source
 
 
 def _scan_agent(directory: Path, agent_id: str) -> List[SessionRecord]:
@@ -220,7 +239,7 @@ def _scan_agent(directory: Path, agent_id: str) -> List[SessionRecord]:
             mtime = path.stat().st_mtime
         except OSError:
             continue
-        cwd, sid = _peek_cwd(path, agent_id)
+        cwd, sid, source = _peek_cwd(path, agent_id)
         if not sid:
             sid = path.stem
         records.append(
@@ -230,6 +249,7 @@ def _scan_agent(directory: Path, agent_id: str) -> List[SessionRecord]:
                 cwd=cwd,
                 file=path,
                 updated_at=mtime,
+                session_source=source,
             )
         )
     return records
@@ -253,13 +273,21 @@ def _scan_qoder_sessions() -> List[SessionRecord]:
 def _aggregate(records: List[SessionRecord]) -> List[DiscoveredProject]:
     projects: Dict[str, DiscoveredProject] = {}
     for rec in records:
+        # 排除 Codex 客户端的普通对话（vscode/cli），仅保留 exec 类型参与项目发现
+        if rec.session_source and rec.session_source != "exec":
+            continue
         # 排除位于 .tide/worktrees/ 下的会话（Plan 执行的临时工作树）
         if is_worktree_path(rec.cwd):
+            continue
+        # 排除客户端对话工作目录（cwd 本身即在排除路径下则无需寻根）
+        if _is_excluded_path(rec.cwd):
             continue
         root = find_project_root(rec.cwd)
         if not root:
             continue
         if is_worktree_path(root):
+            continue
+        if _is_excluded_path(root):
             continue
         key = str(root)
         proj = projects.get(key)

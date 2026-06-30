@@ -1,8 +1,8 @@
 "use client";
 
-import Link from "next/link";
-import { useMemo, useState } from "react";
-import { Pencil, Trash2, AlertTriangle, GitMerge } from "lucide-react";
+
+import { useMemo, useState, useCallback } from "react";
+import { Pencil, Trash2, AlertTriangle, GitMerge, Maximize2, Minimize2, CheckCircle2, ArrowRight, Clock } from "lucide-react";
 import { Button, Badge, Input, Select } from "@tide/ui";
 import {
   useWorkItem,
@@ -22,10 +22,33 @@ import {
   type WorkItemUpdate,
   type WorkItemTransition,
   type WorkItemArtifact,
+  type WorkItemPlanTask,
   type Approval,
 } from "@tide/core";
 import { CrossRepoResults } from "./CrossRepoResults";
 import { MergeConflictPanel } from "../code-editor/MergeConflictPanel";
+
+const TASK_STATUS_LABEL: Record<string, string> = {
+  queued: "排队中",
+  running: "运行中",
+  review: "待审批",
+  completed: "已完成",
+  failed: "失败",
+  rejected: "已拒绝",
+  stopped: "已停止",
+  cancelled: "已取消",
+};
+
+const TASK_STATUS_COLOR: Record<string, string> = {
+  queued: "bg-slate-400",
+  running: "bg-amber-500 animate-pulse",
+  review: "bg-violet-500",
+  completed: "bg-emerald-600",
+  failed: "bg-rose-600",
+  rejected: "bg-rose-500",
+  stopped: "bg-zinc-500",
+  cancelled: "bg-zinc-500",
+};
 
 const PRIORITY_OPTIONS: { value: string; label: string }[] = [
   { value: "0", label: "无" },
@@ -163,9 +186,11 @@ export function WorkItemDetailPanel({
     updateMutation.mutate({ id: item.id, data });
   };
 
+  const [isExpanded, setIsExpanded] = useState(false);
+
   if (isLoading || !item) {
     return (
-      <PanelShell onClose={onClose}>
+      <PanelShell onClose={onClose} isExpanded={isExpanded} onToggleExpand={() => setIsExpanded(!isExpanded)} itemId={itemId}>
         <div className="py-12 text-center font-mono text-xs text-zinc-500">
           ◐ LOADING…
         </div>
@@ -178,7 +203,7 @@ export function WorkItemDetailPanel({
   const fieldDisabled = updateMutation.isPending || isViewer;
 
   return (
-    <PanelShell onClose={onClose}>
+    <PanelShell onClose={onClose} isExpanded={isExpanded} onToggleExpand={() => setIsExpanded(!isExpanded)} itemId={itemId}>
       <div className="space-y-6">
         {/* Title area */}
         {editing ? (
@@ -373,22 +398,57 @@ export function WorkItemDetailPanel({
                     </div>
                     {(t.task_id || sessionId) && (
                       <div className="mt-2 flex flex-wrap items-center gap-3">
-                        {t.task_id && (
-                          <Link
+                        {t.task_id && !t.plan_tasks?.length && (
+                          <a
                             href={`/tasks/${t.task_id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
                             className="text-primary text-xs hover:underline transition-smooth"
                           >
                             → 查看任务 {t.task_id.slice(0, 8)}
-                          </Link>
+                          </a>
                         )}
                         {sessionId && (
-                          <Link
+                          <a
                             href={`/sessions/${sessionId}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
                             className="text-primary text-xs hover:underline transition-smooth"
                           >
                             → 查看会话 {sessionId.slice(0, 8)}
-                          </Link>
+                          </a>
                         )}
+                      </div>
+                    )}
+                    {/* Plan 子任务列表 */}
+                    {t.plan_tasks && t.plan_tasks.length > 0 && (
+                      <div className="mt-2 rounded-lg border border-border/50 bg-muted/20 p-2">
+                        <div className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                          Plan 任务 · {t.plan_tasks.length} 项
+                        </div>
+                        <div className="space-y-1">
+                          {t.plan_tasks.map((pt: WorkItemPlanTask) => (
+                            <a
+                              key={pt.id}
+                              href={`/tasks/${pt.id}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-2 rounded-md px-2 py-1.5 transition-smooth hover:bg-muted/50"
+                            >
+                              <span
+                                className={`inline-block h-2 w-2 shrink-0 rounded-full ${
+                                  TASK_STATUS_COLOR[pt.status] ?? "bg-slate-400"
+                                }`}
+                              />
+                              <span className="min-w-0 flex-1 truncate text-xs text-foreground">
+                                {pt.prompt?.slice(0, 60) || pt.id.slice(0, 8)}
+                              </span>
+                              <span className="shrink-0 text-[10px] text-muted-foreground">
+                                {TASK_STATUS_LABEL[pt.status] ?? pt.status}
+                              </span>
+                            </a>
+                          ))}
+                        </div>
                       </div>
                     )}
                     {t.output && (
@@ -687,21 +747,73 @@ function WorkItemApprovalSection({ item }: WorkItemApprovalSectionProps) {
 function WorkItemMergeConflictSection({ item }: { item: WorkItem }) {
   const [showPanel, setShowPanel] = useState(false);
 
-  // Check if metadata contains merge_conflict info
   const meta = item.metadata as Record<string, any> | undefined;
-  if (!meta || !meta.merge_conflict) return null;
+  const mergeResult = meta?.git_merge_result as {
+    success?: boolean;
+    source_branch?: string;
+    target_branch?: string;
+    strategy?: string;
+    conflict?: boolean;
+    conflict_files?: string[];
+    conflict_count?: number;
+    on_conflict?: string;
+    auto_push?: boolean;
+    delete_source?: boolean;
+    output?: string;
+    timestamp?: string;
+  } | undefined;
 
-  const conflictData = meta.merge_conflict_data as {
+  // 向后兼容：从旧结构读取冲突数据
+  const hasOldConflict = meta?.merge_conflict === true;
+  const conflictData = meta?.merge_conflict_data as {
     cwd?: string;
     source_branch?: string;
     target_branch?: string;
     conflict_files?: string[];
   } | undefined;
 
+  // 无合并结果且无旧式冲突标记时不展示
+  if (!mergeResult && !hasOldConflict) return null;
+
+  // 合并成功展示
+  if (mergeResult?.success) {
+    return (
+      <div>
+        <div className="rounded-xl border border-emerald-200/70 bg-emerald-50/60 p-4 shadow-card">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+            <span className="text-xs font-semibold text-emerald-800">合并成功</span>
+          </div>
+          <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Badge variant="outline" className="text-[10px] font-mono">
+              {mergeResult.source_branch || "source"}
+            </Badge>
+            <ArrowRight className="h-3 w-3" />
+            <Badge variant="outline" className="text-[10px] font-mono">
+              {mergeResult.target_branch || "target"}
+            </Badge>
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
+            <span>策略: {mergeResult.strategy || "merge"}</span>
+            {mergeResult.auto_push && <span>• 已自动推送</span>}
+            {mergeResult.delete_source && <span>• 已删除源分支</span>}
+          </div>
+          {mergeResult.timestamp && (
+            <div className="mt-1.5 flex items-center gap-1 text-[10px] text-muted-foreground">
+              <Clock className="h-3 w-3" />
+              <span>{new Date(mergeResult.timestamp).toLocaleString("zh-CN")}</span>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // 冲突/失败展示
+  const sourceBranch = mergeResult?.source_branch || conflictData?.source_branch || "source";
+  const targetBranch = mergeResult?.target_branch || conflictData?.target_branch || "target";
+  const conflictFiles = mergeResult?.conflict_files || conflictData?.conflict_files || [];
   const cwd = conflictData?.cwd || "";
-  const sourceBranch = conflictData?.source_branch || "source";
-  const targetBranch = conflictData?.target_branch || "target";
-  const conflictFiles = conflictData?.conflict_files || [];
 
   if (showPanel && conflictFiles.length > 0) {
     return (
@@ -727,11 +839,26 @@ function WorkItemMergeConflictSection({ item }: { item: WorkItem }) {
           <AlertTriangle className="h-4 w-4 text-amber-700" />
           <span className="text-xs font-semibold text-amber-800">合并冲突</span>
         </div>
+        <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Badge variant="outline" className="text-[10px] font-mono">
+            {sourceBranch}
+          </Badge>
+          <ArrowRight className="h-3 w-3" />
+          <Badge variant="outline" className="text-[10px] font-mono">
+            {targetBranch}
+          </Badge>
+        </div>
         <p className="mt-1.5 text-[11px] text-muted-foreground">
           {conflictFiles.length > 0
             ? `${conflictFiles.length} 个文件存在冲突，需要手动解决`
             : "存在合并冲突，需要解决"}
         </p>
+        {mergeResult?.timestamp && (
+          <div className="mt-1 flex items-center gap-1 text-[10px] text-muted-foreground">
+            <Clock className="h-3 w-3" />
+            <span>{new Date(mergeResult.timestamp).toLocaleString("zh-CN")}</span>
+          </div>
+        )}
         {conflictFiles.length > 0 && (
           <Button
             size="sm"
@@ -750,30 +877,63 @@ function WorkItemMergeConflictSection({ item }: { item: WorkItem }) {
 function PanelShell({
   children,
   onClose,
+  isExpanded,
+  onToggleExpand,
+  itemId,
 }: {
   children: React.ReactNode;
   onClose: () => void;
+  isExpanded: boolean;
+  onToggleExpand: () => void;
+  itemId?: string;
 }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopyId = useCallback(() => {
+    if (!itemId) return;
+    navigator.clipboard.writeText(itemId).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }, [itemId]);
+
   return (
     <div
       className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-sm animate-in fade-in-0"
       onClick={onClose}
     >
       <div
-        className="h-full w-full max-w-lg overflow-y-auto rounded-l-2xl border-l border-border/50 bg-card p-6 shadow-2xl animate-in slide-in-from-right-10"
+        className={`h-full w-full ${isExpanded ? "max-w-4xl" : "max-w-lg"} overflow-y-auto rounded-l-2xl border-l border-border/50 bg-card p-6 shadow-2xl animate-in slide-in-from-right-10`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-6 flex items-center justify-between border-b border-border/40 pb-4">
           <span className="text-xs font-medium uppercase tracking-[0.3em] text-muted-foreground">
             工作项详情
           </span>
-          <button
-            onClick={onClose}
-            aria-label="关闭"
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
-          >
-            ✕
-          </button>
+          <div className="flex items-center gap-1">
+            {itemId && (
+              <button
+                onClick={handleCopyId}
+                title={copied ? "已复制" : `点击复制 ID: ${itemId}`}
+                className="mr-1 rounded-md px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
+              >
+                {copied ? "✓ 已复制" : itemId.slice(0, 8)}
+              </button>
+            )}
+            <button
+              onClick={onToggleExpand}
+              title={isExpanded ? "还原" : "放大"}
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
+            >
+              {isExpanded ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+            </button>
+            <button
+              onClick={onClose}
+              aria-label="关闭"
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
+            >
+              ✕
+            </button>
+          </div>
         </div>
         {children}
       </div>

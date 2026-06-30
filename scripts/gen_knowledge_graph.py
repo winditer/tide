@@ -1399,7 +1399,8 @@ class MarkdownRenderer:
         out.append("|----|-------|------|")
         layer_stats = stats.get("layers", {})
         for layer in data.get("layers", []):
-            out.append(f"| {layer['name']} | {layer_stats.get(layer['name'], 0)} | {layer.get('description', '')} |")
+            layer_name = layer.get('name', 'unknown')
+            out.append(f"| {layer_name} | {layer_stats.get(layer_name, 0)} | {layer.get('description', '')} |")
         out.append("")
 
         # Mermaid 图（节点过多时简化为按层聚合）
@@ -1409,19 +1410,19 @@ class MarkdownRenderer:
             out.append("```mermaid")
             out.append("graph TD")
             for m in modules:
-                node_id = self._safe_mermaid_id(m["id"])
-                out.append(f"    {node_id}[{m['name']}]")
+                node_id = self._safe_mermaid_id(m.get("id", ""))
+                out.append(f"    {node_id}[{m.get('name', 'unknown')}]")
             for e in edges[: self.MAX_MERMAID_NODES * 3]:
-                out.append(f"    {self._safe_mermaid_id(e['from'])} --> {self._safe_mermaid_id(e['to'])}")
+                out.append(f"    {self._safe_mermaid_id(e.get('from', ''))} --> {self._safe_mermaid_id(e.get('to', ''))}")
             out.append("```")
         else:
             out.append("## 跨层依赖统计")
             out.append("")
             cross: dict[tuple[str, str], int] = {}
-            id_to_layer = {m["id"]: m["layer"] for m in modules}
+            id_to_layer = {m.get("id", ""): m.get("layer", "other") for m in modules}
             for e in edges:
-                a = id_to_layer.get(e["from"], "other")
-                b = id_to_layer.get(e["to"], "other")
+                a = id_to_layer.get(e.get("from", ""), "other")
+                b = id_to_layer.get(e.get("to", ""), "other")
                 cross[(a, b)] = cross.get((a, b), 0) + 1
             out.append("```mermaid")
             out.append("graph LR")
@@ -1442,17 +1443,17 @@ class MarkdownRenderer:
         out.append("")
         by_layer: dict[str, list[dict[str, Any]]] = {}
         for m in modules:
-            by_layer.setdefault(m["layer"], []).append(m)
+            by_layer.setdefault(m.get("layer", "other"), []).append(m)
         for layer in sorted(by_layer.keys()):
             out.append(f"### {layer}")
             out.append("")
             out.append("| 模块 | 文件 | 行数 | 内部依赖 | 被依赖 | 说明 |")
             out.append("|------|------|------|---------|--------|------|")
-            for m in sorted(by_layer[layer], key=lambda x: x["id"]):
+            for m in sorted(by_layer[layer], key=lambda x: x.get("id", "")):
                 desc = (m.get("description") or "").replace("|", "\\|")
                 out.append(
-                    f"| `{m['name']}` | `{m['file']}` | {m['lines']} | "
-                    f"{len(m['imports_internal'])} | {len(m.get('imported_by', []))} | {desc} |"
+                    f"| `{m.get('name', 'unknown')}` | `{m.get('file', 'N/A')}` | {m.get('lines', 0)} | "
+                    f"{len(m.get('imports_internal', []))} | {len(m.get('imported_by', []))} | {desc} |"
                 )
             out.append("")
         return "\n".join(out)
@@ -1474,13 +1475,13 @@ class MarkdownRenderer:
 
         for router in data.get("routers", []):
             tag_str = ", ".join(router.get("tags", []))
-            out.append(f"## {router['id']}")
+            out.append(f"## {router.get('id', 'unknown')}")
             out.append("")
             out.append(f"- **prefix**: `{router.get('prefix', '')}`")
             out.append(f"- **tags**: {tag_str or '—'}")
             out.append(f"- **file**: `{router.get('file', '')}`")
             if router.get("service"):
-                out.append(f"- **service**: `{router['service']}`")
+                out.append(f"- **service**: `{router.get('service', '')}`")
             out.append("")
             out.append("| 方法 | 路径 | 函数 | 描述 |")
             out.append("|------|------|------|------|")
@@ -1489,7 +1490,7 @@ class MarkdownRenderer:
                 full_path = f"{prefix}{ep.get('path', '')}" or "/"
                 desc = (ep.get("description") or "").replace("|", "\\|")
                 out.append(
-                    f"| **{ep['method']}** | `{full_path}` | `{ep['function']}` | {desc} |"
+                    f"| **{ep.get('method', 'UNKNOWN')}** | `{full_path}` | `{ep.get('function', 'unknown')}` | {desc} |"
                 )
             out.append("")
         return "\n".join(out)
@@ -1514,36 +1515,36 @@ class MarkdownRenderer:
         out.append("## 实体分组")
         out.append("")
         for group in data.get("entity_groups", []):
-            out.append(f"### {group['name']}")
+            out.append(f"### {group.get('name', 'unknown')}")
             out.append("")
-            for tname in group["tables"]:
-                table = next((t for t in tables if t["name"] == tname), None)
+            for tname in group.get("tables", []):
+                table = next((t for t in tables if t.get("name") == tname), None)
                 if not table:
                     continue
-                out.append(f"#### `{table['name']}`")
+                out.append(f"#### `{table.get('name', 'unknown')}`")
                 desc = table.get("description")
                 if desc:
                     out.append(f"> {desc}")
                 out.append("")
                 out.append("| 列 | 类型 | 约束 | 默认 | 外键 |")
                 out.append("|----|------|------|------|------|")
-                for col in table["columns"]:
+                for col in table.get("columns", []):
                     constraints = []
                     if col.get("pk"):
                         constraints.append("PK")
                     if col.get("not_null"):
                         constraints.append("NOT NULL")
                     if col.get("source"):
-                        constraints.append(f"via {col['source']}")
+                        constraints.append(f"via {col.get('source', '')}")
                     out.append(
-                        f"| `{col['name']}` | `{col['type']}` | {', '.join(constraints) or '—'} | "
+                        f"| `{col.get('name', 'unknown')}` | `{col.get('type', 'unknown')}` | {', '.join(constraints) or '—'} | "
                         f"{col.get('default') or '—'} | {col.get('fk') or '—'} |"
                     )
-                if table["indexes"]:
+                if table.get("indexes"):
                     out.append("")
                     out.append("**索引**：")
-                    for idx in table["indexes"]:
-                        out.append(f"- `{idx['name']}` ({', '.join(idx['columns'])})")
+                    for idx in table.get("indexes", []):
+                        out.append(f"- `{idx.get('name', 'unknown')}` ({', '.join(idx.get('columns', []))})")
                 out.append("")
         return "\n".join(out)
 
@@ -1557,19 +1558,19 @@ class MarkdownRenderer:
         out.append("```mermaid")
         out.append("erDiagram")
         # 限制节点数以避免 Mermaid 超载
-        shown = {t["name"] for t in tables[: self.MAX_MERMAID_NODES]}
+        shown = {t.get("name", "") for t in tables[: self.MAX_MERMAID_NODES]}
         for t in tables:
-            if t["name"] not in shown:
+            if t.get("name", "") not in shown:
                 continue
-            out.append(f"    {t['name']} {{")
-            for col in t["columns"][:8]:
-                col_type = re.sub(r"\W", "_", col["type"])
+            out.append(f"    {t.get('name', '')} {{")
+            for col in t.get("columns", [])[:8]:
+                col_type = re.sub(r"\W", "_", col.get("type", "unknown"))
                 hint = "PK" if col.get("pk") else ("FK" if col.get("fk") else "")
-                out.append(f"        {col_type} {col['name']} {hint}".rstrip())
+                out.append(f"        {col_type} {col.get('name', 'unknown')} {hint}".rstrip())
             out.append("    }")
         for fk in fks:
-            if fk["from_table"] in shown and fk["to_table"] in shown:
-                out.append(f"    {fk['to_table']} ||--o{{ {fk['from_table']} : has")
+            if fk.get("from_table", "") in shown and fk.get("to_table", "") in shown:
+                out.append(f"    {fk.get('to_table', '')} ||--o{{ {fk.get('from_table', '')} : has")
         out.append("```")
         return "\n".join(out)
 
@@ -1585,9 +1586,9 @@ class MarkdownRenderer:
         out.append("## 领域概览")
         out.append("")
         for domain in data.get("domains", []):
-            out.append(f"### {domain['name']}")
+            out.append(f"### {domain.get('name', 'unknown')}")
             out.append("")
-            for cid in domain["concepts"]:
+            for cid in domain.get("concepts", []):
                 out.append(f"- `{cid}`")
             out.append("")
 
@@ -1600,19 +1601,19 @@ class MarkdownRenderer:
             out.append("```mermaid")
             out.append("graph LR")
             for c in concepts:
-                nid = self._safe_mermaid_id(c["id"])
-                out.append(f"    {nid}([{c['name']}])")
+                nid = self._safe_mermaid_id(c.get("id", ""))
+                out.append(f"    {nid}([{c.get('name', 'unknown')}])")
             for r in relationships:
-                a = self._safe_mermaid_id(r["from"])
-                b = self._safe_mermaid_id(r["to"])
-                out.append(f"    {a} -->|{r['type']}| {b}")
+                a = self._safe_mermaid_id(r.get("from", ""))
+                b = self._safe_mermaid_id(r.get("to", ""))
+                out.append(f"    {a} -->|{r.get('type', '')}| {b}")
             out.append("```")
             out.append("")
 
         out.append("## 概念详情")
         out.append("")
         for c in concepts:
-            out.append(f"### {c['name']}")
+            out.append(f"### {c.get('name', 'unknown')}")
             out.append("")
             if c.get("description"):
                 out.append(f"> {c['description']}")

@@ -54,6 +54,8 @@ function getStatusBgColor(status: string): string {
   return "bg-yellow-100";
 }
 
+// ── DiffFileList Component ──────────────────────────────────────────────────
+
 export function DiffFileList({
   files,
   selectedFile,
@@ -73,17 +75,12 @@ export function DiffFileList({
       <div className="flex-1 overflow-y-auto">
         {files.map((file) => {
           const isSelected = file.path === selectedFile;
-          const fileName = file.path.split("/").pop() ?? file.path;
-          const dirPath = file.path.includes("/")
-            ? file.path.slice(0, file.path.lastIndexOf("/"))
-            : "";
-
           return (
             <div
               key={file.path}
               onClick={() => onSelectFile(file.path)}
               className={`
-                group flex items-center gap-2 px-3 py-2 cursor-pointer border-l-2 transition-colors
+                group flex items-center gap-2 px-3 py-1.5 cursor-pointer border-l-2 transition-colors
                 ${
                   isSelected
                     ? "border-l-blue-500 bg-blue-50"
@@ -96,16 +93,10 @@ export function DiffFileList({
               >
                 {getStatusLabel(file.status)}
               </span>
-              <div className="flex-1 min-w-0">
-                <p className="text-xs font-medium text-zinc-800 truncate">
-                  {fileName}
-                </p>
-                {dirPath && (
-                  <p className="text-[10px] text-zinc-400 truncate">
-                    {dirPath}
-                  </p>
-                )}
-              </div>
+              <FileText className="h-3.5 w-3.5 text-zinc-400 flex-shrink-0" />
+              <span className="text-xs font-medium text-zinc-800 truncate flex-1 min-w-0" title={file.path}>
+                {file.path}
+              </span>
               {(file.additions !== undefined || file.deletions !== undefined) && (
                 <span className="flex items-center gap-1 text-[10px] flex-shrink-0">
                   {file.additions !== undefined && file.additions > 0 && (

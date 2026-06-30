@@ -562,7 +562,7 @@ class KnowledgeService:
                     md_file.write_text(md_func(data), encoding="utf-8")
                     sections.append(section)
                     logger.info("Rendered %s from JSON → Markdown", section)
-                except (json.JSONDecodeError, OSError, AttributeError, TypeError) as e:
+                except (json.JSONDecodeError, OSError, AttributeError, TypeError, KeyError) as e:
                     logger.warning("Failed to parse/render %s: %s", json_file, e)
                     # 如果 JSON 渲染失败但有 .md 文件，使用它
                     if md_file.exists():
@@ -594,6 +594,79 @@ class KnowledgeService:
         )
         index_path = root / "_index.md"
         index_path.write_text(renderer.render_index(meta, sections), encoding="utf-8")
+
+
+    # ── 模块摘要聚合 ─────────────────────────────────
+
+    async def get_project_modules_summary(self, cwd: str) -> str:
+        """从 .knowledge/module/module_graph.json 提取项目模块职责摘要（纯文本，200字内）
+
+        返回格式示例：
+        "API层: auth, tasks, work_items, projects; 服务层: workflow_engine, plan_service, task_service; 运行时: executor, git_utils"
+
+        知识图谱文件不存在时返回空字符串。
+        """
+        graph_path = Path(cwd) / ".knowledge" / "module" / "module_graph.json"
+        try:
+            loop = asyncio.get_running_loop()
+            content = await loop.run_in_executor(None, graph_path.read_text, "utf-8")
+            data = json.loads(content)
+        except (OSError, json.JSONDecodeError, ValueError):
+            return ""
+
+        modules = data.get("modules")
+        if not isinstance(modules, list):
+            return ""
+
+        # 按 layer 分组
+        layer_map: Dict[str, List[str]] = {}
+        for mod in modules:
+            layer = mod.get("layer", "other")
+            name = mod.get("name", "")
+            if not name or name == "__init__":
+                continue
+            layer_map.setdefault(layer, []).append(name)
+
+        # 构建 layer 显示名映射
+        layers_meta = data.get("layers", [])
+        layer_labels: Dict[str, str] = {}
+        for l in layers_meta:
+            if isinstance(l, dict) and l.get("name"):
+                layer_labels[l["name"]] = l.get("description", l["name"])
+
+        # 生成摘要
+        parts: List[str] = []
+        for layer_name, mod_names in layer_map.items():
+            if layer_name == "other":
+                continue
+            label = layer_labels.get(layer_name, layer_name)
+            display_names = mod_names[:8]
+            parts.append(f"{label}: {', '.join(display_names)}")
+
+        summary = "; ".join(parts)
+        # 截断到 200 字符
+        if len(summary) > 200:
+            summary = summary[:197] + "..."
+        return summary
+
+    async def get_group_modules_summaries(self, group_id: str) -> Dict[str, str]:
+        """并行获取项目组内所有项目的模块摘要
+
+        返回: {project_id: summary_text, ...}
+        """
+        members = await project_group_service.get_group_projects(group_id)
+        if not members:
+            return {}
+
+        async def _fetch(project: dict) -> tuple:
+            cwd = project.get("cwd", "")
+            if not cwd or not os.path.isdir(cwd):
+                return (project["project_id"], "")
+            summary = await self.get_project_modules_summary(cwd)
+            return (project["project_id"], summary)
+
+        results = await asyncio.gather(*[_fetch(m) for m in members])
+        return {pid: s for pid, s in results}
 
 
 def _run_gen_script(repo_cwd: str, graph_type: str) -> tuple[int, str, str]:

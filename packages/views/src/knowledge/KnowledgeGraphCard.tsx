@@ -273,7 +273,6 @@ export function KnowledgeGraphCard({ scope, targetId }: KnowledgeGraphCardProps)
         content: draft,
         projectId: scope === "group" ? activeRepo?.project_id : undefined,
       });
-      toast({ title: "已保存" });
       setEditing(false);
     } catch (err) {
       toast({

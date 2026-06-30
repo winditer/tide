@@ -41,6 +41,10 @@ async def init_db():
             await db.execute("ALTER TABLE tasks ADD COLUMN group_id TEXT")
         if "synced_message_count" not in task_columns:
             await db.execute("ALTER TABLE tasks ADD COLUMN synced_message_count INTEGER DEFAULT 0")
+        if "retry_count" not in task_columns:
+            await db.execute("ALTER TABLE tasks ADD COLUMN retry_count INTEGER DEFAULT 0")
+        if "agent_final_output" not in task_columns:
+            await db.execute("ALTER TABLE tasks ADD COLUMN agent_final_output TEXT")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_group ON tasks(group_id)")
 
         # approvals 表升级（兑容旧版 schema）
@@ -167,5 +171,29 @@ async def init_db():
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_pgum_group ON project_group_user_members(group_id)"
         )
+
+        # 组合索引：加速按版本分组的工作项聚合查询
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_work_items_project_version ON work_items(project_id, version_id)")
+
+        # approvals 防重复唯一索引（兼容旧库迁移）
+        # 先清理旧的重复 pending 记录，保留每组最新一条，其余标记为 cancelled
+        await db.execute("""
+            UPDATE approvals SET status = 'cancelled', resolved_at = datetime('now')
+            WHERE status = 'pending' AND id NOT IN (
+                SELECT id FROM (
+                    SELECT id, ROW_NUMBER() OVER (
+                        PARTITION BY task_id, COALESCE(plan_id, ''), type
+                        ORDER BY created_at DESC
+                    ) AS rn
+                    FROM approvals
+                    WHERE status = 'pending'
+                ) WHERE rn = 1
+            )
+        """)
+        # 创建唯一索引（已在 init.sql 中定义，此处确保旧库也能补建）
+        await db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_approvals_unique_pending
+            ON approvals(task_id, COALESCE(plan_id, ''), type) WHERE status = 'pending'
+        """)
 
         await db.commit()

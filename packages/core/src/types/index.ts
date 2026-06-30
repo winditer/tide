@@ -22,6 +22,7 @@ export type {
   WorkItemCreate,
   WorkItemUpdate,
   WorkItemTransition,
+    WorkItemPlanTask,
   WorkItemTriggerType,
   WorkItemSourceType,
   WorkItemPriority,

@@ -411,7 +411,12 @@ async def list_projects(
 
     # 排除 .tide/worktrees/ 下的临时工作树路径，
     # 防止 Plan 执行产生的 worktree 被误列为独立项目。
-    cwds = {c for c in cwds if not project_discovery.is_worktree_path(c)}
+    # 同时排除客户端对话工作目录（如 ~/Documents/Codex/、~/.codex/、~/.qoder/cache/）
+    cwds = {
+        c for c in cwds
+        if not project_discovery.is_worktree_path(c)
+        and not project_discovery._is_excluded_path(c)
+    }
 
     # 为每个项目预先获取会话列表（与 /api/tasks 合并逻辑保持一致：
     # task_count = DB 任务 + 文件会话按 session_id 去重）
@@ -670,12 +675,8 @@ async def get_project_sessions(
 
 
 def _project_chats(cwd: str, agent_id: Optional[str] = None) -> list[dict]:
-    """返回与项目 ``cwd`` 内容相关、但 ``project_root`` 为空的普通对话列表。
-
-    discover_sessions 已在内部完成精确项目路径匹配，
-    此处直接返回 discover_chats 结果即可。
-    """
-    return discover_chats(agent_id=agent_id)
+    """返回与项目 cwd 相关、但 project_root 为空的普通对话列表。"""
+    return discover_chats(project_cwd=cwd, agent_id=agent_id)
 
 
 @router.get("/{project_id}/chats")

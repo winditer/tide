@@ -4,6 +4,9 @@ import {
   createProjectGroup,
   deleteGroupWorkflow,
   deleteProjectGroup,
+  getGroupBranches,
+  getGroupChanges,
+  getGroupCommits,
   getGroupConversations,
   getGroupTasks,
   getGroupVersions,
@@ -206,5 +209,50 @@ export function useDeleteGroupWorkflow() {
     onSuccess: (_, groupId) => {
       qc.invalidateQueries({ queryKey: groupWorkflowKey(groupId) });
     },
+  });
+}
+
+// ── 项目组 Git 聚合 hooks ─────────────────────────────────────
+
+const groupBranchesKey = (groupId: string) =>
+  ["project-group", groupId, "branches"] as const;
+const groupCommitsKey = (
+  groupId: string,
+  params?: { since?: string; until?: string; limit?: number },
+) =>
+  ["project-group", groupId, "commits", params ?? null] as const;
+const groupChangesKey = (
+  groupId: string,
+  params?: { group_by?: string; since?: string; until?: string },
+) =>
+  ["project-group", groupId, "changes", params ?? null] as const;
+
+export function useGroupBranches(groupId: string | undefined) {
+  return useQuery({
+    queryKey: groupBranchesKey(groupId ?? ""),
+    queryFn: () => getGroupBranches(groupId as string),
+    enabled: !!groupId,
+  });
+}
+
+export function useGroupCommits(
+  groupId: string | undefined,
+  params?: { since?: string; until?: string; limit?: number },
+) {
+  return useQuery({
+    queryKey: groupCommitsKey(groupId ?? "", params),
+    queryFn: () => getGroupCommits(groupId as string, params),
+    enabled: !!groupId,
+  });
+}
+
+export function useGroupChanges(
+  groupId: string | undefined,
+  params?: { group_by?: string; since?: string; until?: string },
+) {
+  return useQuery({
+    queryKey: groupChangesKey(groupId ?? "", params),
+    queryFn: () => getGroupChanges(groupId as string, params),
+    enabled: !!groupId,
   });
 }

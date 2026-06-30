@@ -201,7 +201,9 @@ export default function SettingsSkillsPage() {
       } else {
         await apiClient.post<Skill>("/api/skills", body);
       }
-      toast({ title: editing ? "已保存" : "已创建", description: data.name });
+      if (!editing) {
+        toast({ title: "已创建", description: data.name });
+      }
       setDialogOpen(false);
       setEditing(null);
       fetchSkills();

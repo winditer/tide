@@ -333,6 +333,31 @@ export function PropertyPanel({
                     </div>
                   </label>
                 </FormGroup>
+                <label
+                    className={`flex items-start gap-2.5 rounded-lg border border-input bg-background px-3 py-2.5 transition-colors ${
+                      readOnly
+                        ? "cursor-not-allowed opacity-60"
+                        : "cursor-pointer hover:bg-muted/40"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 h-3.5 w-3.5 accent-primary"
+                      checked={data.routingTrigger ?? true}
+                      disabled={readOnly}
+                      onChange={(e) =>
+                        update({ routingTrigger: e.target.checked })
+                      }
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[12px] font-medium text-foreground">
+                        启用智能路由
+                      </div>
+                      <div className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
+                        关闭后该节点不执行路由决策，适用于方案生成等前置 Agent 节点
+                      </div>
+                    </div>
+                  </label>
               </>
             );
           })()}

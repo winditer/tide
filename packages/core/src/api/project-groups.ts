@@ -236,6 +236,78 @@ export function getGroupVersions(
   );
 }
 
+// ── 項目组 Git 聚合 ──────────────────────────────────────────
+
+export interface GroupBranchProject {
+  project_id: string;
+  name: string;
+  cwd: string;
+  branches: string[];
+  current: string | null;
+}
+
+export interface GroupCommitItem {
+  hash: string;
+  author: string;
+  date: string;
+  message: string;
+  files: { path: string; status: string; additions: number; deletions: number }[];
+  project_id: string;
+  project_name: string;
+}
+
+export interface GroupChangeProject {
+  project_id: string;
+  name: string;
+  changes: {
+    id: string;
+    name: string;
+    branch: string | null;
+    commit_count: number;
+    files_changed: number;
+    additions: number;
+    deletions: number;
+  }[];
+}
+
+export function getGroupBranches(
+  groupId: string,
+): Promise<{ items: GroupBranchProject[] }> {
+  return apiClient.get<{ items: GroupBranchProject[] }>(
+    `/api/project-groups/${encodeURIComponent(groupId)}/git/branches`,
+  );
+}
+
+export function getGroupCommits(
+  groupId: string,
+  params?: { since?: string; until?: string; limit?: number },
+): Promise<{ commits: GroupCommitItem[]; total: number }> {
+  const qs = buildQuery(params as Record<string, string | number | undefined>);
+  return apiClient.get<{ commits: GroupCommitItem[]; total: number }>(
+    `/api/project-groups/${encodeURIComponent(groupId)}/git/commits${qs}`,
+  );
+}
+
+export function getGroupChanges(
+  groupId: string,
+  params?: { group_by?: string; since?: string; until?: string },
+): Promise<{ projects: GroupChangeProject[]; group_by: string }> {
+  const qs = buildQuery(params as Record<string, string | number | undefined>);
+  return apiClient.get<{ projects: GroupChangeProject[]; group_by: string }>(
+    `/api/project-groups/${encodeURIComponent(groupId)}/git/changes${qs}`,
+  );
+}
+
+export function getGroupCommitDiff(
+  groupId: string,
+  projectId: string,
+  commitHash: string,
+): Promise<string> {
+  return apiClient.get<string>(
+    `/api/project-groups/${encodeURIComponent(groupId)}/git/diff/${encodeURIComponent(projectId)}/${encodeURIComponent(commitHash)}`,
+  );
+}
+
 // ── 工作流绑定 ────────────────────────────────────────────────────────────
 
 export function getGroupWorkflow(

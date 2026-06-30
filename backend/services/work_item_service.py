@@ -207,12 +207,13 @@ class WorkItemService:
 
         return None
 
-    def _render_prompt_template(self, template: str, item: dict) -> str:
+    def _render_prompt_template(self, template: str, item: dict, context: dict = None) -> str:
         """渲染 prompt 模板。
 
         支持以下占位符语法：
         - 双花括号：{{title}}、{{item.description}}
         - 单花括号：{title}、{item.description}（仅匹配标识符/点路径，避免与 JSON/代码中的 `{}` 冲突）
+        - 节点输出：{node_id.output}、{{node_id.output}}（需传入 context）
 
         缺失变量一律 fallback 为空字符串，绝不抛异常，避免静默吞掉 agent 触发。
         """
@@ -222,7 +223,25 @@ class WorkItemService:
         def resolve(key: str) -> str:
             try:
                 key = (key or "").strip()
-                # 支持 item.xxx 前缀
+
+                # 优先尝试从 context 中按点路径导航查找（支持 {agent_1.output} 语法）
+                if context and "." in key:
+                    lookup_key = key
+                    if lookup_key.startswith("context."):
+                        lookup_key = lookup_key[len("context."):]
+                    obj = context
+                    for part in lookup_key.split("."):
+                        if isinstance(obj, dict):
+                            obj = obj.get(part, "")
+                        else:
+                            obj = ""
+                            break
+                    if obj:
+                        if isinstance(obj, (dict, list)):
+                            return json.dumps(obj, ensure_ascii=False)
+                        return str(obj)
+
+                # 然后从 item 中查找
                 if key.startswith("item."):
                     key = key[len("item."):]
                 value = item.get(key, "") if isinstance(item, dict) else ""
@@ -404,15 +423,7 @@ class WorkItemService:
         # 6. 如果初始节点需要自动化处理，按节点类型触发
         item = await self.get_work_item(item_id)
         if item:
-            node_type = first_node.get("type", "stage")
-            if node_type == "agent":
-                asyncio.create_task(self._safe_trigger_agent(item, first_node))
-            elif node_type == "approval":
-                asyncio.create_task(self._trigger_approval_node(item, first_node))
-            elif node_type == "condition":
-                asyncio.create_task(self._handle_condition_node(item, first_node, definition))
-            elif node_type == "delay":
-                asyncio.create_task(self._handle_delay_node(item, first_node, definition))
+            self._dispatch_node(item, first_node, definition)
 
         # 7. WebSocket 广播
         await ws_hub.broadcast("work_items", {
@@ -464,6 +475,9 @@ class WorkItemService:
         if project_id:
             conditions.append("project_id = :project_id")
             params["project_id"] = project_id
+            # 按项目查询时，排除项目组工作项（它们只在项目组视角展示）
+            if not group_id:
+                conditions.append("group_id IS NULL")
         if group_id:
             conditions.append("group_id = :group_id")
             params["group_id"] = group_id
@@ -649,9 +663,7 @@ class WorkItemService:
             from_node = node_map.get(from_node_id) if from_node_id else None
             if from_node and from_node.get("type") == "end":
                 raise ValueError("Cannot transition from end node")
-            # 3.2 防护：手动流转禁止直接拖入 end 节点（end 应由工作流自动到达）
-            if target_node.get("type") == "end":
-                raise ValueError("Cannot manually transition to end node")
+            # 允许手动移动到 end 节点（Done），以便用户在节点卡住时手动完成工作项
 
         # 4. 记录 transition
         transition = await self._record_transition(
@@ -683,19 +695,8 @@ class WorkItemService:
         item = await self.get_work_item(item_id)
 
         # 6. 根据节点类型触发动作
-        node_type = target_node.get("type", "stage")
-        if node_type == "agent" and item:
-            asyncio.create_task(self._safe_trigger_agent(item, target_node))
-        elif node_type == "approval" and item:
-            asyncio.create_task(self._trigger_approval_node(item, target_node))
-        elif node_type == "condition" and item:
-            asyncio.create_task(self._handle_condition_node(item, target_node, definition))
-        elif node_type == "delay" and item:
-            asyncio.create_task(self._handle_delay_node(item, target_node, definition))
-        elif node_type == "git_merge" and item:
-            asyncio.create_task(self._trigger_git_merge_node(item, target_node))
-        elif node_type == "end":
-            logger.info("Work item %s completed.", item_id[:8])
+        if item:
+            self._dispatch_node(item, target_node, definition)
 
         # 7. WebSocket 广播
         await ws_hub.broadcast("work_items", {
@@ -711,7 +712,7 @@ class WorkItemService:
         return transition
 
     async def get_transitions(self, item_id: str) -> List[dict]:
-        """获取工作项的流转历史。"""
+        """获取工作项的流转历史。如果某个 transition 关联了 Plan，补充 Plan 的所有子任务信息。"""
         async with async_session_factory() as session:
             result = await session.execute(
                 text("""
@@ -724,7 +725,37 @@ class WorkItemService:
                 {"item_id": item_id},
             )
             rows = result.fetchall()
-        return [dict(row._mapping) for row in rows]
+        transitions = [dict(row._mapping) for row in rows]
+
+        # 为关联了 Plan 的 transition 补充子任务列表
+        for t in transitions:
+            task_id = t.get("task_id")
+            if not task_id:
+                continue
+            async with async_session_factory() as session:
+                plan_row = (await session.execute(
+                    text("SELECT plan_id FROM tasks WHERE id = :tid AND plan_id IS NOT NULL"),
+                    {"tid": task_id},
+                )).fetchone()
+            if not plan_row:
+                continue
+            plan_id = dict(plan_row._mapping)["plan_id"]
+            async with async_session_factory() as session:
+                sub_tasks = (await session.execute(
+                    text("""
+                        SELECT id, status, prompt, started_at, completed_at,
+                               branch_name, commit_hash
+                        FROM tasks
+                        WHERE plan_id = :plan_id
+                        ORDER BY created_at
+                    """),
+                    {"plan_id": plan_id},
+                )).fetchall()
+            if sub_tasks:
+                t["plan_id"] = plan_id
+                t["plan_tasks"] = [dict(row._mapping) for row in sub_tasks]
+
+        return transitions
 
     async def get_cross_repo_results(self, item_id: str) -> dict:
         """跨仓库执行结果聚合。
@@ -834,6 +865,117 @@ class WorkItemService:
             "results": results,
         }
 
+    # ── 节点分发与回退 ─────────────────────────────────────────
+
+    def _dispatch_node(self, item: dict, node: dict, definition: dict):
+        """根据节点类型分发执行（fire-and-forget）。"""
+        node_type = node.get("type", "stage")
+        if node_type == "agent":
+            asyncio.create_task(self._safe_trigger_agent(item, node))
+        elif node_type == "approval":
+            asyncio.create_task(self._trigger_approval_node(item, node))
+        elif node_type == "condition":
+            asyncio.create_task(self._handle_condition_node(item, node, definition))
+        elif node_type == "delay":
+            asyncio.create_task(self._handle_delay_node(item, node, definition))
+        elif node_type == "git_merge":
+            asyncio.create_task(self._safe_trigger_git_merge(item, node))
+        elif node_type == "end":
+            logger.info("Work item %s completed.", item.get("id", "?")[:8])
+        elif node_type != "stage":
+            logger.warning(
+                "[WorkItem] _dispatch_node: unrecognized node type %r for item %s, node %s",
+                node_type, item.get("id", "?")[:8], node.get("id", "?"),
+            )
+
+    async def rollback_to_node(self, item_id: str, target_node_id: str) -> Optional[dict]:
+        """回退工作项到指定节点并重新触发。"""
+        # 1. 获取工作项
+        item = await self.get_work_item(item_id)
+        if not item:
+            return None
+
+        # 2. 获取工作流定义
+        workflow_id = item.get("workflow_id")
+        if not workflow_id:
+            return None
+        definition = await self._load_workflow_definition(workflow_id)
+        if not definition:
+            return None
+        nodes = definition.get("nodes", [])
+
+        # 3. 验证目标节点存在
+        target_node = next((n for n in nodes if n["id"] == target_node_id), None)
+        if not target_node:
+            return None
+
+        # 4. 不允许回退到 start/end 节点
+        node_type = target_node.get("type", "")
+        if node_type in ("start", "end"):
+            return None
+
+        # 5. 取消当前节点上进行中的任务
+        current_node_id = item.get("current_node_id") or ""
+        if current_node_id:
+            from backend.services.task_service import task_service
+            async with async_session_factory() as session:
+                running_tasks = await session.execute(
+                    text("""
+                        SELECT t.id, t.status FROM tasks t
+                        JOIN work_item_transitions wit ON wit.task_id = t.id
+                        WHERE wit.work_item_id = :item_id
+                          AND wit.to_node_id = :node_id
+                          AND t.status IN ('queued', 'running', 'review')
+                    """),
+                    {"item_id": item_id, "node_id": current_node_id},
+                )
+                rows = running_tasks.fetchall()
+            for row in rows:
+                task_row = dict(row._mapping)
+                try:
+                    await task_service._update_status(
+                        task_row["id"], "", "cancelled", old_status=task_row["status"]
+                    )
+                except Exception as exc:
+                    logger.warning("[rollback] Failed to cancel task %s: %s", task_row["id"], exc)
+
+        # 6. 更新 current_node_id，清除 completed_at
+        now = _now_iso()
+        async with async_session_factory() as session:
+            await session.execute(
+                text("""
+                    UPDATE work_items
+                    SET current_node_id = :node_id, completed_at = NULL, updated_at = :now
+                    WHERE id = :id
+                """),
+                {"node_id": target_node_id, "now": now, "id": item_id},
+            )
+            await session.commit()
+
+        # 7. 记录 rollback transition
+        transition = await self._record_transition(
+            item_id=item_id,
+            from_node_id=current_node_id,
+            to_node_id=target_node_id,
+            trigger_type="rollback",
+            operator="user",
+        )
+
+        # 8. 刷新 item 并触发目标节点
+        item = await self.get_work_item(item_id)
+        if item:
+            self._dispatch_node(item, target_node, definition)
+
+        # 9. WebSocket 广播
+        await ws_hub.broadcast("work_items", {
+            "type": "work_item.rollback",
+            "work_item_id": item_id,
+            "from_node_id": current_node_id,
+            "to_node_id": target_node_id,
+        })
+
+        return transition
+
     # ── 自动化触发 ───────────────────────────────────────
 
     async def _safe_trigger_agent(self, item: dict, node: dict):
@@ -870,9 +1012,13 @@ class WorkItemService:
 
             # 项目组分支：若工作项关联了 group_id，使用跨仓库模式
             group_id = item.get("group_id")
-            if group_id:
+            routing_trigger = node.get("data", {}).get("routingTrigger")
+
+            if group_id and routing_trigger is not False:
+                # 有 group_id 且未显式禁用路由 → 走项目组跨仓模式
                 await self._trigger_group_agent_node(item, node, group_id)
                 return
+            # 否则走单仓模式（包括 group 模式下 routingTrigger=false 的方案生成节点）
 
             data = node.get("data", {})
             agent_id = data.get("agentId") or data.get("agent_id") or "codex"
@@ -925,8 +1071,14 @@ class WorkItemService:
                 )
                 cwd = fallback
 
+            # 构建 workflow context（用于模板变量解析）
+            wf_context = None
+            definition = await self._load_workflow_definition(item.get("workflow_id"))
+            if definition:
+                wf_context = await self._build_workflow_context(item, definition)
+
             # 渲染 prompt
-            prompt = self._render_prompt_template(prompt_template, item)
+            prompt = self._render_prompt_template(prompt_template, item, wf_context)
             if not prompt:
                 prompt = f"处理工作项: {item['title']}"
                 if item.get("description"):
@@ -1060,18 +1212,91 @@ class WorkItemService:
             if not primary_cwd or not os.path.isabs(primary_cwd):
                 primary_cwd = await self._get_project_path(item["project_id"]) or str(Path.cwd())
 
-            # 2. 渲染基础 prompt
-            base_prompt = self._render_prompt_template(prompt_template, item)
+            # 始终构建 workflow context（用于模板变量解析）
+            definition = await self._load_workflow_definition(item.get("workflow_id"))
+            wf_context = None
+            if definition:
+                wf_context = await self._build_workflow_context(item, definition)
+
+            # 2. 渲染基础 prompt（context 支持 {node_id.output} 变量）
+            base_prompt = self._render_prompt_template(prompt_template, item, wf_context)
             if not base_prompt:
                 base_prompt = f"处理工作项: {item['title']}"
                 if item.get("description"):
                     base_prompt += f"\n\n{item['description']}"
 
+            # ─── 检查路由配置 ─────────────────────────────────────────────
+            routing_trigger = data.get("routingTrigger")  # None=未配置, True=启用, False=禁用
+            should_route = routing_trigger is not False  # None 或 True 都执行路由
+
+            from backend.runtime.config import WORKITEM_SMART_ROUTING, WORKITEM_SMART_ROUTING_CONFIDENCE, ROUTING_PROPOSAL_MAX_CHARS
+
+            # 获取前序节点输出（技术方案）作为路由辅助信息
+            prev_output = ""
+            if routing_trigger is True and wf_context and definition:
+                prev_output = self._extract_prev_agent_output(wf_context, definition, node["id"])
+
+            # 注入前序节点的技术方案到 base_prompt（如果模板已引用则不重复追加）
+            if prev_output:
+                if prev_output[:50] not in base_prompt:
+                    truncated_proposal = prev_output[:ROUTING_PROPOSAL_MAX_CHARS]
+                    base_prompt += f"\n\n## 参考技术方案\n\n{truncated_proposal}"
+
+            # ─── 智能路由决策 ─────────────────────────────────────────────
+
+            target_projects = group_projects  # 默认全量派发
+
+            if not should_route:
+                logger.info("[WorkItem.Routing] Node routingTrigger=false, skip routing, full dispatch")
+            elif WORKITEM_SMART_ROUTING:
+                try:
+                    from backend.services.group_route_service import group_route_service
+                    from backend.services.knowledge_service import knowledge_service
+
+                    summaries = await knowledge_service.get_group_modules_summaries(group_id)
+
+                    # 构建路由输入：标题 + 描述 + 前序技术方案（截断）
+                    routing_description = item.get("description", "")
+                    if prev_output:
+                        truncated_proposal = prev_output[:ROUTING_PROPOSAL_MAX_CHARS]
+                        routing_description = f"{routing_description}\n\n## 技术方案\n{truncated_proposal}"
+
+                    routing_result = await group_route_service.analyze_routing(
+                        work_item={"title": item["title"], "description": routing_description},
+                        projects=group_projects,
+                        knowledge_summaries=summaries,
+                    )
+
+                    if routing_result and routing_result.confidence >= WORKITEM_SMART_ROUTING_CONFIDENCE:
+                        filtered = [
+                            p for p in group_projects
+                            if p["project_id"] in routing_result.recommended_project_ids
+                        ]
+                        if filtered:
+                            target_projects = filtered
+                            logger.info(
+                                "[WorkItem.Routing] Selected %d/%d projects (confidence=%.2f): %s",
+                                len(target_projects), len(group_projects),
+                                routing_result.confidence,
+                                [p["name"] for p in target_projects],
+                            )
+                        else:
+                            logger.info("[WorkItem.Routing] Empty recommendation, fallback to full dispatch")
+                    else:
+                        logger.info(
+                            "[WorkItem.Routing] Low confidence (%.2f), fallback to full dispatch",
+                            routing_result.confidence if routing_result else 0.0,
+                        )
+                except Exception as e:
+                    logger.warning("[WorkItem.Routing] Failed: %s, fallback to full dispatch", e)
+                    target_projects = group_projects
+            # ─── 路由决策结束 ─────────────────────────────────────────────
+
             # 3. 构建跨仓库 Plan definition
             # 后端项目可并行（phase 0），前端项目依赖后端（phase 1）
             plan_tasks = []
             backend_indices = []
-            for idx, project in enumerate(group_projects):
+            for idx, project in enumerate(target_projects):
                 project_name = project["name"]
                 project_cwd = project["cwd"]
                 if not project_cwd:
@@ -1196,9 +1421,18 @@ class WorkItemService:
     async def _trigger_approval_node(self, item: dict, node: dict):
         """
         Approval 节点：创建审批记录，审批通过后回调推进。
+        在创建新审批前，先将同一工作项下旧的 pending 审批标记为 cancelled。
         """
         try:
             from backend.services.approval_service import approval_service
+
+            # 清理同一工作项下旧的 pending 审批，防止累积过期记录
+            cancelled_count = await approval_service.cleanup_task_approvals(item["id"])
+            if cancelled_count > 0:
+                logger.info(
+                    "Cancelled %d stale pending approvals for work item %s before creating new one",
+                    cancelled_count, item["id"][:8],
+                )
 
             data = node.get("data", {})
             reason = data.get("label") or data.get("reason") or f"Work item approval: {item['title']}"
@@ -1250,26 +1484,75 @@ class WorkItemService:
 
         node_map = {n["id"]: n for n in definition.get("nodes", [])}
         for tr in transitions:
+            to_id = tr.get("to_node_id")
             from_id = tr.get("from_node_id")
-            if not from_id:
-                continue
-            from_node = node_map.get(from_id)
-            ntype = (from_node.get("type") if from_node else "") or ""
             trigger = (tr.get("trigger_type") or "").lower()
             out_raw = tr.get("output") or ""
 
-            node_ctx = context.get(from_id) if isinstance(context.get(from_id), dict) else {}
-            if ntype == "approval":
-                if trigger == "approval_approved":
-                    node_ctx["output"] = "approved"
-                elif trigger == "approval_rejected":
-                    node_ctx["output"] = "rejected"
-                node_ctx["log"] = out_raw
-            else:
-                # agent / git_merge / 其他节点：直接使用 transition.output
-                node_ctx["output"] = out_raw
-            context[from_id] = node_ctx
+            # --- 处理 to_node_id 方向（agent 输出等非 approval 节点）---
+            if to_id:
+                to_node = node_map.get(to_id)
+                ntype = (to_node.get("type") if to_node else "") or ""
+                if ntype != "approval":
+                    # agent / git_merge / 其他节点：output 归属于 to_node_id
+                    # 同一节点可能有多条 transition，取最长的 output（实际产物 > 日志摘要）
+                    node_ctx = context.get(to_id) if isinstance(context.get(to_id), dict) else {}
+                    existing_output = node_ctx.get("output", "")
+                    if out_raw and len(out_raw) > len(existing_output):
+                        node_ctx["output"] = out_raw
+                    context[to_id] = node_ctx
+
+            # --- 处理 from_node_id 方向（approval 结果）---
+            # approval 节点的审批结果存储在离开该节点的 transition 的 trigger_type 中
+            if from_id:
+                from_node = node_map.get(from_id, {})
+                if from_node.get("type") == "approval":
+                    node_ctx = context.get(from_id) if isinstance(context.get(from_id), dict) else {}
+                    if trigger == "approval_approved":
+                        node_ctx["output"] = "approved"
+                    elif trigger == "approval_rejected":
+                        node_ctx["output"] = "rejected"
+                    if out_raw:
+                        node_ctx["log"] = out_raw
+                    context[from_id] = node_ctx
         return context
+
+    def _extract_prev_agent_output(self, context: dict, definition: dict, current_node_id: str) -> str:
+        """向上游递归查找最近的 agent 节点输出。
+
+        穿透 condition、approval、stage 等中间节点，
+        直到找到第一个有 output 的 agent 节点。
+        """
+        edges = definition.get("edges", [])
+        nodes = {n["id"]: n for n in definition.get("nodes", [])}
+
+        visited = set()
+        queue = [current_node_id]
+
+        while queue:
+            node_id = queue.pop(0)
+            if node_id in visited:
+                continue
+            visited.add(node_id)
+
+            # 找所有指向当前节点的上游节点
+            upstream_ids = [e["source"] for e in edges if e.get("target") == node_id]
+
+            for uid in upstream_ids:
+                if uid in visited:
+                    continue
+                upstream_node = nodes.get(uid, {})
+
+                # 如果是 agent 节点且有输出，返回
+                if upstream_node.get("type") == "agent":
+                    node_ctx = context.get(uid)
+                    if isinstance(node_ctx, dict) and node_ctx.get("output"):
+                        return node_ctx["output"]
+
+                # 否则继续向上游探索（穿透 condition、approval、stage 等节点）
+                queue.append(uid)
+
+        return ""
 
     async def _handle_condition_node(self, item: dict, node: dict, definition: dict):
         """
@@ -1446,52 +1729,134 @@ class WorkItemService:
                 item["id"][:8], exc,
             )
 
+    async def _safe_trigger_git_merge(self, item: dict, node: dict):
+        """包装 _trigger_git_merge_node，确保任何异常都被记录而不会被 asyncio 静默吞掉。"""
+        try:
+            await self._trigger_git_merge_node(item, node)
+        except Exception as exc:
+            logger.error(
+                "[WorkItem] Failed to trigger git_merge node %s for work item %s: %s",
+                (node.get("id") or "?"),
+                (item.get("id") or "?"),
+                exc,
+                exc_info=True,
+            )
+
+    async def _resolve_version_branch(self, item: dict) -> str:
+        """从工作项的 version_id 解析版本分支名。"""
+        version_id = item.get("version_id")
+        if not version_id:
+            return ""
+        async with async_session_factory() as session:
+            row = await session.execute(
+                text("SELECT name FROM versions WHERE id = :id"),
+                {"id": version_id}
+            )
+            result = row.fetchone()
+        if not result or not result[0]:
+            return ""
+        from backend.runtime.git_utils import version_branch_name
+        return version_branch_name(result[0])
+
     async def _trigger_git_merge_node(self, item: dict, node: dict):
-        """处理 git_merge 节点：将工作项 worktree 分支合入目标分支。"""
+        """处理 git_merge 节点：将工作项所有相关分支（含 Plan 子任务分支）合入目标分支。"""
+        logger.info(
+            "[WorkItem] _trigger_git_merge_node called: item=%s node=%s",
+            item.get("id", "?"), node.get("id", "?"),
+        )
         data = node.get("data", {})
         from backend.runtime.git_utils import work_item_branch_name
-        target_branch = data.get("targetBranch", "") or work_item_branch_name(item["id"])
+        target_branch = data.get("targetBranch", "")
+        if not target_branch:
+            # 优先使用版本分支
+            version_branch = await self._resolve_version_branch(item)
+            if version_branch:
+                target_branch = version_branch
+                logger.info("[work_item] git_merge: using version branch as target: %s", target_branch)
+            else:
+                target_branch = work_item_branch_name(item["id"])
         strategy = data.get("mergeStrategy", "merge")
         delete_source = data.get("deleteSource", True)  # 工作项场景默认删除源分支
         on_conflict = data.get("onConflict", "fail")
 
-        # 1. 从工作项的 transitions 中找到前序 Agent 的 branch_name
-        source_branch = ""
-        worktree_path = ""
+        # 1. 收集工作项下所有相关分支（工作项分支 + Plan 子任务分支）
+        # branch_records: list of {"branch": str, "worktree_path": str, "type": "work_item" | "plan_task"}
+        branch_records: list[dict] = []
+        seen_branches: set[str] = set()
 
         async with async_session_factory() as session:
-            row = await session.execute(
+            # 1a. 获取工作项自身的分支
+            wi_rows = await session.execute(
                 text("""
-                    SELECT t.branch_name, t.worktree_path
+                    SELECT DISTINCT t.branch_name, t.worktree_path
                     FROM work_item_transitions wit
                     JOIN tasks t ON t.id = wit.task_id
                     WHERE wit.work_item_id = :item_id
                       AND t.branch_name IS NOT NULL
                       AND t.branch_name != ''
-                    ORDER BY wit.created_at DESC
-                    LIMIT 1
+                    ORDER BY wit.created_at ASC
                 """),
                 {"item_id": item["id"]}
             )
-            result = row.fetchone()
-            if result:
-                source_branch = result[0] or ""
-                worktree_path = result[1] or ""
+            for row in wi_rows.fetchall():
+                branch = row[0] or ""
+                wt = row[1] or ""
+                if branch and branch not in seen_branches:
+                    seen_branches.add(branch)
+                    branch_records.append({"branch": branch, "worktree_path": wt, "type": "work_item"})
 
-        if not source_branch:
-            # 尝试从 node.data.sourceBranch 获取（支持手动配置）
-            source_branch = data.get("sourceBranch", "")
+            # 1b. 获取 Plan 子任务的分支
+            plan_rows = await session.execute(
+                text("""
+                    SELECT DISTINCT t2.branch_name, t2.worktree_path
+                    FROM work_item_transitions wit
+                    JOIN tasks t ON t.id = wit.task_id
+                    JOIN plan_tasks pt ON pt.plan_id = t.plan_id
+                    JOIN tasks t2 ON t2.id = pt.task_id
+                    WHERE wit.work_item_id = :item_id
+                      AND t.plan_id IS NOT NULL
+                      AND t2.branch_name IS NOT NULL
+                      AND t2.branch_name != ''
+                    ORDER BY pt.task_index ASC
+                """),
+                {"item_id": item["id"]}
+            )
+            for row in plan_rows.fetchall():
+                branch = row[0] or ""
+                wt = row[1] or ""
+                if branch and branch not in seen_branches:
+                    seen_branches.add(branch)
+                    branch_records.append({"branch": branch, "worktree_path": wt, "type": "plan_task"})
 
-        if not source_branch:
-            # 最终 fallback：使用工作项的 worktree 分支名
-            source_branch = work_item_branch_name(item["id"])
-            logger.info("[work_item] git_merge node: using work item branch as source: %s", source_branch)
+        # Fallback：如果找不到任何分支
+        if not branch_records:
+            fallback_branch = data.get("sourceBranch", "")
+            if not fallback_branch:
+                fallback_branch = work_item_branch_name(item["id"])
+                logger.info("[work_item] git_merge node: no branches found, using work item branch as source: %s", fallback_branch)
+            branch_records.append({"branch": fallback_branch, "worktree_path": "", "type": "work_item"})
+
+        # 排除与目标分支相同的分支（no-op）
+        branch_records = [r for r in branch_records if r["branch"] != target_branch]
+        if not branch_records:
+            logger.info("[work_item] git_merge: all source branches are same as target (%s), skipping merge", target_branch)
+            await self._advance_past_node(item, node)
+            return
+
+        logger.info(
+            "[work_item] git_merge: item=%s target=%s branches_to_merge=%s",
+            item["id"], target_branch, [r["branch"] for r in branch_records],
+        )
 
         # 2. 获取 repo root
-        from backend.runtime.git_utils import git_repo_root, git_merge_branch, cleanup_work_item_worktree
+        from backend.runtime.git_utils import git_repo_root, git_merge_branch, cleanup_work_item_worktree, cleanup_plan_worktree, find_worktree_for_branch
 
         project_cwd = await self._get_project_path(item["project_id"])
-        cwd = project_cwd or str(Path.cwd())
+        if not project_cwd:
+            logger.error("[work_item] git_merge: cannot resolve project path for project_id=%s, skip merge", item.get("project_id"))
+            await self._advance_past_node(item, node)
+            return
+        cwd = project_cwd
         repo_root = await git_repo_root(Path(cwd))
 
         if repo_root is None:
@@ -1499,21 +1864,71 @@ class WorkItemService:
             await self._advance_past_node(item, node)
             return
 
-        # 3. 执行合并
-        success, output, conflicts = await git_merge_branch(
-            repo_root=repo_root,
-            source_branch=source_branch,
-            target_branch=target_branch,
-            strategy=strategy,
-            delete_source=delete_source,
-        )
-
-        if success:
+        # 2.5 检查 target_branch 是否被 worktree 占用
+        merge_root = repo_root
+        wt_path = await find_worktree_for_branch(repo_root, target_branch)
+        if wt_path:
             logger.info(
-                "[work_item] git_merge success: item=%s source=%s target=%s",
-                item["id"], source_branch, target_branch
+                "[work_item] git_merge: target_branch '%s' is in worktree at '%s', will merge there",
+                target_branch, wt_path,
             )
-            # 4. 合并成功后，检查是否需要 auto push
+            merge_root = Path(wt_path)
+
+        # 3. 逐一合并所有分支
+        merged_results: list[dict] = []  # {"branch": str, "type": str, "success": bool, "output": str, "conflicts": list}
+        all_success = True
+        should_abort = False
+
+        for record in branch_records:
+            if should_abort:
+                merged_results.append({
+                    "branch": record["branch"],
+                    "type": record["type"],
+                    "success": False,
+                    "output": "skipped due to previous conflict (on_conflict=manual)",
+                    "conflicts": [],
+                })
+                continue
+
+            source_branch = record["branch"]
+            success, output, conflicts = await git_merge_branch(
+                repo_root=merge_root,
+                source_branch=source_branch,
+                target_branch=target_branch,
+                strategy=strategy,
+                delete_source=delete_source,
+            )
+
+            merged_results.append({
+                "branch": source_branch,
+                "type": record["type"],
+                "success": success,
+                "output": output[:1000] if output else "",
+                "conflicts": conflicts or [],
+            })
+
+            if success:
+                logger.info(
+                    "[work_item] git_merge success: item=%s source=%s target=%s",
+                    item["id"], source_branch, target_branch,
+                )
+            else:
+                all_success = False
+                logger.warning(
+                    "[work_item] git_merge failed: item=%s source=%s conflicts=%s",
+                    item["id"], source_branch, conflicts,
+                )
+                # 如果 on_conflict 是 manual，停止后续合并
+                if on_conflict == "manual":
+                    should_abort = True
+
+        # 4. 处理合并结果
+        if all_success:
+            logger.info(
+                "[work_item] git_merge all branches merged successfully: item=%s count=%d",
+                item["id"], len(merged_results),
+            )
+            # 4a. auto push
             auto_push = data.get("autoPush", False)
             if auto_push:
                 git_config = await self.get_project_git_config(item["project_id"])
@@ -1538,40 +1953,142 @@ class WorkItemService:
                         logger.warning(
                             "[work_item] failed to ensure remote for %s", repo_url,
                         )
-            # 5. 清理 worktree
-            if worktree_path:
-                await cleanup_work_item_worktree(
-                    worktree_path=worktree_path,
-                    branch_name="" if delete_source else source_branch,
-                    repo_root=repo_root,
+
+            # 4b. 清理所有已成功合并的 worktree
+            for record in branch_records:
+                wt = record.get("worktree_path", "")
+                if not wt:
+                    continue
+                branch_to_clean = "" if delete_source else record["branch"]
+                if record["type"] == "plan_task":
+                    await cleanup_plan_worktree(
+                        worktree_path=wt,
+                        branch_name=branch_to_clean,
+                        repo_root=repo_root,
+                    )
+                else:
+                    await cleanup_work_item_worktree(
+                        worktree_path=wt,
+                        branch_name=branch_to_clean,
+                        repo_root=repo_root,
+                    )
+                logger.info("[work_item] git_merge: cleaned worktree for branch=%s path=%s", record["branch"], wt)
+
+            # 4c. 记录合并结果到 metadata
+            existing_meta = {}
+            if item.get("metadata"):
+                try:
+                    existing_meta = json.loads(item["metadata"]) if isinstance(item["metadata"], str) else item["metadata"]
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            existing_meta["git_merge_result"] = {
+                "success": True,
+                "merged_branches": [
+                    {"branch": r["branch"], "type": r["type"], "success": r["success"]}
+                    for r in merged_results
+                ],
+                "target_branch": target_branch,
+                "strategy": strategy,
+                "auto_push": auto_push,
+                "delete_source": delete_source,
+                "timestamp": _now_iso(),
+            }
+
+            async with async_session_factory() as session:
+                await session.execute(
+                    text("UPDATE work_items SET metadata = :meta WHERE id = :id"),
+                    {"meta": json.dumps(existing_meta, ensure_ascii=False), "id": item["id"]}
                 )
-            # 6. 自动推进到下游节点
+                await session.commit()
+
+            # 4d. 自动推进到下游节点
             await self._advance_past_node(item, node)
         else:
-            # 冲突处理
-            error_msg = f"Merge conflict: {output}"
-            if conflicts:
-                error_msg += f" | Files: {', '.join(conflicts)}"
+            # 存在合并失败的分支
+            first_failed = next((r for r in merged_results if not r["success"]), None)
+            conflict_files = first_failed["conflicts"] if first_failed else []
+            failed_output = first_failed["output"] if first_failed else ""
+
+            error_msg = f"Merge conflict on branch {first_failed['branch']}: {failed_output}" if first_failed else "Unknown merge failure"
+            if conflict_files:
+                error_msg += f" | Files: {', '.join(conflict_files)}"
             logger.warning("[work_item] git_merge conflict: item=%s error=%s", item["id"], error_msg)
 
             if on_conflict == "manual":
                 # 暂停，等待人工处理
+                existing_meta = {}
+                if item.get("metadata"):
+                    try:
+                        existing_meta = json.loads(item["metadata"]) if isinstance(item["metadata"], str) else item["metadata"]
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                existing_meta["git_merge_result"] = {
+                    "success": False,
+                    "merged_branches": [
+                        {"branch": r["branch"], "type": r["type"], "success": r["success"]}
+                        for r in merged_results
+                    ],
+                    "target_branch": target_branch,
+                    "strategy": strategy,
+                    "conflict": True,
+                    "conflict_files": conflict_files,
+                    "conflict_count": len(conflict_files),
+                    "on_conflict": "manual",
+                    "output": failed_output[:2000] if failed_output else "",
+                    "timestamp": _now_iso(),
+                }
+                existing_meta["merge_conflict"] = True  # 保持向后兼容
+                existing_meta["merge_conflict_data"] = {
+                    "source_branch": first_failed["branch"] if first_failed else "",
+                    "target_branch": target_branch,
+                    "conflict_files": conflict_files,
+                    "worktree_path": next((r["worktree_path"] for r in branch_records if r["branch"] == first_failed["branch"]), "") if first_failed else "",
+                }
                 async with async_session_factory() as session:
-                    metadata = json.dumps({
-                        "merge_conflict": True,
-                        "source_branch": source_branch,
-                        "target_branch": target_branch,
-                        "conflicts": conflicts,
-                        "worktree_path": worktree_path,
-                    }, ensure_ascii=False)
+                    metadata = json.dumps(existing_meta, ensure_ascii=False)
                     await session.execute(
                         text("UPDATE work_items SET metadata = :meta WHERE id = :id"),
                         {"meta": metadata, "id": item["id"]}
                     )
                     await session.commit()
             else:
-                # fail: 记录错误但不推进，让工作项停留在 git_merge 节点
-                pass
+                # fail/abort: 记录错误并推进到下游，避免工作项卡住
+                logger.warning(
+                    "[work_item] git_merge failed for item=%s, failed_branch=%s, auto-advancing",
+                    item["id"], first_failed["branch"] if first_failed else "?",
+                )
+                existing_meta = {}
+                if item.get("metadata"):
+                    try:
+                        existing_meta = json.loads(item["metadata"]) if isinstance(item["metadata"], str) else item["metadata"]
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                existing_meta["git_merge_result"] = {
+                    "success": False,
+                    "merged_branches": [
+                        {"branch": r["branch"], "type": r["type"], "success": r["success"]}
+                        for r in merged_results
+                    ],
+                    "target_branch": target_branch,
+                    "strategy": strategy,
+                    "conflict": True,
+                    "conflict_files": conflict_files[:5] if conflict_files else [],
+                    "conflict_count": len(conflict_files) if conflict_files else 0,
+                    "on_conflict": "fail",
+                    "output": failed_output[:2000] if failed_output else "",
+                    "timestamp": _now_iso(),
+                }
+                existing_meta["git_merge_failed"] = True  # 保持向后兼容
+                existing_meta["git_merge_conflicts"] = conflict_files[:5] if conflict_files else []
+                async with async_session_factory() as session:
+                    await session.execute(
+                        text("UPDATE work_items SET metadata = :meta WHERE id = :id"),
+                        {"meta": json.dumps(existing_meta, ensure_ascii=False), "id": item["id"]}
+                    )
+                    await session.commit()
+                # 推进到下游节点
+                await self._advance_past_node(item, node)
 
     async def _advance_past_node(self, item: dict, node: dict):
         """自动推进工作项到指定节点的下游节点。"""
@@ -1681,6 +2198,66 @@ class WorkItemService:
         return f"{clean}/blob/{commit_hash}/{file_path}"
 
     @staticmethod
+    def _is_commit_pushed(repo_path: str, commit_hash: str) -> bool:
+        """检查指定 commit 是否已 push 到远程分支。
+
+        通过 `git branch -r --contains {commit_hash}` 判断：
+        有输出说明已 push，否则未 push。
+        任何异常（超时/路径不存在等）默认返回 False（保守策略，使用本地链接）。
+        """
+        if not repo_path or not commit_hash:
+            return False
+        try:
+            import subprocess
+
+            result = subprocess.run(
+                ["git", "branch", "-r", "--contains", commit_hash],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            return bool(result.stdout.strip())
+        except Exception:
+            return False
+
+    @staticmethod
+    def _decode_git_path(path: str) -> str:
+        """解码 git 输出中的八进制转义路径。
+
+        git 对含非 ASCII 字符的文件名会输出如 "docs/\346\265\213\350\257\225.md" 格式，
+        本方法将其解码为正常 UTF-8 字符串。
+        """
+        # 移除首尾引号
+        path = path.strip('"')
+        # 如果不含八进制转义，直接返回
+        if not re.search(r'\\[0-9]{3}', path):
+            return path
+        # 解码八进制转义 \nnn → 对应字节，然后 UTF-8 解码
+        parts = re.split(r'(\\[0-9]{3})', path)
+        result = b''
+        for part in parts:
+            if re.match(r'\\[0-9]{3}', part):
+                result += bytes([int(part[1:], 8)])
+            else:
+                result += part.encode('utf-8')
+        try:
+            return result.decode('utf-8')
+        except (UnicodeDecodeError, ValueError):
+            return path
+
+    @staticmethod
+    def _is_valid_file_path(path: str) -> bool:
+        """检查路径是否有效（不含 git 八进制转义或异常引号）。"""
+        # git 对含非 ASCII 字符的文件名会输出八进制转义 \nnn
+        if re.search(r'\\[0-9]{3}', path):
+            return False
+        # 路径中不应包含引号
+        if '"' in path or "'" in path:
+            return False
+        return True
+
+    @staticmethod
     async def _get_commit_changed_files(
         worktree_path: str, commit_hash: str
     ) -> List[str]:
@@ -1728,6 +2305,7 @@ class WorkItemService:
         branch_name: Optional[str] = None,
         project_id: Optional[str] = None,
         changed_files: Optional[List[str]] = None,
+        worktree_path: Optional[str] = None,
     ) -> None:
         """从任务完成信息中提取产物并追加到 work_item.metadata.artifacts。
 
@@ -1758,17 +2336,37 @@ class WorkItemService:
                 project_path = None
 
         def _build_local_file_url(rel_path: str) -> str:
-            """无远程仓库时返回空字符串，由保存阶段统一替换为后端 API 路径，
-            使浏览器可以直接打开文件内容。
+            """构建本地文件 API 链接，供前端 /docs/view 页面渲染。
+
+            格式: /api/files/content?path={absolute_path}
+            当 project_path 不可用时返回空字符串。
             """
-            return ""
+            if not project_path:
+                return ""
+            from urllib.parse import quote
+            abs_path = os.path.join(project_path, rel_path) if not os.path.isabs(rel_path) else rel_path
+            return f"/api/files/content?path={quote(abs_path, safe='/')}"
+
+        # 判断 commit 是否已 push 到远程（决定使用 GitLab 链接还是本地链接）
+        repo_path = worktree_path or project_path or ""
+        is_pushed = False
+        if commit_hash and repo_path and os.path.isdir(repo_path):
+            is_pushed = self._is_commit_pushed(repo_path, commit_hash)
 
         # 1. 变更文件产物（最优先）
         if changed_files and commit_hash:
             for file_path in list(changed_files)[:10]:
                 if not file_path:
                     continue
-                file_url = self._build_file_url(repo_url, commit_hash, file_path)
+                # 解码 git 八进制转义路径（如含中文的文件名）
+                file_path = self._decode_git_path(file_path)
+                # 跳过解码后仍无效的路径
+                if not self._is_valid_file_path(file_path):
+                    logger.debug("Skipping invalid file path in artifacts: %s", file_path)
+                    continue
+                file_url = ""
+                if is_pushed and repo_url:
+                    file_url = self._build_file_url(repo_url, commit_hash, file_path)
                 if not file_url:
                     file_url = _build_local_file_url(file_path)
                 file_name = file_path.rsplit("/", 1)[-1] or file_path
@@ -1809,7 +2407,7 @@ class WorkItemService:
                         relative_path = raw_path[len(project_path):].lstrip("/")
 
                     file_url = ""
-                    if repo_url and commit_hash:
+                    if is_pushed and repo_url and commit_hash:
                         file_url = self._build_file_url(
                             repo_url, commit_hash, relative_path
                         )
@@ -1829,8 +2427,8 @@ class WorkItemService:
                         "task_id": task_id,
                     })
 
-        # 3. Git Commit 产物
-        if commit_hash:
+        # 3. Git Commit 产物（仅在已 push 时生成，未 push 的 commit 无法通过远程链接访问）
+        if commit_hash and is_pushed:
             commit_url = self._build_commit_url(repo_url, commit_hash)
             label = f"Commit {commit_hash[:7]}"
             if branch_name:
@@ -1859,6 +2457,9 @@ class WorkItemService:
                     break
                 clean_url = raw_url.rstrip(".,;:!?")
                 if not clean_url or clean_url in seen:
+                    continue
+                # 排除飞书 API / Webhook URL（非产物）
+                if "/open-apis/" in clean_url:
                     continue
                 seen.add(clean_url)
                 artifacts.append({
@@ -2011,7 +2612,7 @@ class WorkItemService:
                         file_path_val = art.get("file_path") or ""
                         art_id = art.get("id") or ""
                         if file_path_val and art_id and (
-                            not url_val or url_val.startswith("file://")
+                            not url_val or url_val.startswith("file://") or url_val.startswith("/api/files/content")
                         ):
                             content_path = (
                                 f"/api/work-items/{work_item_id}"
@@ -2054,13 +2655,34 @@ class WorkItemService:
         """
         if not task_id:
             return
-
+    
         logger.info(
             "on_work_item_task_completed: task_id=%s result_len=%d",
             task_id[:8], len(result or ""),
         )
-
-        # 1. 将 result 写回 transition.output
+    
+        # 优先使用 agent_final_output（仅含 agent 自然语言回复，不含工具调用日志），
+        # 确保下游节点收到的是 agent 的最终结论而非中间执行日志。
+        transition_output = result
+        try:
+            async with async_session_factory() as session:
+                row = await session.execute(
+                    text("SELECT agent_final_output FROM tasks WHERE id = :task_id"),
+                    {"task_id": task_id},
+                )
+                task_row = row.fetchone()
+                if task_row:
+                    agent_fo = task_row[0]
+                    if agent_fo and str(agent_fo).strip():
+                        transition_output = str(agent_fo).strip()
+                        logger.info(
+                            "on_work_item_task_completed: using agent_final_output (len=%d) instead of full result (len=%d) for task=%s",
+                            len(transition_output), len(result or ""), task_id[:8],
+                        )
+        except Exception:  # noqa: BLE001
+            logger.debug("Failed to read agent_final_output for task=%s, falling back to result", task_id[:8], exc_info=True)
+    
+        # 1. 将 transition_output 写回 transition.output
         async with async_session_factory() as session:
             await session.execute(
                 text("""
@@ -2068,7 +2690,7 @@ class WorkItemService:
                     SET output = :output
                     WHERE task_id = :task_id
                 """),
-                {"task_id": task_id, "output": result},
+                {"task_id": task_id, "output": transition_output},
             )
             await session.commit()
 
@@ -2152,6 +2774,7 @@ class WorkItemService:
                     branch_name=branch_name_val or None,
                     project_id=(item or {}).get("project_id"),
                     changed_files=changed_files,
+                    worktree_path=worktree_path or None,
                 )
             except Exception as exc:
                 logger.warning(
@@ -2221,13 +2844,19 @@ class WorkItemService:
                 return
             task_data = dict(row._mapping)
             status = (task_data.get("status") or "").lower()
-            if status in ("completed", "failed", "stopped", "rejected"):
+            if status == "completed":
                 output = task_data.get("result") or ""
                 logger.info(
                     "Polling detected task %s status=%s, triggering auto-advance.",
                     task_id[:8], status,
                 )
                 await self.on_work_item_task_completed(task_id, output)
+                return
+            elif status in ("failed", "stopped", "rejected"):
+                logger.warning(
+                    "Polling detected task %s status=%s, will NOT advance work item.",
+                    task_id[:8], status,
+                )
                 return
         logger.warning(
             "Polling timed out for task %s after 2h, giving up.", task_id[:8],
@@ -2281,7 +2910,15 @@ class WorkItemService:
             if not definition:
                 return
 
-            # 3. 选择下游边 / 节点
+            # 3. 审批拒绝时不推进到下游节点，停止工作流执行
+            if not approved:
+                logger.info(
+                    "Approval %s for work item %s rejected, workflow stopped.",
+                    approval_id[:8], work_item_id[:8],
+                )
+                return
+
+            # 4. 选择下游边 / 节点（仅审批通过时执行）
             target_node = self._select_approval_downstream(definition, node_id, approved)
             if not target_node:
                 logger.info(
@@ -2294,7 +2931,7 @@ class WorkItemService:
                 work_item_id,
                 target_node["id"],
                 operator="system",
-                trigger_type=("approval_approved" if approved else "approval_rejected"),
+                trigger_type="approval_approved",
             )
 
         except Exception as exc:

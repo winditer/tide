@@ -52,7 +52,7 @@ DEFAULT_CWD = Path(os.getenv("CODEX_DEFAULT_CWD", os.getcwd())).expanduser().res
 CODEX_BIN = os.getenv("CODEX_BIN", "codex")
 CLAUDE_BIN = os.getenv("CLAUDE_BIN", "claude")
 QODER_BIN = os.getenv("QODER_BIN", "qodercli")
-CODEX_TIMEOUT_SECONDS = int(os.getenv("CODEX_TIMEOUT_SECONDS", "1800"))
+CODEX_TIMEOUT_SECONDS = int(os.getenv("CODEX_TIMEOUT_SECONDS", "3600"))
 CLAUDE_TIMEOUT_SECONDS = int(os.getenv("CLAUDE_TIMEOUT_SECONDS", str(CODEX_TIMEOUT_SECONDS)))
 QODER_TIMEOUT_SECONDS = int(os.getenv("QODER_TIMEOUT_SECONDS", str(CODEX_TIMEOUT_SECONDS)))
 QODER_QUEST_TIMEOUT_SECONDS = int(os.getenv("QODER_QUEST_TIMEOUT_SECONDS", str(12 * 60 * 60)))
@@ -134,6 +134,12 @@ TIDE_ADMIN_PASSWORD = os.environ.get("TIDE_ADMIN_PASSWORD", "")
 LARK_APP_REDIRECT_URI = os.environ.get("LARK_APP_REDIRECT_URI", "")
 TIDE_PASSWORD_MIN_LENGTH = int(os.environ.get("TIDE_PASSWORD_MIN_LENGTH", "8"))
 TIDE_DATA_DIR: str = os.getenv("TIDE_DATA_DIR", str(Path.home() / ".tide" / "data"))
+
+# ─── Work Item Smart Routing ───────────────────────────────────────────
+WORKITEM_SMART_ROUTING = os.getenv("WORKITEM_SMART_ROUTING", "false").lower() == "true"
+WORKITEM_SMART_ROUTING_TIMEOUT = int(os.getenv("WORKITEM_SMART_ROUTING_TIMEOUT", "30"))
+WORKITEM_SMART_ROUTING_CONFIDENCE = float(os.getenv("WORKITEM_SMART_ROUTING_CONFIDENCE", "0.6"))
+ROUTING_PROPOSAL_MAX_CHARS = int(os.getenv("ROUTING_PROPOSAL_MAX_CHARS", "3000"))
 # =================================================
 
 

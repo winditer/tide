@@ -382,6 +382,8 @@ class WorkItemTransitionResponse(BaseModel):
     operator: Optional[str] = None
     output: Optional[str] = None
     created_at: Optional[str] = None
+    plan_id: Optional[str] = None
+    plan_tasks: Optional[list] = None
 
 
 class ProjectSettingsUpdate(BaseModel):

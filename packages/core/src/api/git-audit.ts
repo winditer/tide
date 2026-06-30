@@ -33,6 +33,7 @@ export interface GitChangeGroup {
   name: string;
   id?: string;
   branch: string;
+  branches?: string[];
   commit_count: number;
   files_changed: number;
   additions: number;
@@ -48,11 +49,12 @@ export interface GitCommitsParams {
   until?: string;
   limit?: number;
   work_item_id?: string;
+  version_id?: string;
   all_branches?: boolean;
 }
 
 export interface GitChangesParams {
-  group_by: "work_item" | "session" | "branch";
+  group_by: "work_item" | "session" | "branch" | "version";
   since?: string;
   until?: string;
 }
@@ -86,6 +88,7 @@ export async function getGitCommits(
     until: params?.until,
     limit: params?.limit,
     work_item_id: params?.work_item_id,
+    version_id: params?.version_id,
     all_branches: params?.all_branches ? "true" : undefined,
   });
   const res = await apiClient.get<{ commits: GitCommit[]; total: number }>(
@@ -188,5 +191,77 @@ export function gitIgnore(
   return apiClient.post<{ ok: boolean; added: string[] }>(
     `/api/projects/${encodeURIComponent(projectId)}/git/ignore`,
     { files },
+  );
+}
+
+/**
+ * 创建分支。
+ */
+export function createBranch(
+  projectId: string,
+  branchName: string,
+  startPoint?: string,
+): Promise<{ ok: boolean; branch: string }> {
+  return apiClient.post<{ ok: boolean; branch: string }>(
+    `/api/projects/${encodeURIComponent(projectId)}/git/branches`,
+    { branch_name: branchName, start_point: startPoint },
+  );
+}
+
+/**
+ * 删除分支。
+ */
+export function deleteBranch(
+  projectId: string,
+  branchName: string,
+): Promise<{ ok: boolean }> {
+  return apiClient.del<{ ok: boolean }>(
+    `/api/projects/${encodeURIComponent(projectId)}/git/branches/${encodeURIComponent(branchName)}`,
+  );
+}
+
+/**
+ * 推送分支到远端。
+ */
+export function pushBranch(
+  projectId: string,
+  branchName: string,
+  remote?: string,
+): Promise<{ ok: boolean; output: string }> {
+  return apiClient.post<{ ok: boolean; output: string }>(
+    `/api/projects/${encodeURIComponent(projectId)}/git/push`,
+    { branch_name: branchName, remote },
+  );
+}
+
+/**
+ * 从远端拉取分支。
+ */
+export function pullBranch(
+  projectId: string,
+  branchName?: string,
+  remote?: string,
+): Promise<{ ok: boolean; output: string }> {
+  return apiClient.post<{ ok: boolean; output: string }>(
+    `/api/projects/${encodeURIComponent(projectId)}/git/pull`,
+    { branch_name: branchName, remote },
+  );
+}
+
+/**
+ * 创建合并请求。
+ */
+export function createMergeRequest(
+  projectId: string,
+  params: {
+    source_branch: string;
+    target_branch: string;
+    title: string;
+    description?: string;
+  },
+): Promise<{ ok: boolean; url: string }> {
+  return apiClient.post<{ ok: boolean; url: string }>(
+    `/api/projects/${encodeURIComponent(projectId)}/git/merge-request`,
+    params,
   );
 }

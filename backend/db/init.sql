@@ -47,6 +47,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     merge_status TEXT,
     priority INTEGER DEFAULT 0,
     labels TEXT,
+    retry_count INTEGER DEFAULT 0,
+    agent_final_output TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     started_at TIMESTAMP,
     completed_at TIMESTAMP,
@@ -113,6 +115,9 @@ CREATE TABLE IF NOT EXISTS approvals (
 );
 CREATE INDEX IF NOT EXISTS idx_approvals_task ON approvals(task_id);
 CREATE INDEX IF NOT EXISTS idx_approvals_workspace_status ON approvals(workspace_id, status);
+-- 防止同一 task+plan+type 组合重复创建 pending 审批
+CREATE UNIQUE INDEX IF NOT EXISTS idx_approvals_unique_pending
+    ON approvals(task_id, COALESCE(plan_id, ''), type) WHERE status = 'pending';
 
 -- schedules 定时任务
 CREATE TABLE IF NOT EXISTS schedules (

@@ -22,15 +22,21 @@ import {
   useAddProjectMember,
   useAuth,
   useBindProjectWorkflow,
+  useCreateBranch,
+  useCreateMergeRequest,
   useCreateVersion,
+  useDeleteBranch,
   useDeleteProject,
   useDeleteVersion,
+  useGitBranches,
   useProject,
   useProjectChats,
   useProjectMembers,
   useProjectSessions,
   useProjectTasks,
   useProjectWorkflow,
+  usePullBranch,
+  usePushBranch,
   useRemoveProjectMember,
   useUnbindProjectWorkflow,
   useUpdateProjectMember,
@@ -44,18 +50,22 @@ import {
   type VersionStatus,
 } from "@tide/core";
 import {
+  Download,
   FileCode,
   GitBranch,
+  GitPullRequest,
   Pencil,
+  Plus,
   Search,
   ShieldCheck,
   Tag,
   Trash2,
+  Upload,
   UserPlus,
 } from "lucide-react";
 import { KnowledgeGraphCard } from "@tide/views";
 
-type TabKey = "conversations" | "tasks" | "versions" | "members" | "knowledge" | "settings";
+type TabKey = "conversations" | "tasks" | "versions" | "members" | "knowledge" | "branches" | "settings";
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "conversations", label: "对话" },
@@ -224,9 +234,9 @@ export default function ProjectDetailPage({
         </div>
       </header>
 
-      {/* Tabs */}
+      {/* Tabs — 目标顺序: 对话、任务、版本、文件、审计、分支、成员、知识图谱、设置 */}
       <nav className="flex items-center gap-0 border-b border-border/50">
-        {TABS.map((t) => {
+        {TABS.slice(0, 3).map((t) => {
           const active = tab === t.key;
           return (
             <button
@@ -243,7 +253,7 @@ export default function ProjectDetailPage({
             </button>
           );
         })}
-        {/* Route-based tabs */}
+        {/* Route-based tabs: 文件、审计 */}
         <Link
           href={`/projects/${id}/files`}
           className="relative -mb-px flex items-center gap-1.5 border-b-2 border-transparent px-4 py-2.5 text-sm text-muted-foreground transition-smooth hover:text-foreground"
@@ -258,6 +268,37 @@ export default function ProjectDetailPage({
           <GitBranch className="h-3.5 w-3.5" />
           审计
         </Link>
+        {/* 分支 (button tab) */}
+        <button
+          onClick={() => setTab("branches")}
+          className={[
+            "relative -mb-px flex items-center gap-1.5 border-b-2 px-4 py-2.5 text-sm transition-smooth",
+            tab === "branches"
+              ? "border-foreground text-foreground font-medium"
+              : "border-transparent text-muted-foreground hover:text-foreground",
+          ].join(" ")}
+        >
+          <GitBranch className="h-3.5 w-3.5" />
+          分支
+        </button>
+        {/* 剩余内部 tabs: 成员、知识图谱、设置 */}
+        {TABS.slice(3).map((t) => {
+          const active = tab === t.key;
+          return (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={[
+                "relative -mb-px border-b-2 px-4 py-2.5 text-sm transition-smooth",
+                active
+                  ? "border-foreground text-foreground font-medium"
+                  : "border-transparent text-muted-foreground hover:text-foreground",
+              ].join(" ")}
+            >
+              {t.label}
+            </button>
+          );
+        })}
       </nav>
 
       {tab === "conversations" && (
@@ -281,6 +322,12 @@ export default function ProjectDetailPage({
       )}
 
       {tab === "versions" && <VersionsPane projectId={project.id} />}
+
+      {tab === "branches" && (
+        <div className="py-6">
+          <BranchManagementCard projectId={project.id} />
+        </div>
+      )}
 
       {tab === "members" && <MembersPane projectId={project.id} />}
 
@@ -670,6 +717,8 @@ function SettingsPane({
       {/* Git Repository Config */}
       <GitConfigCard projectId={projectId} />
 
+
+
       {registered && (
         <div className="bg-card rounded-xl shadow-card border border-destructive/30 p-6 flex items-center justify-between">
           <div>
@@ -797,7 +846,6 @@ function GitConfigCard({ projectId }: { projectId: string }) {
       };
       setForm(next);
       setInitial(next);
-      toast({ title: "已保存 Git 仓库配置" });
     } catch (err) {
       toast({
         title: "保存失败",
@@ -926,6 +974,262 @@ function GitConfigCard({ projectId }: { projectId: string }) {
             </Button>
           </div>
         </>
+      )}
+    </div>
+  );
+}
+
+// ── Branch Management Card ────────────────────────────────────────────────
+
+function BranchManagementCard({ projectId }: { projectId: string }) {
+  const { data: branchData } = useGitBranches(projectId);
+  const branches = branchData?.branches ?? [];
+  const currentBranch = branchData?.current ?? "";
+
+  const createBranch = useCreateBranch(projectId);
+  const deleteBranch = useDeleteBranch(projectId);
+  const pushBranch = usePushBranch(projectId);
+  const pullBranch = usePullBranch(projectId);
+  const createMR = useCreateMergeRequest(projectId);
+
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [newBranchName, setNewBranchName] = useState("");
+  const [mrDialogBranch, setMrDialogBranch] = useState<string | null>(null);
+  const [mrTitle, setMrTitle] = useState("");
+  const [mrTargetBranch, setMrTargetBranch] = useState("");
+  const [mrDescription, setMrDescription] = useState("");
+
+  const handleCreateBranch = () => {
+    if (!newBranchName.trim()) return;
+    createBranch.mutate(
+      { branchName: newBranchName.trim() },
+      {
+        onSuccess: () => {
+          toast({ title: "分支已创建", description: newBranchName.trim() });
+          setNewBranchName("");
+          setShowCreateForm(false);
+        },
+        onError: (err) => {
+          toast({ title: "创建失败", description: getApiErrorMessage(err), variant: "destructive" });
+        },
+      },
+    );
+  };
+
+  const handlePush = (branch: string) => {
+    pushBranch.mutate(
+      { branchName: branch },
+      {
+        onSuccess: () => toast({ title: "Push 成功", description: branch }),
+        onError: (err) => toast({ title: "Push 失败", description: getApiErrorMessage(err), variant: "destructive" }),
+      },
+    );
+  };
+
+  const handlePull = (branch: string) => {
+    pullBranch.mutate(
+      { branchName: branch },
+      {
+        onSuccess: () => toast({ title: "Pull 成功", description: branch }),
+        onError: (err) => toast({ title: "Pull 失败", description: getApiErrorMessage(err), variant: "destructive" }),
+      },
+    );
+  };
+
+  const handleDelete = (branch: string) => {
+    if (!confirm(`确定删除分支 "${branch}" 吗？此操作不可恢复。`)) return;
+    deleteBranch.mutate(
+      branch,
+      {
+        onSuccess: () => toast({ title: "分支已删除", description: branch }),
+        onError: (err) => toast({ title: "删除失败", description: getApiErrorMessage(err), variant: "destructive" }),
+      },
+    );
+  };
+
+  const handleCreateMR = () => {
+    if (!mrDialogBranch || !mrTargetBranch) return;
+    createMR.mutate(
+      {
+        source_branch: mrDialogBranch,
+        target_branch: mrTargetBranch,
+        title: mrTitle || `Merge ${mrDialogBranch} into ${mrTargetBranch}`,
+        description: mrDescription || undefined,
+      },
+      {
+        onSuccess: (data) => {
+          const url = (data as { url?: string })?.url;
+          toast({ title: "MR 已创建", description: url ?? "操作成功" });
+          setMrDialogBranch(null);
+          setMrTitle("");
+          setMrTargetBranch("");
+          setMrDescription("");
+        },
+        onError: (err) => {
+          toast({ title: "MR 创建失败", description: getApiErrorMessage(err), variant: "destructive" });
+        },
+      },
+    );
+  };
+
+  const openMrDialog = (branch: string) => {
+    setMrDialogBranch(branch);
+    const defaultTarget = branches.includes("main") ? "main" : branches.includes("master") ? "master" : branches.filter((b) => b !== branch)[0] ?? "";
+    setMrTargetBranch(defaultTarget);
+    setMrTitle(`Merge ${branch} into ${defaultTarget}`);
+    setMrDescription("");
+  };
+
+  return (
+    <div className="bg-card rounded-xl shadow-card p-6 space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <h2 className="text-base font-medium">本地分支管理</h2>
+          <Badge variant="secondary" className="text-xs">{branches.length}</Badge>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setShowCreateForm((v) => !v)}
+        >
+          <Plus className="h-3.5 w-3.5 mr-1" />
+          新建分支
+        </Button>
+      </div>
+
+      {/* Create Form */}
+      {showCreateForm && (
+        <div className="flex items-center gap-2">
+          <Input
+            value={newBranchName}
+            onChange={(e) => setNewBranchName(e.target.value)}
+            placeholder="新分支名称"
+            className="flex-1 rounded-lg border-border/50 font-mono text-xs"
+            onKeyDown={(e) => e.key === "Enter" && handleCreateBranch()}
+          />
+          <Button size="sm" onClick={handleCreateBranch} disabled={createBranch.isPending || !newBranchName.trim()}>
+            {createBranch.isPending ? "创建中…" : "创建"}
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => { setShowCreateForm(false); setNewBranchName(""); }}>
+            取消
+          </Button>
+        </div>
+      )}
+
+      {/* Branch List */}
+      <div className="max-h-[400px] overflow-y-auto space-y-1">
+        {branches.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-4 text-center">暂无分支信息</p>
+        ) : (
+          branches.map((branch) => (
+            <div
+              key={branch}
+              className="group flex items-center justify-between rounded-lg px-3 py-2 hover:bg-muted/50 transition-colors"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="font-mono text-xs truncate">{branch}</span>
+                {branch === currentBranch && (
+                  <Badge variant="default" className="text-[10px] px-1.5 py-0">当前</Badge>
+                )}
+              </div>
+              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 w-7 p-0"
+                  title="Push"
+                  onClick={() => handlePush(branch)}
+                >
+                  <Upload className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 w-7 p-0"
+                  title="Pull"
+                  onClick={() => handlePull(branch)}
+                >
+                  <Download className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 w-7 p-0"
+                  title="Merge Request"
+                  onClick={() => openMrDialog(branch)}
+                >
+                  <GitPullRequest className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                  title="删除分支"
+                  disabled={branch === currentBranch}
+                  onClick={() => handleDelete(branch)}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* MR Dialog */}
+      {mrDialogBranch && (
+        <Dialog open onOpenChange={(open) => { if (!open) { setMrDialogBranch(null); setMrTitle(""); setMrTargetBranch(""); setMrDescription(""); } }}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>创建 Merge Request</DialogTitle>
+              <DialogDescription>从 {mrDialogBranch} 合并到目标分支</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-2">
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-medium">源分支</span>
+                <Input value={mrDialogBranch} disabled className="font-mono text-xs" />
+              </label>
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-medium">目标分支</span>
+                <Select
+                  value={mrTargetBranch}
+                  onChange={(e) => {
+                    setMrTargetBranch(e.target.value);
+                    setMrTitle(`Merge ${mrDialogBranch} into ${e.target.value}`);
+                  }}
+                  options={branches.filter((b) => b !== mrDialogBranch).map((b) => ({ value: b, label: b }))}
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-medium">标题</span>
+                <Input
+                  value={mrTitle}
+                  onChange={(e) => setMrTitle(e.target.value)}
+                  placeholder={`Merge ${mrDialogBranch} into ${mrTargetBranch}`}
+                  className="text-xs"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-medium">描述（可选）</span>
+                <textarea
+                  value={mrDescription}
+                  onChange={(e) => setMrDescription(e.target.value)}
+                  placeholder="补充说明…"
+                  className="w-full rounded-lg border border-border/50 bg-transparent px-3 py-2 text-xs min-h-[80px] resize-y focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+              </label>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => { setMrDialogBranch(null); setMrTitle(""); setMrTargetBranch(""); setMrDescription(""); }}>
+                取消
+              </Button>
+              <Button onClick={handleCreateMR} disabled={createMR.isPending || !mrTargetBranch}>
+                {createMR.isPending ? "创建中…" : "创建 MR"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       )}
     </div>
   );
@@ -1399,7 +1703,6 @@ function VersionsPane({ projectId }: { projectId: string }) {
       return;
     try {
       await deleteMutation.mutateAsync(v.id);
-      toast({ title: "已删除版本", description: v.name });
     } catch (err) {
       toast({
         title: "删除失败",
@@ -1527,7 +1830,6 @@ function VersionsPane({ projectId }: { projectId: string }) {
             description: form.description || undefined,
             status: form.status,
           });
-          toast({ title: "已创建版本", description: form.name });
           setCreateOpen(false);
         }}
       />
@@ -1548,7 +1850,6 @@ function VersionsPane({ projectId }: { projectId: string }) {
               status: form.status,
             },
           });
-          toast({ title: "已更新版本", description: form.name });
           setEditing(null);
         }}
       />

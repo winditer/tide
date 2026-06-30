@@ -247,7 +247,7 @@ class AgentExecutor:
                     if event_type == "session_id":
                         session_id = content or session_id
                         yield TaskEvent(type="session_id", session_id=content)
-                    elif event_type != "approval_request" and should_create_approval(content):
+                    elif not full_auto and event_type != "approval_request" and should_create_approval(content):
                         if content:
                             output_parts.append(content)
                         approval_requested = True
@@ -289,6 +289,9 @@ class AgentExecutor:
                         else:
                             yield ev
                     elif event_type == "approval_request":
+                        if full_auto:
+                            logger.warning("[executor] ignoring approval_request in full_auto mode, task=%s", task_id[:8])
+                            continue
                         yield TaskEvent(type="approval_request", content=content, session_id=session_id)
                     else:
                         if content:
@@ -393,7 +396,7 @@ class AgentExecutor:
                         if event_type == "session_id":
                             session_id = content or session_id
                             yield TaskEvent(type="session_id", session_id=content)
-                        elif event_type != "approval_request" and should_create_approval(content):
+                        elif not full_auto and event_type != "approval_request" and should_create_approval(content):
                             if content:
                                 output_parts.append(content)
                             approval_requested = True
@@ -417,6 +420,9 @@ class AgentExecutor:
                         elif event_type == "progress":
                             yield TaskEvent(type="progress", content=content, session_id=session_id)
                         elif event_type == "approval_request":
+                            if full_auto:
+                                logger.warning("[executor] ignoring approval_request in full_auto fallback, task=%s", task_id[:8])
+                                continue
                             yield TaskEvent(type="approval_request", content=content, session_id=session_id)
                         else:
                             if content:

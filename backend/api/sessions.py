@@ -691,7 +691,7 @@ async def get_session_artifacts(
 class UsageReport(BaseModel):
     input_tokens: int = Field(..., ge=0, description="输入 token 数")
     output_tokens: int = Field(..., ge=0, description="输出 token 数")
-    model: Optional[str] = Field("qoder", description="模型标识，默认 qoder")
+    model: Optional[str] = Field("auto", description="模型标识，默认 auto")
     source: Optional[str] = Field(None, description="来源标识，如 qoder-ide")
 
 
@@ -699,7 +699,7 @@ class BatchUsageItem(BaseModel):
     session_id: str = Field(..., description="会话 ID")
     input_tokens: int = Field(..., ge=0)
     output_tokens: int = Field(..., ge=0)
-    model: Optional[str] = Field("qoder")
+    model: Optional[str] = Field("auto")
     source: Optional[str] = Field(None)
 
 
@@ -726,7 +726,7 @@ async def _find_or_create_usage_task(session_id: str) -> Optional[str]:
         workspace_id="default",
         prompt="[usage-tracking] Token usage placeholder",
         agent_id="qoder",
-        model="qoder",
+        model="auto",
         cwd="",
         attachments=[],
         session_id=session_id,
@@ -750,7 +750,7 @@ async def report_session_usage(
     if not task_id:
         raise HTTPException(status_code=404, detail="Session not found and failed to create tracking task")
 
-    model = (body.model or "qoder").strip() or "qoder"
+    model = (body.model or "auto").strip() or "auto"
     cost = await cost_service.update_task_cost(
         task_id=task_id,
         input_tokens=body.input_tokens,
@@ -805,7 +805,7 @@ async def report_usage_batch(
                 })
                 continue
 
-            model = (item.model or "qoder").strip() or "qoder"
+            model = (item.model or "auto").strip() or "auto"
             cost = await cost_service.update_task_cost(
                 task_id=task_id,
                 input_tokens=item.input_tokens,

@@ -15,7 +15,10 @@ from pydantic import BaseModel
 from sqlalchemy import text as sa_text
 
 from backend.core.dependencies import get_optional_user
-from backend.runtime.git_utils import git_command, git_log_files, git_diff_full
+from backend.runtime.git_utils import (
+    git_command, git_log_files, git_diff_full,
+    git_push, git_fetch, git_ensure_remote,
+)
 from backend.db.engine import async_session_factory
 from pathlib import Path
 
@@ -201,12 +204,18 @@ async def get_project_commits(
     until: Optional[str] = Query(None, description="截止时间 (ISO 格式)"),
     limit: int = Query(50, ge=1, le=200, description="最大返回条数"),
     work_item_id: Optional[str] = Query(None, description="按工作项分支筛选"),
+    version_id: Optional[str] = Query(None, description="按版本关联分支筛选"),
     all_branches: bool = Query(False, description="搜索所有分支（用于会话级跨分支查询）"),
 ):
     """获取项目的 commit 列表（含修改文件）。展示项目级全量数据，不做用户过滤。"""
     cwd = _decode_project_path(project_id)
     if not Path(cwd).is_dir():
         raise HTTPException(status_code=404, detail=f"项目路径不存在: {cwd}")
+
+    # 如果指定了 version_id，查询版本关联的所有分支获取 commit
+    if version_id:
+        commits = await _get_version_commits(project_id, version_id, cwd, limit, since, until)
+        return {"commits": commits, "total": len(commits)}
 
     # 如果指定了 work_item_id，按工作项分支筛选
     effective_branch = branch
@@ -232,7 +241,7 @@ async def get_project_commits(
 @router.get("/{project_id}/git/changes")
 async def get_project_changes(
     project_id: str,
-    group_by: str = Query("branch", description="聚合维度: work_item | session | branch"),
+    group_by: str = Query("branch", description="聚合维度: work_item | session | branch | version"),
     since: Optional[str] = Query(None, description="起始时间"),
     until: Optional[str] = Query(None, description="截止时间"),
     current_user: Optional[dict] = Depends(get_optional_user),
@@ -242,13 +251,14 @@ async def get_project_changes(
     - group_by=work_item: 从 DB 查询当前项目工作项，按工作项关联的分支统计变更
     - group_by=session: 从 DB 查询当前项目的 tasks，按 session_id 分组统计变更
     - group_by=branch: 列出所有分支的变更统计
+    - group_by=version: 从 DB 查询版本及关联工作项分支，按版本聚合变更
     """
     cwd = _decode_project_path(project_id)
     if not Path(cwd).is_dir():
         raise HTTPException(status_code=404, detail=f"项目路径不存在: {cwd}")
 
-    if group_by not in ("work_item", "session", "branch"):
-        raise HTTPException(status_code=400, detail="group_by 必须为 work_item / session / branch")
+    if group_by not in ("work_item", "session", "branch", "version"):
+        raise HTTPException(status_code=400, detail="group_by 必须为 work_item / session / branch / version")
 
     if group_by == "work_item":
         results = await _group_by_work_item(project_id, cwd, since, until)
@@ -256,6 +266,8 @@ async def get_project_changes(
         # 按会话 Tab 保留用户过滤
         should_filter = await _should_filter_by_user(project_id, current_user)
         results = await _group_by_session(project_id, cwd, since, until, current_user if should_filter else None)
+    elif group_by == "version":
+        results = await _group_by_version(project_id, cwd, since, until)
     else:
         results = await _group_by_branch(cwd, since, until)
 
@@ -496,6 +508,180 @@ async def _group_by_work_item(
     return results
 
 
+async def _group_by_version(
+    project_id: str,
+    cwd: str,
+    since: Optional[str],
+    until: Optional[str],
+) -> list[dict]:
+    """按版本分组：从 DB 查询版本及关联工作项分支，聚合 Git 变更统计。"""
+    from backend.runtime.git_utils import work_item_branch_name, version_branch_name
+
+    main_branch = await _get_main_branch(cwd)
+
+    # 1. 查询项目所有版本 + 关联工作项 + 工作项分支（一次 JOIN 查询）
+    async with async_session_factory() as session:
+        rows = await session.execute(
+            sa_text("""
+                SELECT v.id, v.name, wi.id, wi.title, t.branch_name
+                FROM versions v
+                LEFT JOIN work_items wi ON wi.version_id = v.id
+                LEFT JOIN work_item_transitions wit ON wit.work_item_id = wi.id
+                LEFT JOIN tasks t ON t.id = wit.task_id AND t.branch_name IS NOT NULL
+                WHERE v.project_id = :project_id
+                ORDER BY v.created_at DESC, wi.created_at DESC
+            """),
+            {"project_id": project_id},
+        )
+        all_rows = rows.fetchall()
+
+    # 2. 按版本分组，收集每个版本下所有工作项的分支
+    version_map: dict[str, dict] = {}  # version_id -> {name, branches: set}
+    for row in all_rows:
+        v_id, v_name, wi_id, wi_title, branch_name = row[0], row[1], row[2], row[3], row[4]
+        if v_id not in version_map:
+            version_map[v_id] = {"name": v_name, "branches": set()}
+        if branch_name:
+            version_map[v_id]["branches"].add(branch_name)
+        elif wi_id:
+            # 无分支记录时使用约定分支名
+            version_map[v_id]["branches"].add(work_item_branch_name(wi_id))
+
+    # 额外添加版本对应的 feature 分支本身
+    for v_id, info in version_map.items():
+        vb = version_branch_name(info["name"])
+        info["branches"].add(vb)
+
+    # 3. 对每个版本的分支集合调用 _branch_stats 聚合统计
+    results: list[dict] = []
+    for v_id, info in version_map.items():
+        total_commits = 0
+        total_files = 0
+        total_additions = 0
+        total_deletions = 0
+        used_branch = ""
+
+        for branch in info["branches"]:
+            stats = await _branch_stats(cwd, branch, main_branch, since, until)
+            if stats:
+                total_commits += stats["commit_count"]
+                total_files += stats["files_changed"]
+                total_additions += stats["additions"]
+                total_deletions += stats["deletions"]
+                if not used_branch:
+                    used_branch = branch
+
+        results.append({
+            "id": v_id,
+            "name": info["name"],
+            "branch": used_branch,
+            "branches": list(info["branches"]),
+            "commit_count": total_commits,
+            "files_changed": total_files,
+            "additions": total_additions,
+            "deletions": total_deletions,
+        })
+
+    return results
+
+
+async def _get_version_commits(
+    project_id: str,
+    version_id: str,
+    cwd: str,
+    limit: int,
+    since: Optional[str],
+    until: Optional[str],
+) -> list[dict]:
+    """获取版本关联的所有分支上的 commit，去重并按时间倒序排列。"""
+    from backend.runtime.git_utils import work_item_branch_name, version_branch_name
+
+    # 1. 查询版本名称
+    async with async_session_factory() as session:
+        row = await session.execute(
+            sa_text("SELECT name FROM versions WHERE id = :vid"),
+            {"vid": version_id},
+        )
+        version_row = row.fetchone()
+
+    if not version_row:
+        return []
+
+    version_name = version_row[0]
+    branches: set[str] = set()
+
+    # 2. 添加版本对应的 feature 分支
+    vb = version_branch_name(version_name)
+    branches.add(vb)
+
+    # 3. 查询版本关联工作项的分支
+    async with async_session_factory() as session:
+        rows = await session.execute(
+            sa_text("""
+                SELECT DISTINCT t.branch_name
+                FROM work_items wi
+                JOIN work_item_transitions wit ON wit.work_item_id = wi.id
+                JOIN tasks t ON t.id = wit.task_id
+                WHERE wi.version_id = :version_id
+                  AND t.branch_name IS NOT NULL AND t.branch_name != ''
+            """),
+            {"version_id": version_id},
+        )
+        for r in rows.fetchall():
+            branches.add(r[0])
+
+    # 4. 查询版本关联工作项（无分支记录时使用约定分支名）
+    async with async_session_factory() as session:
+        rows = await session.execute(
+            sa_text("""
+                SELECT wi.id FROM work_items wi
+                WHERE wi.version_id = :version_id
+                  AND wi.id NOT IN (
+                      SELECT wit2.work_item_id FROM work_item_transitions wit2
+                      JOIN tasks t2 ON t2.id = wit2.task_id
+                      WHERE t2.branch_name IS NOT NULL AND t2.branch_name != ''
+                  )
+            """),
+            {"version_id": version_id},
+        )
+        for r in rows.fetchall():
+            branches.add(work_item_branch_name(r[0]))
+
+    # 5. 对每个分支执行 git log 获取 commit 列表
+    seen_hashes: set[str] = set()
+    all_commits: list[dict] = []
+
+    for branch in branches:
+        # 先确认分支存在
+        code, _ = await git_command(
+            Path(cwd), ["rev-parse", "--verify", branch], timeout=5
+        )
+        if code != 0:
+            continue
+
+        code, output = await git_log_files(
+            cwd=cwd,
+            branch=branch,
+            limit=limit,
+            since=since,
+            until=until,
+        )
+        if code != 0:
+            continue
+
+        commits = _parse_log_output(output)
+        for commit in commits:
+            if commit["hash"] not in seen_hashes:
+                seen_hashes.add(commit["hash"])
+                all_commits.append(commit)
+
+    # 6. 按时间倒序排列
+    all_commits.sort(key=lambda c: c.get("date", ""), reverse=True)
+
+    # 7. 截取 limit
+    return all_commits[:limit]
+
+
 async def _group_by_session(
     project_id: str,
     cwd: str,
@@ -723,7 +909,7 @@ async def get_uncommitted_changes(
     current_branch = branch_output.strip() if code_br == 0 else None
 
     code, output = await git_command(
-        Path(cwd), ["status", "--porcelain"], timeout=10
+        Path(cwd), ["status", "--porcelain", "-uall"], timeout=10
     )
     if code != 0:
         raise HTTPException(status_code=500, detail=f"获取 git status 失败: {output[:300]}")
@@ -808,6 +994,28 @@ class GitIgnoreRequest(BaseModel):
     files: list[str]
 
 
+class GitBranchCreateRequest(BaseModel):
+    branch_name: str
+    start_point: str = "HEAD"
+
+
+class GitPushRequest(BaseModel):
+    branch_name: str
+    remote: str = "origin"
+
+
+class GitPullRequest(BaseModel):
+    branch_name: Optional[str] = None
+    remote: str = "origin"
+
+
+class GitMergeRequestCreate(BaseModel):
+    source_branch: str
+    target_branch: str
+    title: str
+    description: Optional[str] = None
+
+
 @router.post("/{project_id}/git/commit")
 async def git_commit_files(
     project_id: str,
@@ -853,7 +1061,7 @@ async def git_discard_files(
         raise HTTPException(status_code=404, detail=f"项目路径不存在: {cwd}")
 
     # 获取当前 status 以判断哪些文件是 untracked
-    code, status_output = await git_command(Path(cwd), ["status", "--porcelain"], timeout=10)
+    code, status_output = await git_command(Path(cwd), ["status", "--porcelain", "-uall"], timeout=10)
     if code != 0:
         raise HTTPException(status_code=500, detail=f"git status 失败: {status_output[:300]}")
 
@@ -955,3 +1163,273 @@ async def git_ignore_files(
             raise HTTPException(status_code=500, detail=f"写入 .gitignore 失败: {e}")
 
     return {"ok": True, "added": new_entries}
+
+
+# ── 辅助函数 ─────────────────────────────────────────────────────────────────
+
+
+async def _get_project_git_config(project_id: str) -> dict:
+    """获取项目的 Git 仓库配置。"""
+    async with async_session_factory() as session:
+        row = await session.execute(
+            sa_text("SELECT metadata FROM project_settings WHERE project_id = :pid"),
+            {"pid": project_id},
+        )
+        result = row.fetchone()
+        if not result or not result[0]:
+            return {}
+        import json
+        metadata = json.loads(result[0]) if isinstance(result[0], str) else result[0]
+        return metadata.get("git_config", {}) if isinstance(metadata, dict) else {}
+
+
+_BRANCH_NAME_RE = re.compile(r"^[a-zA-Z0-9._/\-]+$")
+
+
+# ── 分支管理 API ──────────────────────────────────────────────────────────────
+
+
+@router.post("/{project_id}/git/branches")
+async def create_branch(
+    project_id: str,
+    req: GitBranchCreateRequest,
+    current_user: Optional[dict] = Depends(get_optional_user),
+):
+    """创建本地分支。"""
+    cwd = _decode_project_path(project_id)
+    if not Path(cwd).is_dir():
+        raise HTTPException(status_code=404, detail=f"项目路径不存在: {cwd}")
+
+    if not _BRANCH_NAME_RE.match(req.branch_name):
+        raise HTTPException(status_code=400, detail="分支名不合法，只允许字母、数字、. _ / -")
+
+    code, output = await git_command(
+        Path(cwd), ["branch", req.branch_name, req.start_point], timeout=10
+    )
+    if code != 0:
+        raise HTTPException(status_code=500, detail=f"创建分支失败: {output[:300]}")
+
+    return {"ok": True, "branch": req.branch_name}
+
+
+@router.delete("/{project_id}/git/branches/{branch_name:path}")
+async def delete_branch(
+    project_id: str,
+    branch_name: str,
+    current_user: Optional[dict] = Depends(get_optional_user),
+):
+    """删除本地分支（不允许删除当前分支）。"""
+    cwd = _decode_project_path(project_id)
+    if not Path(cwd).is_dir():
+        raise HTTPException(status_code=404, detail=f"项目路径不存在: {cwd}")
+
+    # 检查是否为当前分支
+    code, current_output = await git_command(
+        Path(cwd), ["rev-parse", "--abbrev-ref", "HEAD"], timeout=5
+    )
+    if code == 0 and current_output.strip() == branch_name:
+        raise HTTPException(status_code=400, detail="不能删除当前所在分支")
+
+    # 先尝试安全删除
+    code, output = await git_command(Path(cwd), ["branch", "-d", branch_name], timeout=10)
+    if code != 0:
+        # 强制删除
+        code, output = await git_command(Path(cwd), ["branch", "-D", branch_name], timeout=10)
+        if code != 0:
+            raise HTTPException(status_code=500, detail=f"删除分支失败: {output[:300]}")
+
+    return {"ok": True}
+
+
+# ── Push / Pull / MR API ───────────────────────────────────────────────────────
+
+
+@router.post("/{project_id}/git/push")
+async def git_push_branch(
+    project_id: str,
+    req: GitPushRequest,
+    current_user: Optional[dict] = Depends(get_optional_user),
+):
+    """推送分支到远程仓库。"""
+    cwd = _decode_project_path(project_id)
+    if not Path(cwd).is_dir():
+        raise HTTPException(status_code=404, detail=f"项目路径不存在: {cwd}")
+
+    git_config = await _get_project_git_config(project_id)
+    repo_url = git_config.get("repo_url", "")
+    if not repo_url:
+        raise HTTPException(status_code=400, detail="项目未配置 Git 仓库 URL")
+
+    repo_root = Path(cwd)
+    # 确保 remote 存在且 URL 正确
+    await git_ensure_remote(repo_root, repo_url, req.remote)
+
+    success, output = await git_push(repo_root, req.branch_name, req.remote, git_config=git_config)
+    if not success:
+        raise HTTPException(status_code=500, detail=f"push 失败: {output[:500]}")
+
+    return {"ok": True, "output": output[:500]}
+
+
+@router.post("/{project_id}/git/pull")
+async def git_pull_branch(
+    project_id: str,
+    req: GitPullRequest,
+    current_user: Optional[dict] = Depends(get_optional_user),
+):
+    """从远程拉取并合并。"""
+    cwd = _decode_project_path(project_id)
+    if not Path(cwd).is_dir():
+        raise HTTPException(status_code=404, detail=f"项目路径不存在: {cwd}")
+
+    git_config = await _get_project_git_config(project_id)
+    repo_url = git_config.get("repo_url", "")
+    repo_root = Path(cwd)
+
+    if repo_url:
+        await git_ensure_remote(repo_root, repo_url, req.remote)
+
+    # 确定分支名
+    branch_name = req.branch_name
+    if not branch_name:
+        code, head_out = await git_command(repo_root, ["rev-parse", "--abbrev-ref", "HEAD"], timeout=5)
+        if code != 0:
+            raise HTTPException(status_code=500, detail="无法获取当前分支")
+        branch_name = head_out.strip()
+
+    # fetch
+    success, fetch_output = await git_fetch(repo_root, req.remote, git_config=git_config)
+    if not success:
+        raise HTTPException(status_code=500, detail=f"fetch 失败: {fetch_output[:500]}")
+
+    # merge
+    code, merge_output = await git_command(
+        repo_root, ["merge", f"{req.remote}/{branch_name}"], timeout=60
+    )
+    if code != 0:
+        # 检测是否是合并冲突
+        if "CONFLICT" in merge_output or "conflict" in merge_output.lower():
+            raise HTTPException(status_code=409, detail=f"合并冲突: {merge_output[:500]}")
+        raise HTTPException(status_code=500, detail=f"合并失败: {merge_output[:500]}")
+
+    return {"ok": True, "output": merge_output[:500]}
+
+
+@router.post("/{project_id}/git/merge-request")
+async def create_merge_request(
+    project_id: str,
+    req: GitMergeRequestCreate,
+    current_user: Optional[dict] = Depends(get_optional_user),
+):
+    """创建 MR/PR（支持 GitLab 和 GitHub）。"""
+    import httpx
+    from urllib.parse import quote as url_quote
+
+    git_config = await _get_project_git_config(project_id)
+    repo_url = git_config.get("repo_url", "")
+    access_token = git_config.get("access_token", "")
+
+    if not repo_url:
+        raise HTTPException(status_code=400, detail="项目未配置 Git 仓库 URL")
+    if not access_token:
+        raise HTTPException(status_code=400, detail="项目未配置 Git access_token")
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        if "gitlab" in repo_url.lower():
+            # GitLab MR
+            # 解析 project path: 从 URL 中提取 owner/repo
+            # 支持 https://gitlab.com/owner/repo.git 和 git@gitlab.com:owner/repo.git
+            project_path = _parse_gitlab_project_path(repo_url)
+            if not project_path:
+                raise HTTPException(status_code=400, detail=f"无法从 URL 解析 GitLab 项目路径: {repo_url}")
+
+            encoded_path = url_quote(project_path, safe="")
+            # 提取 GitLab host
+            gitlab_host = _parse_git_host(repo_url)
+            api_url = f"https://{gitlab_host}/api/v4/projects/{encoded_path}/merge_requests"
+
+            resp = await client.post(
+                api_url,
+                headers={"PRIVATE-TOKEN": access_token},
+                json={
+                    "source_branch": req.source_branch,
+                    "target_branch": req.target_branch,
+                    "title": req.title,
+                    "description": req.description or "",
+                },
+            )
+            if resp.status_code >= 400:
+                raise HTTPException(
+                    status_code=resp.status_code,
+                    detail=f"GitLab API 错误: {resp.text[:500]}",
+                )
+            data = resp.json()
+            return {"ok": True, "url": data.get("web_url", "")}
+
+        elif "github" in repo_url.lower():
+            # GitHub PR
+            owner, repo = _parse_github_owner_repo(repo_url)
+            if not owner or not repo:
+                raise HTTPException(status_code=400, detail=f"无法从 URL 解析 GitHub owner/repo: {repo_url}")
+
+            api_url = f"https://api.github.com/repos/{owner}/{repo}/pulls"
+            resp = await client.post(
+                api_url,
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Accept": "application/vnd.github+json",
+                },
+                json={
+                    "head": req.source_branch,
+                    "base": req.target_branch,
+                    "title": req.title,
+                    "body": req.description or "",
+                },
+            )
+            if resp.status_code >= 400:
+                raise HTTPException(
+                    status_code=resp.status_code,
+                    detail=f"GitHub API 错误: {resp.text[:500]}",
+                )
+            data = resp.json()
+            return {"ok": True, "url": data.get("html_url", "")}
+
+        else:
+            raise HTTPException(status_code=400, detail="不支持的 Git 平台，仅支持 GitLab 和 GitHub")
+
+
+def _parse_gitlab_project_path(repo_url: str) -> str:
+    """从 GitLab 仓库 URL 解析 project path（owner/repo）。"""
+    # https://gitlab.com/owner/group/repo.git
+    m = re.match(r"https?://[^/]+/(.+?)(\.git)?/?$", repo_url)
+    if m:
+        return m.group(1)
+    # git@gitlab.com:owner/repo.git
+    m = re.match(r"git@[^:]+:(.+?)(\.git)?$", repo_url)
+    if m:
+        return m.group(1)
+    return ""
+
+
+def _parse_github_owner_repo(repo_url: str) -> tuple[str, str]:
+    """从 GitHub 仓库 URL 解析 (owner, repo)。"""
+    # https://github.com/owner/repo.git
+    m = re.match(r"https?://[^/]+/([^/]+)/([^/]+?)(\.git)?/?$", repo_url)
+    if m:
+        return m.group(1), m.group(2)
+    # git@github.com:owner/repo.git
+    m = re.match(r"git@[^:]+:([^/]+)/([^/]+?)(\.git)?$", repo_url)
+    if m:
+        return m.group(1), m.group(2)
+    return "", ""
+
+
+def _parse_git_host(repo_url: str) -> str:
+    """从 Git URL 解析主机名。"""
+    m = re.match(r"https?://([^/]+)", repo_url)
+    if m:
+        return m.group(1)
+    m = re.match(r"git@([^:]+):", repo_url)
+    if m:
+        return m.group(1)
+    return "gitlab.com"

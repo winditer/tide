@@ -19,6 +19,7 @@ import {
   Upload,
   CheckCircle2,
   ArrowLeft,
+  Tag,
 } from "lucide-react";
 import {
   useGitCommits,
@@ -37,7 +38,7 @@ import { DiffPanel } from "./DiffPanel";
 import { DiffFileList } from "./DiffFileList";
 import type { DiffFileItem } from "./DiffFileList";
 
-type TabType = "commits" | "files" | "work_item" | "session";
+type TabType = "commits" | "files" | "work_item" | "session" | "version";
 type TimeRange = "today" | "3d" | "7d" | "30d" | "all";
 
 interface GitAuditPageProps {
@@ -135,6 +136,11 @@ export function GitAuditPage({ projectId }: GitAuditPageProps) {
 
   const { data: changesBySession = [], isLoading: sessionLoading } = useGitChanges(projectId, {
     group_by: "session",
+    since,
+  });
+
+  const { data: changesByVersion = [], isLoading: versionLoading } = useGitChanges(projectId, {
+    group_by: "version",
     since,
   });
 
@@ -279,6 +285,7 @@ export function GitAuditPage({ projectId }: GitAuditPageProps) {
     { key: "files", label: "按文件", icon: <FileText className="h-3.5 w-3.5" /> },
     { key: "work_item", label: "按工作项", icon: <Users className="h-3.5 w-3.5" /> },
     { key: "session", label: "按会话", icon: <GitBranch className="h-3.5 w-3.5" /> },
+    { key: "version", label: "按版本", icon: <Tag className="h-3.5 w-3.5" /> },
   ];
 
   return (
@@ -420,7 +427,13 @@ export function GitAuditPage({ projectId }: GitAuditPageProps) {
                   <span className="ml-2 text-sm text-zinc-500">加载中...</span>
                 </div>
               ) : (
-                <ChangeGroupList groups={changesByWorkItem} label="工作项" emptyHint="当前项目没有以 tide/wi-* 开头的工作项分支，请先通过工作项创建分支后再查看" />
+                <ChangeGroupList
+                  groups={changesByWorkItem}
+                  label="工作项"
+                  emptyHint="当前项目没有以 tide/wi-* 开头的工作项分支，请先通过工作项创建分支后再查看"
+                  projectId={projectId}
+                  onEnterDiffView={handleEnterCommitDiffView}
+                />
               )
             )}
             {activeTab === "session" && (
@@ -432,6 +445,22 @@ export function GitAuditPage({ projectId }: GitAuditPageProps) {
               ) : (
                 <SessionGroupList
                   groups={changesBySession}
+                  projectId={projectId}
+                  onEnterDiffView={handleEnterCommitDiffView}
+                />
+              )
+            )}
+            {activeTab === "version" && (
+              versionLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <div className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-300 border-t-blue-500" />
+                  <span className="ml-2 text-sm text-zinc-500">加载中...</span>
+                </div>
+              ) : (
+                <ChangeGroupList
+                  groups={changesByVersion}
+                  label="版本"
+                  emptyHint="当前项目未设置版本或版本下无关联工作项"
                   projectId={projectId}
                   onEnterDiffView={handleEnterCommitDiffView}
                 />
@@ -742,11 +771,29 @@ function ChangeGroupList({
   groups,
   label,
   emptyHint,
+  projectId,
+  onEnterDiffView,
 }: {
   groups: GitChangeGroup[];
   label: string;
   emptyHint?: string;
+  projectId: string;
+  onEnterDiffView: (commit: GitCommit, filePath?: string) => void;
 }) {
+  const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
+
+  const toggleItem = useCallback((id: string) => {
+    setExpandedItems((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
+
   if (groups.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-zinc-500">
@@ -763,39 +810,318 @@ function ChangeGroupList({
 
   return (
     <div className="divide-y divide-zinc-200">
-      {groups.map((group, idx) => (
-        <div
-          key={group.id || group.branch || `group-${idx}`}
-          className="flex items-center gap-4 px-4 py-3 hover:bg-zinc-50 transition-colors"
-        >
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-zinc-800 truncate">
-              {group.name || "(未关联)"}
-            </p>
-            <p className="text-xs text-zinc-500">
-              {group.branch && `分支: ${group.branch}`}
-            </p>
+      {groups.map((group, idx) => {
+        const itemId = group.id || group.branch || `group-${idx}`;
+        const isExpanded = expandedItems.has(itemId);
+        return (
+          <div key={itemId}>
+            {/* Work item header row */}
+            <button
+              onClick={() => toggleItem(itemId)}
+              className="flex items-center gap-3 px-4 py-3 w-full text-left hover:bg-zinc-50 transition-colors"
+            >
+              <div className="flex-shrink-0 text-zinc-400">
+                {isExpanded ? (
+                  <ChevronDown className="h-4 w-4" />
+                ) : (
+                  <ChevronRight className="h-4 w-4" />
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-zinc-800 truncate">
+                  {group.name || "(未关联)"}
+                </p>
+                <p className="text-xs text-zinc-500">
+                  {group.branch && `分支: ${group.branch}`}
+                </p>
+              </div>
+              <div className="flex items-center gap-4 text-xs text-zinc-500 flex-shrink-0">
+                <span className="flex items-center gap-1">
+                  <GitCommitIcon className="h-3.5 w-3.5" />
+                  {group.commit_count}
+                </span>
+                <span className="flex items-center gap-1">
+                  <FileText className="h-3.5 w-3.5" />
+                  {group.files_changed}
+                </span>
+                <span className="flex items-center gap-1 text-green-600">
+                  <Plus className="h-3 w-3" />
+                  {group.additions}
+                </span>
+                <span className="flex items-center gap-1 text-red-600">
+                  <Minus className="h-3 w-3" />
+                  {group.deletions}
+                </span>
+              </div>
+            </button>
+
+            {/* Expanded: commit list for this work item or version */}
+            {isExpanded && (
+              label === "版本" ? (
+                <VersionCommitList
+                  projectId={projectId}
+                  versionId={group.id}
+                  onViewDiff={onEnterDiffView}
+                />
+              ) : (
+                <WorkItemCommitList
+                  projectId={projectId}
+                  workItemId={group.id}
+                  branch={group.branch}
+                  onViewDiff={onEnterDiffView}
+                />
+              )
+            )}
           </div>
-          <div className="flex items-center gap-4 text-xs text-zinc-500 flex-shrink-0">
-            <span className="flex items-center gap-1">
-              <GitCommitIcon className="h-3.5 w-3.5" />
-              {group.commit_count}
-            </span>
-            <span className="flex items-center gap-1">
-              <FileText className="h-3.5 w-3.5" />
-              {group.files_changed}
-            </span>
-            <span className="flex items-center gap-1 text-green-600">
-              <Plus className="h-3 w-3" />
-              {group.additions}
-            </span>
-            <span className="flex items-center gap-1 text-red-600">
-              <Minus className="h-3 w-3" />
-              {group.deletions}
-            </span>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Work Item Commit List (fetches commits for a work item) ─────────────────
+
+function WorkItemCommitList({
+  projectId,
+  workItemId,
+  branch,
+  onViewDiff,
+}: {
+  projectId: string;
+  workItemId?: string;
+  branch?: string;
+  onViewDiff: (commit: GitCommit, filePath?: string) => void;
+}) {
+  const { data: workItemCommits = [], isLoading } = useGitCommits(projectId, {
+    work_item_id: workItemId || undefined,
+    branch: !workItemId ? (branch || undefined) : undefined,
+    limit: 100,
+  });
+  const [expandedCommits, setExpandedCommits] = useState<Set<string>>(new Set());
+
+  const toggleCommit = useCallback((hash: string) => {
+    setExpandedCommits((prev) => {
+      const next = new Set(prev);
+      if (next.has(hash)) {
+        next.delete(hash);
+      } else {
+        next.add(hash);
+      }
+      return next;
+    });
+  }, []);
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-6 bg-zinc-50/50">
+        <div className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-300 border-t-blue-500" />
+        <span className="ml-2 text-xs text-zinc-500">加载提交记录...</span>
+      </div>
+    );
+  }
+
+  if (workItemCommits.length === 0) {
+    return (
+      <div className="py-4 text-center text-xs text-zinc-400 bg-zinc-50/50">
+        该工作项暂无提交记录
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-zinc-50/50 border-t border-zinc-100">
+      {workItemCommits.map((commit) => {
+        const isExpanded = expandedCommits.has(commit.hash);
+        const fileCount = commit.files?.length ?? 0;
+
+        return (
+          <div key={commit.hash} className="border-b border-zinc-100 last:border-b-0">
+            {/* Commit row */}
+            <button
+              onClick={() => toggleCommit(commit.hash)}
+              className="flex items-center gap-3 w-full px-6 py-2.5 text-left hover:bg-zinc-100/50 transition-colors"
+            >
+              <div className="flex-shrink-0 text-zinc-400">
+                {isExpanded ? (
+                  <ChevronDown className="h-3.5 w-3.5" />
+                ) : (
+                  <ChevronRight className="h-3.5 w-3.5" />
+                )}
+              </div>
+              <GitCommitIcon className="h-3.5 w-3.5 flex-shrink-0 text-blue-500" />
+              <code className="text-xs text-blue-600 font-mono flex-shrink-0">
+                {commit.hash.slice(0, 7)}
+              </code>
+              <span className="text-xs text-zinc-700 truncate flex-1 min-w-0">
+                {commit.message}
+              </span>
+              <span className="text-[11px] text-zinc-400 flex-shrink-0">
+                {formatRelativeTime(commit.date)}
+              </span>
+              {fileCount > 0 && (
+                <span className="text-[11px] text-zinc-400 flex-shrink-0 flex items-center gap-0.5">
+                  <FileText className="h-3 w-3" />
+                  {fileCount}
+                </span>
+              )}
+            </button>
+
+            {/* Expanded file list for this commit */}
+            {isExpanded && commit.files && commit.files.length > 0 && (
+              <div className="pl-14 pr-4 pb-2 space-y-0.5">
+                {commit.files.map((file) => (
+                  <button
+                    key={file.path}
+                    onClick={() => onViewDiff(commit, file.path)}
+                    className="flex items-center gap-2 w-full px-3 py-1.5 text-left rounded hover:bg-zinc-200/50 transition-colors group"
+                  >
+                    <FileText className="h-3 w-3 text-zinc-400 flex-shrink-0" />
+                    <span className="text-xs font-mono text-zinc-600 truncate flex-1 min-w-0 group-hover:text-blue-600">
+                      {file.path}
+                    </span>
+                    <span className="flex items-center gap-1.5 text-[10px] flex-shrink-0">
+                      {file.additions > 0 && (
+                        <span className="text-green-600 flex items-center gap-0.5">
+                          <Plus className="h-2.5 w-2.5" />
+                          {file.additions}
+                        </span>
+                      )}
+                      {file.deletions > 0 && (
+                        <span className="text-red-600 flex items-center gap-0.5">
+                          <Minus className="h-2.5 w-2.5" />
+                          {file.deletions}
+                        </span>
+                      )}
+                    </span>
+                    <Eye className="h-3 w-3 text-zinc-300 group-hover:text-blue-500 flex-shrink-0" />
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
-        </div>
-      ))}
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Version Commit List (fetches commits for a version) ────────────────────
+
+function VersionCommitList({
+  projectId,
+  versionId,
+  onViewDiff,
+}: {
+  projectId: string;
+  versionId?: string;
+  onViewDiff: (commit: GitCommit, filePath?: string) => void;
+}) {
+  const { data: versionCommits = [], isLoading } = useGitCommits(projectId, {
+    version_id: versionId || undefined,
+    limit: 100,
+  });
+  const [expandedCommits, setExpandedCommits] = useState<Set<string>>(new Set());
+
+  const toggleCommit = useCallback((hash: string) => {
+    setExpandedCommits((prev) => {
+      const next = new Set(prev);
+      if (next.has(hash)) {
+        next.delete(hash);
+      } else {
+        next.add(hash);
+      }
+      return next;
+    });
+  }, []);
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-6 bg-zinc-50/50">
+        <div className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-300 border-t-blue-500" />
+        <span className="ml-2 text-xs text-zinc-500">加载提交记录...</span>
+      </div>
+    );
+  }
+
+  if (versionCommits.length === 0) {
+    return (
+      <div className="py-4 text-center text-xs text-zinc-400 bg-zinc-50/50">
+        该版本暂无提交记录
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-zinc-50/50 border-t border-zinc-100">
+      {versionCommits.map((commit) => {
+        const isExpanded = expandedCommits.has(commit.hash);
+        const fileCount = commit.files?.length ?? 0;
+
+        return (
+          <div key={commit.hash} className="border-b border-zinc-100 last:border-b-0">
+            <button
+              onClick={() => toggleCommit(commit.hash)}
+              className="flex items-center gap-3 w-full px-6 py-2.5 text-left hover:bg-zinc-100/50 transition-colors"
+            >
+              <div className="flex-shrink-0 text-zinc-400">
+                {isExpanded ? (
+                  <ChevronDown className="h-3.5 w-3.5" />
+                ) : (
+                  <ChevronRight className="h-3.5 w-3.5" />
+                )}
+              </div>
+              <GitCommitIcon className="h-3.5 w-3.5 flex-shrink-0 text-blue-500" />
+              <code className="text-xs text-blue-600 font-mono flex-shrink-0">
+                {commit.hash.slice(0, 7)}
+              </code>
+              <span className="text-xs text-zinc-700 truncate flex-1 min-w-0">
+                {commit.message}
+              </span>
+              <span className="text-[11px] text-zinc-400 flex-shrink-0">
+                {formatRelativeTime(commit.date)}
+              </span>
+              {fileCount > 0 && (
+                <span className="text-[11px] text-zinc-400 flex-shrink-0 flex items-center gap-0.5">
+                  <FileText className="h-3 w-3" />
+                  {fileCount}
+                </span>
+              )}
+            </button>
+
+            {isExpanded && commit.files && commit.files.length > 0 && (
+              <div className="pl-14 pr-4 pb-2 space-y-0.5">
+                {commit.files.map((file) => (
+                  <button
+                    key={file.path}
+                    onClick={() => onViewDiff(commit, file.path)}
+                    className="flex items-center gap-2 w-full px-3 py-1.5 text-left rounded hover:bg-zinc-200/50 transition-colors group"
+                  >
+                    <FileText className="h-3 w-3 text-zinc-400 flex-shrink-0" />
+                    <span className="text-xs font-mono text-zinc-600 truncate flex-1 min-w-0 group-hover:text-blue-600">
+                      {file.path}
+                    </span>
+                    <span className="flex items-center gap-1.5 text-[10px] flex-shrink-0">
+                      {file.additions > 0 && (
+                        <span className="text-green-600 flex items-center gap-0.5">
+                          <Plus className="h-2.5 w-2.5" />
+                          {file.additions}
+                        </span>
+                      )}
+                      {file.deletions > 0 && (
+                        <span className="text-red-600 flex items-center gap-0.5">
+                          <Minus className="h-2.5 w-2.5" />
+                          {file.deletions}
+                        </span>
+                      )}
+                    </span>
+                    <Eye className="h-3 w-3 text-zinc-300 group-hover:text-blue-500 flex-shrink-0" />
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -890,6 +1216,7 @@ function SessionGroupList({
             {isExpanded && (
               <SessionCommitList
                 projectId={projectId}
+                branch={group.branch || undefined}
                 since={group.created_at}
                 until={group.last_active}
                 onViewDiff={onEnterDiffView}
@@ -906,20 +1233,23 @@ function SessionGroupList({
 
 function SessionCommitList({
   projectId,
+  branch,
   since,
   until,
   onViewDiff,
 }: {
   projectId: string;
+  branch?: string;
   since?: string;
   until?: string;
   onViewDiff: (commit: GitCommit, filePath?: string) => void;
 }) {
   const { data: sessionCommits = [], isLoading } = useGitCommits(projectId, {
-    since,
-    until,
+    branch: branch || undefined,
+    since: since || undefined,
+    until: until || undefined,
     limit: 100,
-    all_branches: true,
+    all_branches: !branch,
   });
   const [expandedCommits, setExpandedCommits] = useState<Set<string>>(new Set());
 
@@ -1044,7 +1374,7 @@ function UncommittedSection({
   const [commitMsg, setCommitMsg] = useState("");
   const [showCommitInput, setShowCommitInput] = useState(false);
   const [commitFiles, setCommitFiles] = useState<string[] | null>(null);
-  const [confirmDiscard, setConfirmDiscard] = useState<string[] | null>(null);
+  const [confirmDiscard, setConfirmDiscard] = useState<string[] | null | undefined>(undefined);
 
   const commitMutation = useGitCommitMutation(projectId);
   const discardMutation = useGitDiscardMutation(projectId);
@@ -1081,7 +1411,7 @@ function UncommittedSection({
     if (confirmDiscard === undefined) return;
     discardMutation.mutate(
       { files: confirmDiscard },
-      { onSuccess: () => setConfirmDiscard(null) },
+      { onSuccess: () => setConfirmDiscard(undefined) },
     );
   };
 
@@ -1115,8 +1445,8 @@ function UncommittedSection({
 
       {expanded && (
         <div className="border-t border-amber-200">
-          {/* File list */}
-          <div className="px-4 py-2 space-y-1">
+          {/* File list (flat) */}
+          <div className="px-4 py-2 space-y-0">
             {files.map((file) => (
               <div
                 key={file.path}
@@ -1127,6 +1457,7 @@ function UncommittedSection({
                 <span
                   onClick={() => onViewDiff(file.path)}
                   className="font-mono text-xs text-zinc-700 truncate flex-1 min-w-0 cursor-pointer hover:text-blue-600 hover:underline transition-colors"
+                  title={file.path}
                 >
                   {file.path}
                 </span>
@@ -1227,14 +1558,14 @@ function UncommittedSection({
       )}
 
       {/* Discard confirm dialog */}
-      {confirmDiscard !== null && (
+      {confirmDiscard !== undefined && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="w-full max-w-sm rounded-lg border border-zinc-200 bg-white p-5 shadow-xl">
             <h3 className="text-sm font-medium text-red-600 mb-2">
               ⚠️ 确认撤销
             </h3>
             <p className="text-xs text-zinc-600 mb-4">
-              {confirmDiscard
+              {Array.isArray(confirmDiscard)
                 ? `确定撤销 ${confirmDiscard.length} 个文件的修改？`
                 : "确定撤销所有未提交的修改？"}
               <br />
@@ -1242,7 +1573,7 @@ function UncommittedSection({
             </p>
             <div className="flex items-center justify-end gap-2">
               <button
-                onClick={() => setConfirmDiscard(null)}
+                onClick={() => setConfirmDiscard(undefined)}
                 className="rounded-md px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-100 transition-colors"
               >
                 取消

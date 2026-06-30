@@ -67,12 +67,6 @@ function WorkflowEditorPageInner() {
           if (data?.definition) {
             setDraft(data.definition);
           }
-          toast({
-            title: "✓ 已保存",
-            description: data?.version
-              ? `工作流已保存 · v${data.version}`
-              : "工作流已保存",
-          });
         },
         onError: (err) => {
           toast({

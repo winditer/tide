@@ -41,20 +41,44 @@ class ApprovalService:
         plan_id: Optional[str] = None,
     ) -> str:
         """
-        创建审批记录：
-        1. 写入 approvals 表
-        2. 更新 task 状态为 'review'
-        3. emit WebSocket 事件通知前端
-        4. 如果有 chat_id → lark_bridge 发送审批卡片
+        创建审批记录（幂等）：
+        1. 检查是否已存在相同条件的 pending 审批，如有则直接返回已有记录 ID
+        2. 写入 approvals 表
+        3. 更新 task 状态为 'review'
+        4. emit WebSocket 事件通知前端
+        5. 如果有 chat_id → lark_bridge 发送审批卡片
         返回 approval_id
         """
+        # ── 幂等性检查：防止重复创建 ──
+        async with async_session_factory() as session:
+            existing = await session.execute(
+                text("""
+                SELECT id FROM approvals
+                WHERE task_id = :task_id
+                  AND COALESCE(plan_id, '') = COALESCE(:plan_id, '')
+                  AND type = :type
+                  AND status = 'pending'
+                LIMIT 1
+                """),
+                {"task_id": task_id, "plan_id": plan_id, "type": approval_type},
+            )
+            row = existing.fetchone()
+            if row:
+                existing_id = row[0]
+                logger.info(
+                    "[approval_service] duplicate approval skipped: existing=%s task=%s type=%s",
+                    existing_id[:8], task_id[:8], approval_type,
+                )
+                return existing_id
+
         approval_id = str(uuid.uuid4())
         detail_json = json.dumps(detail or {}, ensure_ascii=False)
 
         async with async_session_factory() as session:
-            await session.execute(
+            # 使用 INSERT OR IGNORE 配合唯一索引，防止并发场景下的竞态条件
+            result = await session.execute(
                 text("""
-                INSERT INTO approvals
+                INSERT OR IGNORE INTO approvals
                     (id, task_id, plan_id, workspace_id, chat_id, type, detail, status, created_at)
                 VALUES
                     (:id, :task_id, :plan_id, :workspace_id, :chat_id, :type, :detail, 'pending', :created_at)
@@ -70,6 +94,29 @@ class ApprovalService:
                     "created_at": _now_iso(),
                 },
             )
+            # 如果 INSERT 被 IGNORE（唯一约束冲突），查询已有记录返回
+            if result.rowcount == 0:
+                dup = await session.execute(
+                    text("""
+                    SELECT id FROM approvals
+                    WHERE task_id = :task_id
+                      AND COALESCE(plan_id, '') = COALESCE(:plan_id, '')
+                      AND type = :type
+                      AND status = 'pending'
+                    LIMIT 1
+                    """),
+                    {"task_id": task_id, "plan_id": plan_id, "type": approval_type},
+                )
+                dup_row = dup.fetchone()
+                if dup_row:
+                    existing_id = dup_row[0]
+                    logger.info(
+                        "[approval_service] concurrent duplicate approval caught by unique index: "
+                        "existing=%s task=%s type=%s",
+                        existing_id[:8], task_id[:8], approval_type,
+                    )
+                    return existing_id
+
             # 同步 tasks.status='review' 以保证 dashboard / 任务列表筛选一致
             # 注意：work_item 审批复用 task_id 字段存 work_item_id，此 UPDATE 不会命中
             # tasks 表中的真实 task，故无副作用。

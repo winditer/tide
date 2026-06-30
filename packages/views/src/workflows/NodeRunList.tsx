@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { AlertTriangle, GitMerge, ArrowRight } from "lucide-react";
+import { AlertTriangle, GitMerge, ArrowRight, CheckCircle2, Clock } from "lucide-react";
 import { Badge, Button } from "@tide/ui";
 import type { WorkflowNodeRun, WorkflowRun } from "@tide/core";
 import { MergeConflictPanel } from "../code-editor/MergeConflictPanel";
@@ -63,6 +63,8 @@ export function NodeRunList({
                 nr.node_type === "approval" && nr.status === "running";
               const isMergeConflict =
                 nr.node_type === "git_merge" && nr.status === "waiting_approval";
+              const isMergeSuccess =
+                nr.node_type === "git_merge" && nr.status === "completed";
               const mergeOutput =
                 isMergeConflict && nr.output && typeof nr.output === "object"
                   ? (nr.output as {
@@ -70,6 +72,17 @@ export function NodeRunList({
                       source_branch?: string;
                       target_branch?: string;
                       cwd?: string;
+                    })
+                  : null;
+              const mergeSuccessOutput =
+                isMergeSuccess && nr.output && typeof nr.output === "object"
+                  ? (nr.output as {
+                      source_branch?: string;
+                      target_branch?: string;
+                      strategy?: string;
+                      auto_push?: boolean;
+                      delete_source?: boolean;
+                      timestamp?: string;
                     })
                   : null;
               return (
@@ -102,6 +115,36 @@ export function NodeRunList({
                         <span>开始 {formatTime(nr.started_at)}</span>
                         <span>结束 {formatTime(nr.finished_at)}</span>
                       </div>
+
+                      {/* Merge success card */}
+                      {isMergeSuccess && mergeSuccessOutput && (
+                        <div className="mt-2 rounded-lg border border-emerald-200/70 bg-emerald-50/60 p-3">
+                          <div className="flex items-center gap-2">
+                            <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                            <span className="text-xs font-semibold text-emerald-800">合并成功</span>
+                          </div>
+                          <div className="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+                            <Badge variant="outline" className="text-[10px] font-mono">
+                              {mergeSuccessOutput.source_branch || "source"}
+                            </Badge>
+                            <ArrowRight className="h-3 w-3" />
+                            <Badge variant="outline" className="text-[10px] font-mono">
+                              {mergeSuccessOutput.target_branch || "target"}
+                            </Badge>
+                          </div>
+                          <div className="mt-1.5 flex flex-wrap items-center gap-3 text-[10px] text-muted-foreground">
+                            <span>策略: {mergeSuccessOutput.strategy || "merge"}</span>
+                            {mergeSuccessOutput.auto_push && <span>• 已推送</span>}
+                            {mergeSuccessOutput.delete_source && <span>• 已删除源分支</span>}
+                          </div>
+                          {mergeSuccessOutput.timestamp && (
+                            <div className="mt-1 flex items-center gap-1 text-[10px] text-muted-foreground">
+                              <Clock className="h-3 w-3" />
+                              <span>{new Date(mergeSuccessOutput.timestamp).toLocaleString("zh-CN")}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
 
                       {/* Merge conflict card */}
                       {isMergeConflict && mergeOutput && (
@@ -156,7 +199,7 @@ export function NodeRunList({
                           {String(nr.error)}
                         </div>
                       )}
-                      {nr.output != null && !isMergeConflict && (
+                      {nr.output != null && !isMergeConflict && !isMergeSuccess && (
                         <pre className="mt-1.5 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/50 bg-muted/30 px-2 py-1 font-mono text-[10px] leading-relaxed text-foreground">
                           {typeof nr.output === "string"
                             ? nr.output

@@ -27,12 +27,8 @@ logger = logging.getLogger("tide.api.files")
 # 最大允许读取的文件大小：2 MB
 MAX_FILE_SIZE = 2 * 1024 * 1024
 
-# 目录树过滤名单
-IGNORED_DIRS = {
-    ".git", "node_modules", "__pycache__", ".next", ".nuxt",
-    ".venv", "venv", ".tox", "dist", "build", ".cache",
-    ".pytest_cache", ".mypy_cache", "coverage", ".DS_Store",
-}
+# 目录树过滤名单（仅排除 .git）
+IGNORED_DIRS = {".git"}
 
 # 安全路径黑名单前缀
 BLOCKED_PREFIXES = ("/proc", "/sys", "/dev", "/etc/shadow", "/etc/passwd")
@@ -117,8 +113,6 @@ async def list_directory_tree(
         for entry in entries:
             if entry.name in IGNORED_DIRS:
                 continue
-            if entry.name.startswith(".") and entry.name != ".env":
-                continue
 
             item: dict = {
                 "name": entry.name,
@@ -181,6 +175,19 @@ async def get_diff(
     code, output = await git_diff_full(cwd, ref1=ref1, ref2=ref2, path=path)
     if code != 0:
         raise HTTPException(status_code=500, detail=f"git diff 失败: {output}")
+
+    # 如果 diff 为空但文件确实有变更，检查是否为权限/元数据变化
+    if code == 0 and not output.strip() and path:
+        raw_args = ["diff", "--raw"]
+        if ref1:
+            raw_args.append(ref1)
+        if ref2:
+            raw_args.append(ref2)
+        raw_args.extend(["--", path])
+        raw_code, raw_output = await git_command(Path(cwd), raw_args, timeout=10)
+        if raw_code == 0 and raw_output.strip():
+            output = f"# 文件元数据变更（无内容差异）\n{raw_output.strip()}"
+
     return PlainTextResponse(output)
 
 

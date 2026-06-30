@@ -15,12 +15,17 @@
  */
 
 import { use, useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
+  ChevronDown,
+  ChevronRight,
+  Download,
   FolderGit2,
   GitBranch,
+  GitPullRequest,
   Hash,
   Pencil,
   Plus,
@@ -30,6 +35,7 @@ import {
   Tag,
   Trash2,
   Unlink,
+  Upload,
   UserMinus,
   UserPlus,
   Users,
@@ -55,8 +61,14 @@ import {
   useAddGroupUserMember,
   useAdminUsers,
   useAuth,
+  useCreateBranch,
+  useCreateMergeRequest,
+  useDeleteBranch,
   useDeleteGroupWorkflow,
   useDeleteProjectGroup,
+  useGroupBranches,
+  useGroupChanges,
+  useGroupCommits,
   useGroupConversations,
   useGroupTasks,
   useGroupUserMembers,
@@ -64,29 +76,38 @@ import {
   useGroupWorkflow,
   useProjectGroup,
   useProjects,
+  usePullBranch,
+  usePushBranch,
   useRemoveGroupMember,
   useRemoveGroupUserMember,
   useSetGroupWorkflow,
   useUpdateGroupUserMember,
   useUpdateProjectGroup,
   useWorkflows,
+  type GroupBranchProject,
+  type GroupChangeProject,
   type GroupConversationItem,
   type GroupTaskItem,
   type GroupUserMember,
   type GroupVersionItem,
   type ProjectGroupMember,
   type ProjectInfo,
+  getGroupCommitDiff,
 } from "@tide/core";
 import { KnowledgeGraphCard } from "@tide/views";
+import { FileTree } from "@tide/views/code-editor";
 
 // ── Types & helpers ────────────────────────────────────────────────────────
 
-type TabKey = "conversations" | "tasks" | "versions" | "members" | "knowledge" | "settings";
+type TabKey = "conversations" | "tasks" | "versions" | "files" | "branches" | "audit" | "members" | "knowledge" | "settings";
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "conversations", label: "对话" },
   { key: "tasks", label: "任务" },
   { key: "versions", label: "版本" },
+  { key: "files", label: "文件" },
+  { key: "audit", label: "审计" },
+  { key: "branches", label: "分支" },
   { key: "members", label: "成员" },
   { key: "knowledge", label: "知识图谱" },
   { key: "settings", label: "设置" },
@@ -405,6 +426,18 @@ function GroupDetailContent({ groupId }: { groupId: string }) {
 
       {tab === "versions" && (
         <VersionsPane groupId={groupId} projectIdToName={projectIdToName} />
+      )}
+
+      {tab === "files" && (
+        <FilesPane groupId={groupId} members={members} />
+      )}
+
+      {tab === "branches" && (
+        <BranchesPane groupId={groupId} members={members} projectIdToName={projectIdToName} />
+      )}
+
+      {tab === "audit" && (
+        <AuditPane groupId={groupId} projectIdToName={projectIdToName} />
       )}
 
       {tab === "members" && (
@@ -729,6 +762,589 @@ function TaskRow({
         {formatTimeShort(task.created_at)}
       </td>
     </tr>
+  );
+}
+
+// ── Files Tab ─────────────────────────────────────────────────────────────
+
+function FilesPane({
+  groupId,
+  members,
+}: {
+  groupId: string;
+  members: ProjectGroupMember[];
+}) {
+  const [selectedProjectId, setSelectedProjectId] = useState<string>(
+    members.find((m) => m.role === "primary")?.project_id ?? members[0]?.project_id ?? ""
+  );
+  const selectedMember = members.find((m) => m.project_id === selectedProjectId);
+  const router = useRouter();
+
+  if (members.length === 0) {
+    return (
+      <div className="bg-card rounded-xl shadow-card py-16 text-center text-sm text-muted-foreground">
+        暂无成员项目
+      </div>
+    );
+  }
+
+  return (
+    <section className="space-y-4">
+      <div className="flex items-end justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">项目文件</h2>
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            浏览组内成员项目的文件
+          </p>
+        </div>
+      </div>
+
+      <div className="flex gap-4" style={{ minHeight: 480 }}>
+        {/* 项目列表侧边栏 */}
+        <div className="w-48 shrink-0 space-y-1">
+          <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-2">
+            成员项目
+          </h3>
+          {members.map((m) => (
+            <button
+              key={m.project_id}
+              onClick={() => setSelectedProjectId(m.project_id)}
+              className={[
+                "w-full text-left px-3 py-2 rounded-lg text-sm transition-smooth",
+                selectedProjectId === m.project_id
+                  ? "bg-muted font-medium text-foreground"
+                  : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+              ].join(" ")}
+            >
+              <FolderGit2 className="h-3.5 w-3.5 inline-block mr-1.5 -mt-0.5" />
+              {m.name}
+              {m.role === "primary" && (
+                <Badge variant="outline" className="ml-1.5 text-[10px] px-1 py-0">
+                  Primary
+                </Badge>
+              )}
+            </button>
+          ))}
+        </div>
+
+        {/* 文件树 */}
+        <div className="flex-1 bg-card rounded-xl shadow-card overflow-hidden border border-border/50">
+          {selectedMember?.cwd ? (
+            <FileTree
+              projectId={selectedProjectId}
+              rootPath={selectedMember.cwd}
+              onFileSelect={() =>
+                router.push(
+                  `/projects/${encodeURIComponent(selectedProjectId)}/files`
+                )
+              }
+              theme="light"
+            />
+          ) : (
+            <div className="py-16 text-center text-sm text-muted-foreground">
+              项目路径不可用
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ── Branches Tab ──────────────────────────────────────────────────────────
+
+function ProjectBranchCard({
+  project,
+  groupId,
+  onMrRequest,
+}: {
+  project: GroupBranchProject;
+  groupId: string;
+  onMrRequest: (projectId: string, branch: string, branches: string[]) => void;
+}) {
+  const createBranch = useCreateBranch(project.project_id);
+  const deleteBranch = useDeleteBranch(project.project_id);
+  const pushBranch = usePushBranch(project.project_id);
+  const pullBranch = usePullBranch(project.project_id);
+  const qc = useQueryClient();
+
+  const [expanded, setExpanded] = useState(true);
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [newBranchName, setNewBranchName] = useState("");
+
+  const handleCreate = () => {
+    if (!newBranchName.trim()) return;
+    createBranch.mutateAsync({ branchName: newBranchName.trim() })
+      .then(() => {
+        qc.invalidateQueries({ queryKey: ["project-group", groupId, "branches"] });
+        setNewBranchName("");
+        setShowCreateForm(false);
+        toast({ title: "分支创建成功", description: newBranchName.trim() });
+      })
+      .catch((e) => toast({ title: "创建失败", description: getApiErrorMessage(e), variant: "destructive" }));
+  };
+
+  const handlePush = (branch: string) => {
+    pushBranch.mutateAsync({ branchName: branch })
+      .then(() => toast({ title: "Push 成功", description: branch }))
+      .catch((e) => toast({ title: "Push 失败", description: getApiErrorMessage(e), variant: "destructive" }));
+  };
+
+  const handlePull = (branch: string) => {
+    pullBranch.mutateAsync({ branchName: branch })
+      .then(() => {
+        qc.invalidateQueries({ queryKey: ["project-group", groupId, "branches"] });
+        toast({ title: "Pull 成功", description: branch });
+      })
+      .catch((e) => toast({ title: "Pull 失败", description: getApiErrorMessage(e), variant: "destructive" }));
+  };
+
+  const handleDelete = (branch: string) => {
+    if (!confirm(`确定删除分支 "${branch}" 吗？此操作不可恢复。`)) return;
+    deleteBranch.mutateAsync(branch)
+      .then(() => {
+        qc.invalidateQueries({ queryKey: ["project-group", groupId, "branches"] });
+        toast({ title: "分支已删除", description: branch });
+      })
+      .catch((e) => toast({ title: "删除失败", description: getApiErrorMessage(e), variant: "destructive" }));
+  };
+
+  return (
+    <div className="bg-card rounded-xl shadow-card p-5 space-y-3 border border-border/50">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          className="flex items-center gap-2 text-sm font-medium hover:text-foreground transition-colors"
+        >
+          {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+          <FolderGit2 className="h-3.5 w-3.5 text-muted-foreground" />
+          {project.name}
+          <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{project.branches.length}</Badge>
+        </button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 text-xs"
+          onClick={() => setShowCreateForm((v) => !v)}
+        >
+          <Plus className="h-3 w-3 mr-1" />
+          新建分支
+        </Button>
+      </div>
+
+      {/* Create Form */}
+      {showCreateForm && (
+        <div className="flex items-center gap-2">
+          <Input
+            value={newBranchName}
+            onChange={(e) => setNewBranchName(e.target.value)}
+            placeholder="新分支名称"
+            className="flex-1 rounded-lg border-border/50 font-mono text-xs"
+            onKeyDown={(e) => e.key === "Enter" && handleCreate()}
+          />
+          <Button size="sm" className="h-7 text-xs" onClick={handleCreate} disabled={createBranch.isPending || !newBranchName.trim()}>
+            {createBranch.isPending ? "创建中…" : "创建"}
+          </Button>
+          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { setShowCreateForm(false); setNewBranchName(""); }}>
+            取消
+          </Button>
+        </div>
+      )}
+
+      {/* Branch List */}
+      {expanded && (
+        <div className="space-y-0.5">
+          {project.branches.length === 0 ? (
+            <p className="text-xs text-muted-foreground py-3 text-center">暂无分支</p>
+          ) : (
+            project.branches.map((branch) => (
+              <div
+                key={branch}
+                className="group flex items-center justify-between rounded-lg px-3 py-1.5 hover:bg-muted/50 transition-colors"
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <GitBranch className="h-3 w-3 shrink-0 text-muted-foreground" />
+                  <span className="font-mono text-xs truncate">{branch}</span>
+                  {branch === project.current && (
+                    <Badge variant="default" className="text-[10px] px-1.5 py-0">当前</Badge>
+                  )}
+                </div>
+                <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0" title="Push" onClick={() => handlePush(branch)}>
+                    <Upload className="h-3 w-3" />
+                  </Button>
+                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0" title="Pull" onClick={() => handlePull(branch)}>
+                    <Download className="h-3 w-3" />
+                  </Button>
+                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0" title="Merge Request" onClick={() => onMrRequest(project.project_id, branch, project.branches)}>
+                    <GitPullRequest className="h-3 w-3" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 w-6 p-0 text-destructive hover:text-destructive"
+                    title="删除分支"
+                    disabled={branch === project.current}
+                    onClick={() => handleDelete(branch)}
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BranchesPane({ groupId, members, projectIdToName }: {
+  groupId: string;
+  members: ProjectGroupMember[];
+  projectIdToName: Map<string, string>;
+}) {
+  const { data, isLoading, isError, error } = useGroupBranches(groupId);
+  const qc = useQueryClient();
+
+  const [mrDialogState, setMrDialogState] = useState<{
+    projectId: string;
+    branch: string;
+    branches: string[];
+  } | null>(null);
+  const [mrTitle, setMrTitle] = useState("");
+  const [mrTargetBranch, setMrTargetBranch] = useState("");
+  const [mrDescription, setMrDescription] = useState("");
+
+  const createMR = useCreateMergeRequest(mrDialogState?.projectId);
+
+  const openMrDialog = (projectId: string, branch: string, branches: string[]) => {
+    setMrDialogState({ projectId, branch, branches });
+    const otherBranches = branches.filter((b) => b !== branch);
+    const defaultTarget = otherBranches.includes("main") ? "main" : otherBranches.includes("master") ? "master" : otherBranches[0] ?? "";
+    setMrTargetBranch(defaultTarget);
+    setMrTitle(`Merge ${branch} into ${defaultTarget}`);
+    setMrDescription("");
+  };
+
+  const closeMrDialog = () => {
+    setMrDialogState(null);
+    setMrTitle("");
+    setMrTargetBranch("");
+    setMrDescription("");
+  };
+
+  const handleCreateMR = () => {
+    if (!mrDialogState || !mrTargetBranch) return;
+    createMR.mutateAsync({
+      source_branch: mrDialogState.branch,
+      target_branch: mrTargetBranch,
+      title: mrTitle || `Merge ${mrDialogState.branch} into ${mrTargetBranch}`,
+      description: mrDescription || undefined,
+    })
+      .then(() => {
+        toast({ title: "MR 已创建", description: mrTitle });
+        closeMrDialog();
+      })
+      .catch((e) => toast({ title: "MR 创建失败", description: getApiErrorMessage(e), variant: "destructive" }));
+  };
+
+  return (
+    <section className="space-y-4">
+      <div className="flex items-end justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">分支管理</h2>
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            组内成员项目的本地分支 · 共 {data?.items?.length ?? 0} 个项目
+          </p>
+        </div>
+      </div>
+
+      {isLoading ? (
+        <div className="bg-card rounded-xl shadow-card py-12 text-center text-sm text-muted-foreground">
+          加载中…
+        </div>
+      ) : isError ? (
+        <div className="bg-card rounded-xl shadow-card py-12 text-center text-sm text-destructive">
+          加载失败:{getApiErrorMessage(error)}
+        </div>
+      ) : !data?.items?.length ? (
+        <div className="bg-card rounded-xl shadow-card py-16 text-center text-sm text-muted-foreground">
+          暂无分支信息
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {data.items.map((project) => (
+            <ProjectBranchCard
+              key={project.project_id}
+              project={project}
+              groupId={groupId}
+              onMrRequest={openMrDialog}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* MR Dialog */}
+      {mrDialogState && (
+        <Dialog open onOpenChange={(open) => { if (!open) closeMrDialog(); }}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>创建 Merge Request</DialogTitle>
+              <DialogDescription>从 {mrDialogState.branch} 合并到目标分支</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-2">
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-medium">源分支</span>
+                <Input value={mrDialogState.branch} disabled className="font-mono text-xs" />
+              </label>
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-medium">目标分支</span>
+                <Select
+                  value={mrTargetBranch}
+                  onChange={(e) => {
+                    setMrTargetBranch(e.target.value);
+                    setMrTitle(`Merge ${mrDialogState.branch} into ${e.target.value}`);
+                  }}
+                  options={mrDialogState.branches.filter((b) => b !== mrDialogState.branch).map((b) => ({ value: b, label: b }))}
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-medium">标题</span>
+                <Input
+                  value={mrTitle}
+                  onChange={(e) => setMrTitle(e.target.value)}
+                  placeholder={`Merge ${mrDialogState.branch} into ${mrTargetBranch}`}
+                  className="text-xs"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-medium">描述（可选）</span>
+                <textarea
+                  value={mrDescription}
+                  onChange={(e) => setMrDescription(e.target.value)}
+                  placeholder="补充说明…"
+                  className="w-full rounded-lg border border-border/50 bg-transparent px-3 py-2 text-xs min-h-[80px] resize-y focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+              </label>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={closeMrDialog}>取消</Button>
+              <Button onClick={handleCreateMR} disabled={createMR.isPending || !mrTargetBranch}>
+                {createMR.isPending ? "创建中…" : "创建 MR"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+    </section>
+  );
+}
+
+// ── Audit Tab ─────────────────────────────────────────────────────────────
+
+const TIME_RANGES = [
+  { label: "今天", value: "today" },
+  { label: "3天", value: "3d" },
+  { label: "7天", value: "7d" },
+  { label: "30天", value: "30d" },
+  { label: "全部", value: "all" },
+];
+
+function AuditPane({ groupId, projectIdToName }: {
+  groupId: string;
+  projectIdToName: Map<string, string>;
+}) {
+  const [timeRange, setTimeRange] = useState("30d");
+  const [selectedCommit, setSelectedCommit] = useState<{ projectId: string; hash: string; message: string } | null>(null);
+  const [diffContent, setDiffContent] = useState<string | null>(null);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [diffError, setDiffError] = useState<string | null>(null);
+
+  const since = useMemo(() => {
+    if (timeRange === "all") return undefined;
+    const now = new Date();
+    const ms: Record<string, number> = { today: 1, "3d": 3, "7d": 7, "30d": 30 };
+    const days = ms[timeRange] ?? 30;
+    const d = new Date(now.getTime() - days * 86400000);
+    d.setHours(0, 0, 0, 0);
+    return d.toISOString();
+  }, [timeRange]);
+
+  const { data, isLoading, isError, error } = useGroupChanges(groupId, {
+    group_by: "branch",
+    since,
+  });
+
+  const { data: commitsData, isLoading: commitsLoading } = useGroupCommits(groupId, {
+    since,
+    limit: 50,
+  });
+
+  const projects = data?.projects ?? [];
+  const commits = commitsData?.commits ?? [];
+
+  const handleCommitClick = async (projectId: string, hash: string, message: string) => {
+    setSelectedCommit({ projectId, hash, message });
+    setDiffContent(null);
+    setDiffError(null);
+    setDiffLoading(true);
+    try {
+      const diff = await getGroupCommitDiff(groupId, projectId, hash);
+      setDiffContent(diff || "(空 diff)");
+    } catch (e: unknown) {
+      setDiffError(getApiErrorMessage(e));
+    } finally {
+      setDiffLoading(false);
+    }
+  };
+
+  const closeDiff = () => {
+    setSelectedCommit(null);
+    setDiffContent(null);
+    setDiffError(null);
+  };
+
+  // ── Diff 查看面板 ──
+  if (selectedCommit) {
+    return (
+      <section className="space-y-4">
+        <div className="flex items-center gap-3">
+          <Button variant="outline" size="sm" onClick={closeDiff}>
+            <ArrowLeft className="h-3.5 w-3.5 mr-1" />
+            返回
+          </Button>
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold truncate">Commit Diff</h2>
+            <p className="text-xs text-muted-foreground font-mono truncate">
+              {selectedCommit.hash.slice(0, 8)} · {selectedCommit.message}
+            </p>
+          </div>
+        </div>
+        <div className="bg-card rounded-xl shadow-card border border-border/50 overflow-hidden">
+          {diffLoading ? (
+            <div className="py-12 text-center text-sm text-muted-foreground">加载 diff 中…</div>
+          ) : diffError ? (
+            <div className="py-12 text-center text-sm text-destructive">加载失败：{diffError}</div>
+          ) : (
+            <pre className="p-4 text-xs font-mono overflow-auto max-h-[70vh] whitespace-pre-wrap break-all">
+              {diffContent}
+            </pre>
+          )}
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="space-y-4">
+      <div className="flex items-end justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">代码审计</h2>
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            组内成员项目的代码变更统计
+          </p>
+        </div>
+        <div className="flex items-center gap-1 rounded-lg bg-muted p-0.5">
+          {TIME_RANGES.map((tr) => (
+            <button
+              key={tr.value}
+              onClick={() => setTimeRange(tr.value)}
+              className={[
+                "px-2.5 py-1 rounded-md text-xs font-medium transition-colors",
+                timeRange === tr.value
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              ].join(" ")}
+            >
+              {tr.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {isLoading ? (
+        <div className="bg-card rounded-xl shadow-card py-12 text-center text-sm text-muted-foreground">
+          加载中…
+        </div>
+      ) : isError ? (
+        <div className="bg-card rounded-xl shadow-card py-12 text-center text-sm text-destructive">
+          加载失败:{getApiErrorMessage(error)}
+        </div>
+      ) : projects.length === 0 ? (
+        <div className="bg-card rounded-xl shadow-card py-16 text-center text-sm text-muted-foreground">
+          暂无代码变更记录
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {projects.map((proj) => (
+            <div key={proj.project_id} className="bg-card rounded-xl shadow-card border border-border/50 overflow-hidden">
+              <div className="flex items-center gap-2 px-5 py-3 border-b border-border/50 bg-muted/30">
+                <FolderGit2 className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="text-sm font-medium">{proj.name}</span>
+                <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                  {proj.changes.length} 个分支
+                </Badge>
+              </div>
+              <div className="divide-y divide-border/50">
+                {proj.changes.map((change, idx) => (
+                  <div key={`${change.name}-${idx}`} className="flex items-center justify-between px-5 py-2.5 hover:bg-muted/30 transition-colors">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <GitBranch className="h-3 w-3 shrink-0 text-muted-foreground" />
+                      <span className="font-mono text-xs truncate">{change.name}</span>
+                    </div>
+                    <div className="flex items-center gap-4 text-xs shrink-0">
+                      <span className="text-muted-foreground">{change.commit_count} 提交</span>
+                      <span className="text-muted-foreground">{change.files_changed} 文件</span>
+                      <span className="text-green-600 dark:text-green-400 font-mono">+{change.additions}</span>
+                      <span className="text-red-600 dark:text-red-400 font-mono">-{change.deletions}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── 提交历史（可点击查看 diff） ── */}
+      <div className="pt-2">
+        <h3 className="text-sm font-semibold mb-2">提交历史</h3>
+        {commitsLoading ? (
+          <div className="bg-card rounded-xl shadow-card py-8 text-center text-sm text-muted-foreground">
+            加载提交记录中…
+          </div>
+        ) : commits.length === 0 ? (
+          <div className="bg-card rounded-xl shadow-card py-8 text-center text-sm text-muted-foreground">
+            暂无提交记录
+          </div>
+        ) : (
+          <div className="bg-card rounded-xl shadow-card border border-border/50 overflow-hidden divide-y divide-border/50">
+            {commits.map((c) => (
+              <button
+                key={`${c.project_id}-${c.hash}`}
+                type="button"
+                className="w-full flex items-center justify-between px-5 py-2.5 hover:bg-muted/30 transition-colors text-left"
+                onClick={() => handleCommitClick(c.project_id, c.hash, c.message)}
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <Hash className="h-3 w-3 shrink-0 text-muted-foreground" />
+                  <span className="font-mono text-xs text-muted-foreground">{c.hash.slice(0, 8)}</span>
+                  <span className="text-xs truncate">{c.message}</span>
+                </div>
+                <div className="flex items-center gap-3 text-xs shrink-0 text-muted-foreground">
+                  <span>{c.project_name}</span>
+                  <span>{c.author}</span>
+                  <span>{c.date ? new Date(c.date).toLocaleDateString() : ""}</span>
+                  <ChevronRight className="h-3 w-3" />
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 
