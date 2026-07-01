@@ -463,6 +463,7 @@ class ApprovalService:
                 text("""
                     UPDATE approvals SET status = 'cancelled', resolved_at = datetime('now')
                     WHERE status = 'pending'
+                    AND type != 'work_item_transition'
                     AND (
                         task_id IN (
                             SELECT id FROM tasks

@@ -399,14 +399,35 @@ export function WorkItemDetailPanel({
                     {(t.task_id || sessionId) && (
                       <div className="mt-2 flex flex-wrap items-center gap-3">
                         {t.task_id && !t.plan_tasks?.length && (
-                          <a
-                            href={`/tasks/${t.task_id}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-primary text-xs hover:underline transition-smooth"
-                          >
-                            → 查看任务 {t.task_id.slice(0, 8)}
-                          </a>
+                          t.task_info ? (
+                            <a
+                              href={`/tasks/${t.task_info.id}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-2 rounded-md px-2 py-1.5 transition-smooth hover:bg-muted/50"
+                            >
+                              <span
+                                className={`inline-block h-2 w-2 shrink-0 rounded-full ${
+                                  TASK_STATUS_COLOR[t.task_info.status] ?? "bg-slate-400"
+                                }`}
+                              />
+                              <span className="min-w-0 flex-1 truncate text-xs text-foreground">
+                                {t.task_info.prompt?.slice(0, 60) || t.task_id.slice(0, 8)}
+                              </span>
+                              <span className="shrink-0 text-[10px] text-muted-foreground">
+                                {TASK_STATUS_LABEL[t.task_info.status] ?? t.task_info.status}
+                              </span>
+                            </a>
+                          ) : (
+                            <a
+                              href={`/tasks/${t.task_id}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-primary text-xs hover:underline transition-smooth"
+                            >
+                              → 查看任务 {t.task_id.slice(0, 8)}
+                            </a>
+                          )
                         )}
                         {sessionId && (
                           <a

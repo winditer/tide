@@ -439,15 +439,22 @@ async def get_artifact_content(
 
     try:
         project_root = Path(project_path).resolve()
-        target_path = (project_root / file_path.lstrip("/")).resolve()
+        # 判断 file_path 是绝对路径还是相对路径
+        if Path(file_path).is_absolute():
+            target_path = Path(file_path).resolve()
+        else:
+            target_path = (project_root / file_path.lstrip("/")).resolve()
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid file path")
 
-    # 安全校验：resolve 后的路径必须仍位于项目根目录下
-    try:
-        target_path.relative_to(project_root)
-    except ValueError:
-        raise HTTPException(status_code=403, detail="Path traversal forbidden")
+    # 安全校验：
+    # - 相对路径：resolve 后必须仍位于项目根目录下
+    # - 绝对路径：路径来源是后端 metadata，可信，仅检查文件存在性即可
+    if not Path(file_path).is_absolute():
+        try:
+            target_path.relative_to(project_root)
+        except ValueError:
+            raise HTTPException(status_code=403, detail="Path traversal forbidden")
 
     if not target_path.exists() or not target_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")

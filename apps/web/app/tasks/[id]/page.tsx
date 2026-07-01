@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect, useState } from "react";
+import { use, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Button,
@@ -12,6 +12,7 @@ import {
   useTaskQuery,
   useStopTaskMutation,
   useRetryTaskMutation,
+  useChat,
 } from "@tide/core";
 import { ApprovalPanel } from "@tide/views";
 
@@ -272,6 +273,41 @@ export default function TaskDetailPage({
 
   const [resultExpanded, setResultExpanded] = useState(false);
   const [resultCopied, setResultCopied] = useState(false);
+
+  // --- 续聊 Chat input state & logic ---
+  const chat = useChat();
+  const chatRef = useRef(chat);
+  chatRef.current = chat;
+  const sendingRef = useRef(false);
+  const [draftInput, setDraftInput] = useState("");
+
+  const handleSend = useCallback(async () => {
+    const trimmed = draftInput.trim();
+    if (!trimmed) return;
+    if (chatRef.current.isSending) return;
+    if (sendingRef.current) return;
+    sendingRef.current = true;
+    setDraftInput("");
+    try {
+      await chatRef.current.sendMessage(trimmed, {
+        sessionId: task?.session_id || undefined,
+        projectCwd: task?.cwd || undefined,
+        agentId: task?.agent_id || undefined,
+      });
+    } finally {
+      sendingRef.current = false;
+    }
+  }, [draftInput, task?.session_id, task?.cwd, task?.agent_id]);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        void handleSend();
+      }
+    },
+    [handleSend]
+  );
 
   // 让"运行中"任务的耗时随时间走动
   const isLive = task?.status === "running" || task?.status === "queued";
@@ -558,6 +594,78 @@ export default function TaskDetailPage({
         <p className="text-sm text-destructive">
           操作失败：{String(stopMutation.error || retryMutation.error)}
         </p>
+      )}
+
+      {/* ── 续聊消息 ──────────────────────────────────────── */}
+      {task.session_id && chat.messages.length > 0 && (
+        <div className="space-y-3 border-t border-border/50 pt-6">
+          <h3 className="text-base font-medium">续聊消息</h3>
+          <div className="space-y-3">
+            {chat.messages.map((msg, i) => (
+              <div
+                key={i}
+                className={`rounded-xl px-4 py-3 text-sm leading-relaxed ${
+                  msg.role === "user"
+                    ? "ml-12 bg-foreground text-background"
+                    : "mr-12 border border-border/50 bg-card"
+                }`}
+              >
+                <div className="mb-1 text-[10px] uppercase tracking-wider opacity-60">
+                  {msg.role === "user" ? "You" : "Assistant"}
+                </div>
+                <div className="whitespace-pre-wrap break-words">
+                  {msg.role === "user" ? msg.content : renderMarkdown(msg.content)}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── 续聊输入区 ─────────────────────────────────────── */}
+      {task.session_id && (
+        <div className="border-t border-border/50 pt-6">
+          <div className="flex items-end gap-2">
+            <textarea
+              rows={2}
+              value={draftInput}
+              onChange={(e) => setDraftInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="继续对话，推进任务... (⌘/Ctrl+Enter 发送)"
+              className="min-h-[56px] max-h-[160px] flex-1 resize-y rounded-lg border border-border/50 bg-muted/50 px-3 py-2 text-sm leading-snug text-foreground placeholder:text-muted-foreground transition-shadow focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30"
+            />
+            <button
+              type="button"
+              onClick={() => void handleSend()}
+              disabled={!draftInput.trim() || chat.isSending}
+              className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground transition-smooth hover:bg-primary/90 hover:shadow-md disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground disabled:hover:shadow-none"
+              title="发送 (⌘/Ctrl+Enter)"
+            >
+              {chat.isSending ? (
+                <span className="inline-block h-2.5 w-2.5 animate-pulse rounded-full bg-current" />
+              ) : (
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M22 2 11 13" />
+                  <path d="M22 2 15 22l-4-9-9-4z" />
+                </svg>
+              )}
+            </button>
+          </div>
+          <div className="mt-1.5 text-right text-[10px] text-muted-foreground">
+            ⌘/Ctrl + Enter 发送
+          </div>
+        </div>
       )}
     </main>
   );

@@ -28,6 +28,13 @@ from urllib.parse import quote
 
 from sqlalchemy import text
 
+# 系统指令前缀：确保 Agent 直接执行，不进入交互模式
+AUTO_EXEC_PREFIX = (
+    "【系统指令】本任务由工作流自动触发，请直接执行所有操作，"
+    "不要询问确认、不要进入规划模式、不要等待用户回复。"
+    "如果需要生成文件，直接生成；如果需要修改代码，直接修改。\n\n"
+)
+
 from backend.db.engine import async_session_factory
 from backend.services.ws_hub import ws_hub
 
@@ -49,11 +56,14 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+# 终态节点类型（与 workflow_engine.TERMINAL_NODE_TYPES 保持同步）
+_TERMINAL_NODE_TYPES = {"end", "cancel", "error", "close"}
+
 # 可见节点类型：这些节点是工作项可以停留的阶段
 VISIBLE_NODE_TYPES = {"stage", "agent", "approval", "delay", "git_merge", "parallel_join"}
-# 看板列节点类型：在 VISIBLE_NODE_TYPES 基础上额外包含 end，
+# 看板列节点类型：在 VISIBLE_NODE_TYPES 基础上额外包含终态节点，
 # 让已完成（completed_at != NULL）的工作项也能展示在看板上。
-BOARD_COLUMN_NODE_TYPES = VISIBLE_NODE_TYPES | {"end"}
+BOARD_COLUMN_NODE_TYPES = VISIBLE_NODE_TYPES | _TERMINAL_NODE_TYPES
 
 
 class WorkItemService:
@@ -69,8 +79,9 @@ class WorkItemService:
         """
         if has_completed:
             return "completed"
-        if node_type == "end":
-            return "completed"
+        if node_type in _TERMINAL_NODE_TYPES:
+            _terminal_status_map = {"end": "completed", "cancel": "stopped", "error": "failed", "close": "completed"}
+            return _terminal_status_map.get(node_type, "completed")
         if node_type == "approval":
             return "pending_approval"
         if node_type == "agent":
@@ -661,8 +672,8 @@ class WorkItemService:
         #     仅对 trigger_type == "manual" 生效，系统/审批/agent_completed 等流转不受限。
         if trigger_type == "manual":
             from_node = node_map.get(from_node_id) if from_node_id else None
-            if from_node and from_node.get("type") == "end":
-                raise ValueError("Cannot transition from end node")
+            if from_node and from_node.get("type") in _TERMINAL_NODE_TYPES:
+                raise ValueError("Cannot transition from terminal node")
             # 允许手动移动到 end 节点（Done），以便用户在节点卡住时手动完成工作项
 
         # 4. 记录 transition
@@ -680,8 +691,8 @@ class WorkItemService:
             sets = ["current_node_id = :node_id", "updated_at = :updated_at"]
             params: dict = {"id": item_id, "node_id": target_node_id, "updated_at": now}
 
-            # end 节点标记完成
-            if target_node.get("type") == "end":
+            # 终态节点标记完成
+            if target_node.get("type") in _TERMINAL_NODE_TYPES:
                 sets.append("completed_at = :completed_at")
                 params["completed_at"] = now
 
@@ -738,6 +749,14 @@ class WorkItemService:
                     {"tid": task_id},
                 )).fetchone()
             if not plan_row:
+                # 单任务场景：查询任务状态信息
+                async with async_session_factory() as session:
+                    task_row = (await session.execute(
+                        text("SELECT id, status, prompt FROM tasks WHERE id = :tid"),
+                        {"tid": task_id},
+                    )).fetchone()
+                if task_row:
+                    t["task_info"] = dict(task_row._mapping)
                 continue
             plan_id = dict(plan_row._mapping)["plan_id"]
             async with async_session_factory() as session:
@@ -880,8 +899,8 @@ class WorkItemService:
             asyncio.create_task(self._handle_delay_node(item, node, definition))
         elif node_type == "git_merge":
             asyncio.create_task(self._safe_trigger_git_merge(item, node))
-        elif node_type == "end":
-            logger.info("Work item %s completed.", item.get("id", "?")[:8])
+        elif node_type in _TERMINAL_NODE_TYPES:
+            logger.info("Work item %s reached terminal: %s", item.get("id", "?")[:8], node_type)
         elif node_type != "stage":
             logger.warning(
                 "[WorkItem] _dispatch_node: unrecognized node type %r for item %s, node %s",
@@ -1083,6 +1102,9 @@ class WorkItemService:
                 prompt = f"处理工作项: {item['title']}"
                 if item.get("description"):
                     prompt += f"\n\n{item['description']}"
+
+            # 添加自动执行系统指令前缀
+            prompt = AUTO_EXEC_PREFIX + prompt
 
             # 创建 task
             task = await task_service.create_task(
@@ -1316,6 +1338,8 @@ class WorkItemService:
                     f"你现在在 `{project_name}` 仓库（{project_cwd}）中工作。\n"
                     f"请只修改本仓库相关的代码。如果此需求不涉及本仓库，请输出'无需修改'并结束。"
                 )
+                # 添加自动执行系统指令前缀
+                task_prompt = AUTO_EXEC_PREFIX + task_prompt
 
                 plan_task_def = {
                     "title": f"[{project_name}] {item['title'][:50]}",
@@ -2923,15 +2947,7 @@ class WorkItemService:
             if not definition:
                 return
 
-            # 3. 审批拒绝时不推进到下游节点，停止工作流执行
-            if not approved:
-                logger.info(
-                    "Approval %s for work item %s rejected, workflow stopped.",
-                    approval_id[:8], work_item_id[:8],
-                )
-                return
-
-            # 4. 选择下游边 / 节点（仅审批通过时执行）
+            # 3. 选择下游边 / 节点（无论通过或拒绝均推进）
             target_node = self._select_approval_downstream(definition, node_id, approved)
             if not target_node:
                 logger.info(
@@ -2940,11 +2956,16 @@ class WorkItemService:
                 )
                 return
 
+            trigger = "approval_approved" if approved else "approval_rejected"
+            logger.info(
+                "Approval %s for work item %s resolved (%s), advancing to node %s.",
+                approval_id[:8], work_item_id[:8], verdict, target_node["id"][:8],
+            )
             await self.transition_work_item(
                 work_item_id,
                 target_node["id"],
                 operator="system",
-                trigger_type="approval_approved",
+                trigger_type=trigger,
             )
 
         except Exception as exc:

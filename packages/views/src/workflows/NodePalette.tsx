@@ -78,8 +78,29 @@ const ITEMS: PaletteItem[] = [
     type: "end",
     label: "End",
     icon: "■",
-    description: "工作流终止",
+    description: "正常完成",
     swatch: "bg-rose-600",
+  },
+  {
+    type: "cancel",
+    label: "Cancel",
+    icon: "⊘",
+    description: "取消中止",
+    swatch: "bg-amber-600",
+  },
+  {
+    type: "error",
+    label: "Error",
+    icon: "✕",
+    description: "错误终止",
+    swatch: "bg-red-600",
+  },
+  {
+    type: "close",
+    label: "Close",
+    icon: "○",
+    description: "业务关闭",
+    swatch: "bg-slate-600",
   },
 ];
 

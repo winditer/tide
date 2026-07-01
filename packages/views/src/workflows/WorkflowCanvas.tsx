@@ -44,6 +44,9 @@ import { PropertyPanel } from "./PropertyPanel";
 const DEFAULT_LABELS: Record<WorkflowNodeType, string> = {
   start: "Start",
   end: "End",
+  cancel: "Cancel",
+  error: "Error",
+  close: "Close",
   agent: "Agent",
   approval: "Approval",
   condition: "Condition",
@@ -80,6 +83,12 @@ function defaultDataFor(type: WorkflowNodeType): Record<string, any> {
         onConflict: "fail",
         autoPush: false,
       };
+    case "cancel":
+      return { label: "Cancel" };
+    case "error":
+      return { label: "Error" };
+    case "close":
+      return { label: "Close" };
     default:
       return { label: DEFAULT_LABELS[type] };
   }

@@ -16,6 +16,9 @@ import { STAGE_CATEGORY_OPTIONS } from "./node-tones";
 const TYPE_LABEL: Record<WorkflowNodeType, string> = {
   start: "起始",
   end: "终止",
+  cancel: "取消",
+  error: "错误",
+  close: "关闭",
   agent: "Agent",
   approval: "审批",
   condition: "条件",
@@ -29,6 +32,9 @@ const TYPE_LABEL: Record<WorkflowNodeType, string> = {
 const TYPE_GLYPH: Record<WorkflowNodeType, string> = {
   start: "▶",
   end: "■",
+  cancel: "⊘",
+  error: "✕",
+  close: "○",
   agent: "🤖",
   approval: "🛡",
   condition: "◆",
@@ -541,16 +547,16 @@ export function PropertyPanel({
             </div>
           )}
 
-          {(t === "start" || t === "end") && (
+          {(t === "start" || t === "end" || t === "cancel" || t === "error" || t === "close") && (
             <div className="rounded-lg border border-border/50 bg-muted/30 px-3 py-2 text-[10px] leading-relaxed text-muted-foreground">
-              {t === "start" ? "START" : "END"} 节点为工作流入口/出口。
+              {t === "start" ? "START 节点为工作流入口。" : `${TYPE_LABEL[t]} 节点为工作流终态出口。`}
             </div>
           )}
         </div>
       </div>
 
       {/* Footer */}
-      {!readOnly && onDelete && t !== "start" && (
+      {!readOnly && onDelete && t !== "start" && t !== "end" && t !== "cancel" && t !== "error" && t !== "close" && (
         <div className="border-t border-border/50 bg-muted/30 px-4 py-3">
           <Button
             variant="destructive"

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@tide/ui";
 import { useWorkflows } from "@tide/core";
-import { WorkflowList, WorkflowCreateForm } from "@tide/views";
+import { WorkflowList, WorkflowCreateForm, WorkflowGuide } from "@tide/views";
 
 export default function WorkflowsPage() {
   const router = useRouter();
@@ -21,7 +21,10 @@ export default function WorkflowsPage() {
             可视化构建多 Agent 协作的 DAG 工作流。
           </p>
         </div>
-        <Button onClick={() => setShowCreate(true)}>+ 创建工作流</Button>
+        <div className="flex items-center gap-2">
+          <WorkflowGuide />
+          <Button onClick={() => setShowCreate(true)}>+ 创建工作流</Button>
+        </div>
       </header>
 
       {isLoading ? (

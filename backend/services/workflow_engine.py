@@ -45,6 +45,17 @@ from backend.services.ws_hub import ws_hub
 
 logger = logging.getLogger("tide.workflow_engine")
 
+# 终态节点类型集合（无出边，到达即终止工作流）
+TERMINAL_NODE_TYPES = {"end", "cancel", "error", "close"}
+
+# 终态节点 → 工作流运行最终状态
+TERMINAL_RUN_STATUS = {
+    "end": "completed",
+    "cancel": "cancelled",
+    "error": "failed",
+    "close": "completed",
+}
+
 
 def _safe_json_loads(raw, default):
     if raw is None or raw == "":
@@ -250,9 +261,10 @@ class WorkflowEngine:
                 await self._execute_next_nodes(run_id, node_id, context)
                 return
 
-            if node_type == "end":
+            if node_type in TERMINAL_NODE_TYPES:
                 await self._update_node_status(run_id, node_id, "completed", output="")
-                await self._complete_run(run_id)
+                final_status = TERMINAL_RUN_STATUS.get(node_type, "completed")
+                await self._complete_run(run_id, final_status=final_status)
                 return
 
             if node_type == "agent":
@@ -1073,17 +1085,17 @@ class WorkflowEngine:
             self._runs[run_id]["context"] = ctx
         return ctx
 
-    async def _complete_run(self, run_id: str):
+    async def _complete_run(self, run_id: str, final_status: str = "completed"):
         async with async_session_factory() as session:
             await session.execute(
                 text(
                     """
                     UPDATE workflow_runs
-                    SET status = 'completed', completed_at = :now
+                    SET status = :final_status, completed_at = :now
                     WHERE id = :id
                     """
                 ),
-                {"id": run_id, "now": _now_iso()},
+                {"id": run_id, "final_status": final_status, "now": _now_iso()},
             )
             # 未触发的分支节点标记为 skipped
             await session.execute(
@@ -1098,13 +1110,14 @@ class WorkflowEngine:
             )
             await session.commit()
         self._runs.pop(run_id, None)
+        event_type = f"workflow.run.{final_status}"
         await ws_hub.broadcast(
             "workflows",
-            {"type": "workflow.run.completed", "run_id": run_id},
+            {"type": event_type, "run_id": run_id},
         )
 
-        # 触发 workflow.run.completed Hook（异步非阻塞）
-        self._fire_hook("workflow.run.completed", run_id)
+        # 触发 Hook（异步非阻塞）
+        self._fire_hook(event_type, run_id)
 
     async def _fail_run(self, run_id: str, error: str):
         async with async_session_factory() as session:
@@ -1256,11 +1269,11 @@ class WorkflowEngine:
 
         node_ids = {n["id"] for n in nodes}
         starts = [n for n in nodes if n.get("type") == "start"]
-        ends = [n for n in nodes if n.get("type") == "end"]
+        ends = [n for n in nodes if n.get("type") in TERMINAL_NODE_TYPES]
         if not starts:
             raise ValueError("Workflow must have a start node")
         if not ends:
-            raise ValueError("Workflow must have an end node")
+            raise ValueError("Workflow must have at least one terminal node (end, cancel, error, or close)")
 
         for e in edges:
             if e.get("source") not in node_ids or e.get("target") not in node_ids:
@@ -1275,7 +1288,7 @@ class WorkflowEngine:
         # end 无出边
         for e_node in ends:
             if any(e.get("source") == e_node["id"] for e in edges):
-                raise ValueError(f"End node {e_node['id']} must have no outgoing edges")
+                raise ValueError(f"Terminal node {e_node['id']} must have no outgoing edges")
 
         # 拓扑排序（Kahn）检测循环
         in_degree = {n["id"]: 0 for n in nodes}

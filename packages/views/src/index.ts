@@ -88,6 +88,7 @@ export { PropertyPanel as WorkflowPropertyPanel } from "./workflows/PropertyPane
 export { RunHistory as WorkflowRunHistory } from "./workflows/RunHistory";
 export { WorkflowList } from "./workflows/WorkflowList";
 export { WorkflowCreateForm } from "./workflows/WorkflowCreateForm";
+export { WorkflowGuide } from "./workflows/WorkflowGuide";
 export { NodeRunList as WorkflowNodeRunList } from "./workflows/NodeRunList";
 export {
   StartNode,

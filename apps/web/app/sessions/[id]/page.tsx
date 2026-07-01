@@ -1,12 +1,13 @@
 "use client";
 
-import { use, useEffect, useMemo, useRef } from "react";
+import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Badge,
   Button,
 } from "@tide/ui";
 import {
+  useChat,
   useSessionQuery,
   type SessionMessage,
   type SessionRelatedTask,
@@ -256,12 +257,60 @@ export default function SessionDetailPage({
   const tasks = data?.tasks ?? [];
   const session = data?.session;
 
+  // --- Chat input state & logic ---
+  const chat = useChat();
+  const chatRef = useRef(chat);
+  chatRef.current = chat;
+  const sendingRef = useRef(false);
+  const [draftInput, setDraftInput] = useState("");
+
+  // Merge: API history messages + new chat messages
+  const allMessages = useMemo(() => {
+    if (chat.messages.length === 0) return messages;
+    // Convert chat messages to SessionMessage format for display
+    const newMsgs: SessionMessage[] = chat.messages.map((m) => ({
+      role: m.role === "user" ? "user" : "assistant",
+      content: m.content,
+      timestamp: m.timestamp,
+      kind: undefined,
+    }));
+    return [...messages, ...newMsgs];
+  }, [messages, chat.messages]);
+
+  const handleSend = useCallback(async () => {
+    const trimmed = draftInput.trim();
+    if (!trimmed) return;
+    if (chatRef.current.isSending) return;
+    if (sendingRef.current) return;
+    sendingRef.current = true;
+    setDraftInput("");
+    try {
+      await chatRef.current.sendMessage(trimmed, {
+        sessionId: session?.session_id,
+        projectCwd: session?.cwd || undefined,
+        agentId: session?.agent_id || undefined,
+      });
+    } finally {
+      sendingRef.current = false;
+    }
+  }, [draftInput, session?.session_id, session?.cwd, session?.agent_id]);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        void handleSend();
+      }
+    },
+    [handleSend]
+  );
+
   const scrollRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages.length]);
+  }, [allMessages.length]);
 
   const projectName = useMemo(() => {
     if (!session) return "—";
@@ -301,9 +350,9 @@ export default function SessionDetailPage({
     `Session ${shortenId(session.session_id)}`;
 
   return (
-    <main className="mx-auto max-w-7xl px-2 py-2 space-y-8">
+    <main className="mx-auto flex h-[calc(100vh-64px)] max-w-7xl flex-col px-2 py-2">
       {/* Header */}
-      <header>
+      <header className="shrink-0">
         <button
           onClick={() => router.push("/sessions")}
           className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-smooth"
@@ -339,29 +388,73 @@ export default function SessionDetailPage({
         </div>
       </header>
 
-      <div className="grid min-w-0 grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+      <div className="mt-6 grid min-w-0 flex-1 grid-cols-1 gap-6 overflow-hidden lg:grid-cols-[minmax(0,1fr)_320px]">
         {/* Conversation */}
-        <div className="min-w-0 bg-card rounded-xl shadow-card overflow-auto">
+        <div className="flex min-w-0 flex-col bg-card rounded-xl shadow-card overflow-hidden">
           <div
             ref={scrollRef}
-            className="max-h-[68vh] overflow-y-auto px-5 py-6"
+            className="flex-1 overflow-y-auto px-5 py-6"
           >
-            {messages.length === 0 ? (
+            {allMessages.length === 0 ? (
               <div className="flex h-48 flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
                 <span>暂无对话历史 — 会话文件可能尚未生成或无法读取</span>
               </div>
             ) : (
               <div className="space-y-4">
-                {messages.map((m, idx) => (
+                {allMessages.map((m, idx) => (
                   <MessageBubble key={idx} message={m} />
                 ))}
               </div>
             )}
           </div>
+
+          {/* Chat input area */}
+          <div className="shrink-0 border-t border-border/50 bg-card px-4 py-3">
+            <div className="flex items-end gap-2">
+              <textarea
+                rows={2}
+                value={draftInput}
+                onChange={(e) => setDraftInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="输入消息继续对话... (⌘/Ctrl+Enter 发送)"
+                className="min-h-[56px] max-h-[160px] flex-1 resize-y rounded-lg border border-border/50 bg-muted/50 px-3 py-2 text-sm leading-snug text-foreground placeholder:text-muted-foreground transition-shadow focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30"
+              />
+              <button
+                type="button"
+                onClick={() => void handleSend()}
+                disabled={!draftInput.trim() || chat.isSending}
+                className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground transition-smooth hover:bg-primary/90 hover:shadow-md disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground disabled:hover:shadow-none"
+                title="发送 (⌘/Ctrl+Enter)"
+              >
+                {chat.isSending ? (
+                  <span className="inline-block h-2.5 w-2.5 animate-pulse rounded-full bg-current" />
+                ) : (
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.4"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M22 2 11 13" />
+                    <path d="M22 2 15 22l-4-9-9-4z" />
+                  </svg>
+                )}
+              </button>
+            </div>
+            <div className="mt-1.5 text-right text-[10px] text-muted-foreground">
+              ⌘/Ctrl + Enter 发送
+            </div>
+          </div>
         </div>
 
         {/* Sidebar */}
-        <aside className="space-y-4">
+        <aside className="space-y-4 overflow-y-auto">
           <div className="bg-card rounded-xl shadow-card p-4 space-y-3">
             <h2 className="text-base font-medium">元信息</h2>
             <MetaRow label="Session" value={session.session_id} mono />

@@ -602,6 +602,24 @@ class PlanExecutor:
         # 正常结束，进入 finalize（test + diff → review/completed/failed）
         await self._finalize_task(plan_id, task_id, final_status, final_message, run_cwd)
 
+    async def _is_work_item_plan(self, plan_id: str) -> bool:
+        """判断 Plan 是否由工作项触发（关联了 work_item_transitions）。"""
+        try:
+            async with async_session_factory() as session:
+                row = (await session.execute(
+                    text("""
+                        SELECT 1
+                        FROM work_item_transitions wit
+                        JOIN tasks t ON t.id = wit.task_id
+                        WHERE t.plan_id = :plan_id
+                        LIMIT 1
+                    """),
+                    {"plan_id": plan_id},
+                )).fetchone()
+            return row is not None
+        except Exception:
+            return False
+
     async def _finalize_task(
         self,
         plan_id: str,
@@ -650,22 +668,40 @@ class PlanExecutor:
             new_status = "failed"
             parts.insert(0, "任务已结束，但测试未通过，暂不进入提交审批。")
         elif changed:
-            new_status = "review"
-            parts.append(f"**待提交审批**\n提交信息：`{commit_message}`")
+            commit_hash = None
+            # 工作项 Plan 自动提交，无需人工审批（合并由后续 git merge 节点处理）
+            if await self._is_work_item_plan(plan_id):
+                commit_hash = await git_utils.commit_changes(cwd, commit_message)
+                if commit_hash:
+                    new_status = "committed"
+                    parts.append(
+                        f"**已自动提交**\n"
+                        f"分支：`{task.get('branch_name') or '-'}`\n"
+                        f"Commit：`{commit_hash}`\n"
+                        f"提交信息：`{commit_message}`"
+                    )
+                else:
+                    new_status = "failed"
+                    parts.append("自动提交失败。")
+            else:
+                new_status = "review"
+                parts.append(f"**待提交审批**\n提交信息：`{commit_message}`")
         else:
             new_status = "completed"
             if not agent_output:
                 parts.insert(0, "任务完成，未检测到代码改动。")
 
-        await self._update_task(
-            task_id,
+        update_kwargs = dict(
             status=new_status,
             result="\n\n".join(p for p in parts if p),
             test_result=test_summary,
             diff_summary=diff_summary or None,
             commit_message=commit_message or None,
-            completed_at=_now_iso() if new_status != "review" else None,
+            completed_at=_now_iso() if new_status not in ("review",) else None,
         )
+        if new_status == "committed" and commit_hash:
+            update_kwargs["commit_hash"] = commit_hash
+        await self._update_task(task_id, **update_kwargs)
         task_after = await self._load_task(task_id) or task
         await self._emit_status(task_after, new_status)
 

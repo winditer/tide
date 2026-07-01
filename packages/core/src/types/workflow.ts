@@ -1,6 +1,9 @@
 export type WorkflowNodeType =
   | "start"
   | "end"
+  | "cancel"
+  | "error"
+  | "close"
   | "agent"
   | "approval"
   | "condition"

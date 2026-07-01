@@ -77,6 +77,12 @@ export interface WorkItemTransition {
   plan_id?: string;
   /** Plan 下所有子任务（后端自动补充） */
   plan_tasks?: WorkItemPlanTask[];
+  /** 单任务信息（后端自动补充） */
+  task_info?: {
+    id: string;
+    status: string;
+    prompt?: string;
+  } | null;
 }
 
 export interface ProjectSettings {

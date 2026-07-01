@@ -1,5 +1,5 @@
 export { StartNode } from "./StartNode";
-export { EndNode } from "./EndNode";
+export { EndNode, CancelNode, ErrorNode, CloseNode } from "./TerminalNode";
 export { AgentNode } from "./AgentNode";
 export { ApprovalNode } from "./ApprovalNode";
 export { ConditionNode } from "./ConditionNode";
@@ -10,7 +10,7 @@ export { StageNode } from "./StageNode";
 export { GitMergeNode } from "./GitMergeNode";
 
 import { StartNode } from "./StartNode";
-import { EndNode } from "./EndNode";
+import { EndNode, CancelNode, ErrorNode, CloseNode } from "./TerminalNode";
 import { AgentNode } from "./AgentNode";
 import { ApprovalNode } from "./ApprovalNode";
 import { ConditionNode } from "./ConditionNode";
@@ -23,6 +23,9 @@ import { GitMergeNode } from "./GitMergeNode";
 export const workflowNodeTypes = {
   start: StartNode,
   end: EndNode,
+  cancel: CancelNode,
+  error: ErrorNode,
+  close: CloseNode,
   agent: AgentNode,
   approval: ApprovalNode,
   condition: ConditionNode,

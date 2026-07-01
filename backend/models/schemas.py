@@ -384,6 +384,7 @@ class WorkItemTransitionResponse(BaseModel):
     created_at: Optional[str] = None
     plan_id: Optional[str] = None
     plan_tasks: Optional[list] = None
+    task_info: Optional[dict] = None
 
 
 class ProjectSettingsUpdate(BaseModel):
