@@ -71,6 +71,9 @@ class ProjectCreate(BaseModel):
     repo_url: Optional[str] = None  # clone 模式必填
     branch: Optional[str] = None  # 可选指定分支
     tags: Optional[list[str]] = None
+    credential_type: Optional[str] = None  # ssh_agent | ssh_key | token
+    ssh_key_path: Optional[str] = None
+    access_token: Optional[str] = None
 
 
 def _parse_project_roots() -> list[str]:
@@ -593,9 +596,13 @@ async def create_project(
         git_config = {
             "repo_url": body.repo_url,
             "default_branch": body.branch or "main",
-            "credential_type": "ssh_agent",
+            "credential_type": body.credential_type or "ssh_agent",
             "auto_push": True,
         }
+        if body.credential_type == "ssh_key" and body.ssh_key_path:
+            git_config["ssh_key_path"] = body.ssh_key_path
+        if body.credential_type == "token" and body.access_token:
+            git_config["access_token"] = body.access_token
         try:
             settings = await work_item_service.get_project_settings(project_id)
             metadata = (settings or {}).get("metadata") or {}
@@ -890,3 +897,55 @@ async def get_project_git_config(
 ):
     """获取项目的 Git 仓库配置。未配置时返回空对象。"""
     return await work_item_service.get_project_git_config(project_id)
+
+
+@router.post("/{project_id}/clone")
+async def trigger_clone(
+    project_id: str,
+    current_user=Depends(get_optional_user),
+):
+    """手动触发 git clone。
+
+    当项目目录不存在（从未 clone）或状态为 error 时可以重新触发。
+    从 project_settings.metadata.git_config 中读取 repo_url 和认证信息。
+    """
+    _ensure_not_viewer(current_user)
+    cwd = _decode_id(project_id)
+
+    # 读取 git_config
+    git_config = await work_item_service.get_project_git_config(project_id)
+    if not git_config or not git_config.get("repo_url"):
+        raise HTTPException(
+            status_code=400,
+            detail="请先在项目设置中配置 Git 仓库地址",
+        )
+
+    target_dir = Path(cwd)
+
+    # 如果目录已经存在且有 .git，说明已经 clone 过
+    if target_dir.exists() and (target_dir / ".git").exists():
+        raise HTTPException(
+            status_code=409,
+            detail="项目目录已存在且包含 Git 仓库，无需重新克隆",
+        )
+
+    # 确保父目录存在
+    target_dir.parent.mkdir(parents=True, exist_ok=True)
+
+    # 更新状态为 initializing
+    _update_project_status(project_id, "initializing")
+    project_discovery.clear_cache()
+
+    # 启动后台异步 clone
+    repo_url = git_config["repo_url"]
+    branch = git_config.get("default_branch") or None
+    asyncio.create_task(
+        _async_clone_project(
+            project_id=project_id,
+            repo_url=repo_url,
+            target_dir=target_dir,
+            branch=branch,
+        )
+    )
+
+    return {"ok": True, "status": "initializing", "message": "已触发克隆，请稍后刷新查看状态"}

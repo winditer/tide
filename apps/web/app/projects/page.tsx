@@ -452,6 +452,9 @@ function ProjectDialog({
   const [repoUrl, setRepoUrl] = useState("");
   const [branch, setBranch] = useState("");
   const [tagsRaw, setTagsRaw] = useState("");
+  const [credentialType, setCredentialType] = useState<"ssh_agent" | "ssh_key" | "token">("ssh_agent");
+  const [sshKeyPath, setSshKeyPath] = useState("");
+  const [accessToken, setAccessToken] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const title = mode === "new" ? "新建项目" : "添加已有项目";
@@ -484,6 +487,13 @@ function ProjectDialog({
         input.repo_url = repoUrl.trim();
         if (branch.trim()) {
           input.branch = branch.trim();
+        }
+        input.credential_type = credentialType;
+        if (credentialType === "ssh_key" && sshKeyPath.trim()) {
+          input.ssh_key_path = sshKeyPath.trim();
+        }
+        if (credentialType === "token" && accessToken.trim()) {
+          input.access_token = accessToken.trim();
         }
       }
       await onSubmit(input);
@@ -547,6 +557,46 @@ function ProjectDialog({
                   className="rounded-lg border-border/50 focus:ring-2 focus:ring-ring font-mono text-sm"
                 />
               </Field>
+
+              <Field label="认证方式">
+                <select
+                  value={credentialType}
+                  onChange={(e) => setCredentialType(e.target.value as "ssh_agent" | "ssh_key" | "token")}
+                  className="w-full rounded-lg border border-border/50 bg-background px-3 py-2 text-sm focus:ring-2 focus:ring-ring"
+                >
+                  <option value="ssh_agent">SSH Agent（默认）</option>
+                  <option value="ssh_key">SSH 私钥文件</option>
+                  <option value="token">HTTPS Access Token</option>
+                </select>
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  {credentialType === "ssh_agent" && "使用宿主机上已加载的 ssh-agent，无需额外配置"}
+                  {credentialType === "ssh_key" && "指定容器内可访问的 SSH 私钥文件路径"}
+                  {credentialType === "token" && "使用 Git 平台的 Personal Access Token（HTTPS）"}
+                </p>
+              </Field>
+
+              {credentialType === "ssh_key" && (
+                <Field label="私钥路径">
+                  <Input
+                    placeholder="/root/.ssh/id_ed25519"
+                    value={sshKeyPath}
+                    onChange={(e) => setSshKeyPath(e.target.value)}
+                    className="rounded-lg border-border/50 focus:ring-2 focus:ring-ring font-mono text-sm"
+                  />
+                </Field>
+              )}
+
+              {credentialType === "token" && (
+                <Field label="Access Token">
+                  <Input
+                    type="password"
+                    placeholder="ghp_xxxx 或 glpat-xxxx"
+                    value={accessToken}
+                    onChange={(e) => setAccessToken(e.target.value)}
+                    className="rounded-lg border-border/50 focus:ring-2 focus:ring-ring font-mono text-sm"
+                  />
+                </Field>
+              )}
             </>
           )}
 

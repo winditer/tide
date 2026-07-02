@@ -775,6 +775,7 @@ function GitConfigCard({ projectId }: { projectId: string }) {
   const [initial, setInitial] = useState<GitConfigForm>(DEFAULT_GIT_CONFIG);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [cloning, setCloning] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -858,6 +859,22 @@ function GitConfigCard({ projectId }: { projectId: string }) {
       });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleClone = async () => {
+    setCloning(true);
+    try {
+      await apiClient.post(`/api/projects/${encodeURIComponent(projectId)}/clone`, {});
+      toast({ title: "已触发克隆", description: "请稍后刷新页面查看状态" });
+    } catch (err) {
+      toast({
+        title: "克隆触发失败",
+        description: getApiErrorMessage(err),
+        variant: "destructive",
+      });
+    } finally {
+      setCloning(false);
     }
   };
 
@@ -965,17 +982,26 @@ function GitConfigCard({ projectId }: { projectId: string }) {
             </label>
           )}
 
-          <div className="flex items-center justify-end gap-3 pt-2">
+          <div className="flex items-center justify-between gap-3 pt-2">
             <Button
               variant="outline"
-              disabled={!dirty || saving}
-              onClick={() => setForm(initial)}
+              disabled={cloning || !form.repo_url.trim()}
+              onClick={handleClone}
             >
-              重置
+              {cloning ? "克隆中…" : "克隆仓库"}
             </Button>
-            <Button onClick={handleSave} disabled={!dirty || saving}>
-              {saving ? "保存中…" : "保存"}
-            </Button>
+            <div className="flex items-center gap-3">
+              <Button
+                variant="outline"
+                disabled={!dirty || saving}
+                onClick={() => setForm(initial)}
+              >
+                重置
+              </Button>
+              <Button onClick={handleSave} disabled={!dirty || saving}>
+                {saving ? "保存中…" : "保存"}
+              </Button>
+            </div>
           </div>
         </>
       )}

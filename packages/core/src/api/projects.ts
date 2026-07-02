@@ -66,6 +66,9 @@ export interface CreateProjectInput {
   repo_url?: string;
   branch?: string;
   tags?: string[];
+  credential_type?: "ssh_agent" | "ssh_key" | "token";
+  ssh_key_path?: string;
+  access_token?: string;
 }
 
 export interface ProjectRootsResponse {
