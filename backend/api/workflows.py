@@ -6,13 +6,8 @@
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import bindparam, text
 
-from backend.core.dependencies import (
-    check_project_write_permission,
-    get_accessible_project_ids,
-    get_optional_user,
-)
+from backend.core.dependencies import get_optional_user
 from backend.db.engine import async_session_factory
 from backend.models.schemas import (
     ApprovalDecision,
@@ -28,32 +23,45 @@ from backend.services.workflow_service import workflow_service
 router = APIRouter(prefix="/api/workflows", tags=["workflows"])
 
 
-def _ensure_not_viewer(current_user: Optional[dict]) -> None:
-    """写操作权限检查：viewer 角色禁止修改资源。"""
-    if current_user and current_user.get("role") == "viewer":
-        raise HTTPException(status_code=403, detail="Viewers cannot modify resources")
-
-
-async def _check_workflow_project_write(
+async def _check_workflow_write_permission(
     workflow_id: str, current_user: Optional[dict]
 ) -> None:
-    """对绑定了当前用户可见项目的 workflow，逐个检查项目级 viewer 限制。
+    """工作流写操作权限检查。
 
-    如果该 workflow 未绑定任何项目，或未绑定到当前用户所属项目，则仅依赖全局检查。
+    规则：
+    - 未登录（TIDE_REQUIRE_AUTH=0）：放行
+    - viewer 角色：禁止
+    - admin 角色：放行（可管理所有工作流）
+    - member 角色：只能管理自己创建的工作流（created_by 匹配）
+    - created_by 为 NULL 的老数据：只有 admin 能管理
     """
-    if not current_user or current_user.get("role") == "admin":
+    if not current_user:
         return
+
+    role = current_user.get("role", "member")
+
+    if role == "viewer":
+        raise HTTPException(status_code=403, detail="Viewer 角色无权操作工作流")
+
+    if role == "admin":
+        return
+
+    # member 角色：检查是否是自己创建的
+    from sqlalchemy import text
+
     async with async_session_factory() as session:
-        r = await session.execute(
-            text(
-                "SELECT DISTINCT project_id FROM project_settings"
-                " WHERE workflow_id = :wid AND project_id IS NOT NULL"
-            ),
+        result = await session.execute(
+            text("SELECT created_by FROM workflows WHERE id = :wid"),
             {"wid": workflow_id},
         )
-        project_ids = [row[0] for row in r.fetchall() if row[0]]
-    for pid in project_ids:
-        await check_project_write_permission(pid, current_user)
+        row = result.fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+
+    created_by = row[0]
+    if created_by is None or created_by != current_user.get("id"):
+        raise HTTPException(status_code=403, detail="只能管理自己创建的工作流")
 
 
 # ── Workflow definition CRUD ─────────────────────────────
@@ -64,13 +72,16 @@ async def create_workflow(
     body: WorkflowCreate,
     current_user=Depends(get_optional_user),
 ):
-    _ensure_not_viewer(current_user)
+    if current_user and current_user.get("role") == "viewer":
+        raise HTTPException(status_code=403, detail="Viewer 角色无权创建工作流")
+    created_by = current_user.get("id") if current_user else None
     result = await workflow_service.create_workflow(
         workspace_id=body.workspace_id,
         name=body.name,
         description=body.description,
         definition_json=body.definition,
         enabled=body.enabled,
+        created_by=created_by,
     )
     if not result:
         raise HTTPException(status_code=500, detail="Failed to create workflow")
@@ -85,38 +96,10 @@ async def list_workflows(
     enabled: Optional[int] = Query(None),
     current_user=Depends(get_optional_user),
 ):
-    accessible_pids = await get_accessible_project_ids(current_user)
+    # 所有认证用户可查看全部工作流，不做项目成员过滤
     items = await workflow_service.list_workflows(
         workspace_id=workspace_id, limit=limit, offset=offset, enabled=enabled
     )
-    if accessible_pids is not None:
-        # 查询当前用户可访问项目绑定的 workflow_id 集合
-        if not accessible_pids:
-            return []
-        async with async_session_factory() as session:
-            r = await session.execute(
-                text(
-                    "SELECT DISTINCT workflow_id FROM project_settings"
-                    " WHERE project_id IN :pids AND workflow_id IS NOT NULL"
-                ).bindparams(bindparam("pids", expanding=True)),
-                {"pids": list(accessible_pids)},
-            )
-            allowed_wf_ids = {row[0] for row in r.fetchall() if row[0]}
-            # 查询所有已绑定项目的 workflow_id，未绑定任何项目的工作流对所有认证用户可见
-            r2 = await session.execute(
-                text(
-                    "SELECT DISTINCT workflow_id FROM project_settings"
-                    " WHERE workflow_id IS NOT NULL"
-                )
-            )
-            all_bound_wf_ids = {row[0] for row in r2.fetchall() if row[0]}
-        items = [
-            it for it in items
-            if (
-                (wf_id := (it.get("id") if isinstance(it, dict) else getattr(it, "id", None)))
-                and (wf_id in allowed_wf_ids or wf_id not in all_bound_wf_ids)
-            )
-        ]
     return items
 
 
@@ -137,8 +120,7 @@ async def update_workflow(
     body: WorkflowUpdate,
     current_user=Depends(get_optional_user),
 ):
-    _ensure_not_viewer(current_user)
-    await _check_workflow_project_write(workflow_id, current_user)
+    await _check_workflow_write_permission(workflow_id, current_user)
     result = await workflow_service.update_workflow(
         workflow_id=workflow_id,
         name=body.name,
@@ -156,8 +138,7 @@ async def toggle_workflow(
     workflow_id: str,
     current_user=Depends(get_optional_user),
 ):
-    _ensure_not_viewer(current_user)
-    await _check_workflow_project_write(workflow_id, current_user)
+    await _check_workflow_write_permission(workflow_id, current_user)
     result = await workflow_service.toggle_workflow(workflow_id)
     if not result:
         raise HTTPException(status_code=404, detail="Workflow not found")
@@ -169,8 +150,7 @@ async def delete_workflow(
     workflow_id: str,
     current_user=Depends(get_optional_user),
 ):
-    _ensure_not_viewer(current_user)
-    await _check_workflow_project_write(workflow_id, current_user)
+    await _check_workflow_write_permission(workflow_id, current_user)
     ok = await workflow_service.delete_workflow(workflow_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Workflow not found")
@@ -186,8 +166,7 @@ async def run_workflow(
     body: WorkflowRunRequest | None = None,
     current_user=Depends(get_optional_user),
 ):
-    _ensure_not_viewer(current_user)
-    await _check_workflow_project_write(workflow_id, current_user)
+    await _check_workflow_write_permission(workflow_id, current_user)
     body = body or WorkflowRunRequest()
     try:
         run_id = await workflow_engine.start_run(
@@ -233,8 +212,7 @@ async def cancel_run(
     run_id: str,
     current_user=Depends(get_optional_user),
 ):
-    _ensure_not_viewer(current_user)
-    await _check_workflow_project_write(workflow_id, current_user)
+    await _check_workflow_write_permission(workflow_id, current_user)
     detail = await workflow_service.get_run_detail(run_id)
     if not detail or detail.get("workflow_id") != workflow_id:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -253,8 +231,7 @@ async def approve_node(
     body: ApprovalDecision | None = None,
     current_user=Depends(get_optional_user),
 ):
-    _ensure_not_viewer(current_user)
-    await _check_workflow_project_write(workflow_id, current_user)
+    await _check_workflow_write_permission(workflow_id, current_user)
     detail = await workflow_service.get_run_detail(run_id)
     if not detail or detail.get("workflow_id") != workflow_id:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -276,8 +253,7 @@ async def reject_node(
     body: ApprovalDecision | None = None,
     current_user=Depends(get_optional_user),
 ):
-    _ensure_not_viewer(current_user)
-    await _check_workflow_project_write(workflow_id, current_user)
+    await _check_workflow_write_permission(workflow_id, current_user)
     detail = await workflow_service.get_run_detail(run_id)
     if not detail or detail.get("workflow_id") != workflow_id:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -302,8 +278,7 @@ async def resolve_merge_node(
     当 git_merge 节点因冲突进入 waiting_approval 状态后，
     用户手动解决冲突并调用此接口恢复工作流执行。
     """
-    _ensure_not_viewer(current_user)
-    await _check_workflow_project_write(workflow_id, current_user)
+    await _check_workflow_write_permission(workflow_id, current_user)
     detail = await workflow_service.get_run_detail(run_id)
     if not detail or detail.get("workflow_id") != workflow_id:
         raise HTTPException(status_code=404, detail="Run not found")

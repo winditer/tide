@@ -43,6 +43,7 @@ class WorkflowService:
         description: Optional[str],
         definition_json: dict,
         enabled: int = 1,
+        created_by: Optional[str] = None,
     ) -> dict:
         """创建工作流定义。definition_json = React Flow 的 {nodes, edges} JSON。"""
         wf_id = str(uuid.uuid4())
@@ -52,8 +53,8 @@ class WorkflowService:
                 text(
                     """
                     INSERT INTO workflows
-                        (id, workspace_id, name, description, definition, version, enabled, created_at, updated_at)
-                    VALUES (:id, :workspace_id, :name, :description, :definition, 1, :enabled, :created_at, :updated_at)
+                        (id, workspace_id, name, description, definition, version, enabled, created_by, created_at, updated_at)
+                    VALUES (:id, :workspace_id, :name, :description, :definition, 1, :enabled, :created_by, :created_at, :updated_at)
                     """
                 ),
                 {
@@ -63,6 +64,7 @@ class WorkflowService:
                     "description": description,
                     "definition": json.dumps(definition_json or {"nodes": [], "edges": []}),
                     "enabled": int(enabled if enabled is not None else 1),
+                    "created_by": created_by,
                     "created_at": now,
                     "updated_at": now,
                 },
@@ -89,7 +91,7 @@ class WorkflowService:
                 text(
                     f"""
                     SELECT id, workspace_id, name, description, definition, version, enabled,
-                           created_at, updated_at
+                           created_by, created_at, updated_at
                     FROM workflows
                     WHERE {where}
                     ORDER BY updated_at DESC
@@ -112,7 +114,7 @@ class WorkflowService:
                 text(
                     """
                     SELECT id, workspace_id, name, description, definition, version, enabled,
-                           created_at, updated_at
+                           created_by, created_at, updated_at
                     FROM workflows WHERE id = :id
                     """
                 ),

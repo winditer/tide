@@ -1025,12 +1025,37 @@ class QoderAdapter(AgentAdapter):
     timeout_seconds = QODER_TIMEOUT_SECONDS
     valid_model_keys = QODER_VALID_MODEL_KEYS
 
+    def normalize_model(self, model: str) -> str:
+        """Qoder CLI 只接受 tier 名称；'auto' 或无效值不传递给 CLI。
+
+        与 Codex/Claude 不同，Qoder CLI 不接受原始模型名（如 gpt-4o），
+        只接受 tier 名称（如 ultimate, performance）。因此 'auto' 不应被
+        解析为原始模型名，而应留空让 CLI 使用自身环境配置（极致模式）。
+        """
+        if not model:
+            return ""
+        key = model.strip().lower()
+        if key == "auto":
+            # Qoder CLI 使用自身环境配置（极致模式），不传 --model
+            return ""
+        if key in self.valid_model_keys:
+            return key
+        # 无效的模型名 → 不传 --model，避免 CLI 因无法识别而 fallback
+        logger.warning(
+            "[qoder] normalize_model: invalid model %r, clearing. Valid keys: %s",
+            model, ", ".join(sorted(self.valid_model_keys)),
+        )
+        return ""
+
     def build_command(self, task: CodexTaskRuntime, last_message_file: Optional[Path] = None) -> list[str]:
         argv = [QODER_BIN, "--print", "--output-format", "stream-json", "--cwd", str(task.cwd)]
-        if not task.model:
-            pass  # model 为 None 或空字符串时不传 --model，让 CLI 使用自身配置
-        else:
-            argv.extend(["--model", task.model])
+        # 最终校验：只有有效的 qoder tier 名称才传 --model
+        model = (task.model or "").strip().lower()
+        if model and model != "auto" and model in QODER_VALID_MODEL_KEYS:
+            argv.extend(["--model", model])
+        elif model and model not in QODER_VALID_MODEL_KEYS:
+            # 兜底：如果上游传了无效模型名（如 "gpt-4o"），不传给 CLI
+            logger.warning("[qoder] build_command: skipping invalid model %r", task.model)
         permission_mode = normalize_qoder_permission_mode(task.permission_mode or QODER_PERMISSION_MODE, "QODER_PERMISSION_MODE")
         if permission_mode:
             argv.extend(["--permission-mode", permission_mode])

@@ -157,6 +157,7 @@ CREATE TABLE IF NOT EXISTS workflows (
     definition TEXT NOT NULL,
     version INTEGER DEFAULT 1,
     enabled INTEGER DEFAULT 1,
+    created_by TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

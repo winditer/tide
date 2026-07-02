@@ -1084,7 +1084,7 @@ class WorkItemService:
 
             data = node.get("data", {})
             agent_id = data.get("agentId") or data.get("agent_id") or "codex"
-            model = data.get("model") or ""
+            model = data.get("model") or None
             prompt_template = data.get("promptTemplate") or data.get("prompt") or ""
 
             # 专家团解析：若节点配置了 expert_team_id，覆盖 agent_id、合并 skills、注入角色提示词
@@ -1278,7 +1278,7 @@ class WorkItemService:
 
             data = node.get("data", {})
             agent_id = data.get("agentId") or data.get("agent_id") or "codex"
-            model = data.get("model") or ""
+            model = data.get("model") or None
             prompt_template = data.get("promptTemplate") or data.get("prompt") or ""
 
             # 专家团解析：若节点配置了 expert_team_id，覆盖 agent_id、合并 skills、注入角色提示词

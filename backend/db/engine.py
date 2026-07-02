@@ -263,4 +263,10 @@ async def init_db():
         if et_columns and "model" not in et_columns:
             await db.execute("ALTER TABLE expert_teams ADD COLUMN model TEXT")
 
+        # workflows 表补列 created_by（工作流权限模型）
+        cursor = await db.execute("PRAGMA table_info(workflows)")
+        wf_columns = {row[1] for row in await cursor.fetchall()}
+        if wf_columns and "created_by" not in wf_columns:
+            await db.execute("ALTER TABLE workflows ADD COLUMN created_by TEXT")
+
         await db.commit()

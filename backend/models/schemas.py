@@ -257,6 +257,7 @@ class WorkflowResponse(BaseModel):
     definition: dict = {}
     version: int = 1
     enabled: int = 1
+    created_by: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

@@ -124,9 +124,16 @@ class AgentExecutor:
         6. 若 agent_id 以 ``a2a:`` 为前缀，路由到 :class:`A2AAdapter` 远程执行。
         """
         # ── 解析 "auto" 模型：避免将字面量 "auto" 传给 LLM API 网关 ──
+        # 注意：Qoder CLI 不接受原始模型名（如 gpt-4o），"auto" 应清空让 CLI 使用自身配置
         if model and model.strip().lower() == "auto":
-            model = resolve_auto_model(model)
-            logger.info("[executor] task=%s resolved model 'auto' → %r", task_id, model)
+            adapter_for_model = AGENT_ADAPTERS.get(agent_id) or AGENT_ADAPTERS["codex"]
+            if adapter_for_model.id == "qoder":
+                # Qoder CLI 使用自身环境配置（极致模式），不传 --model
+                model = ""
+                logger.info("[executor] task=%s agent=qoder, clearing 'auto' model (CLI uses own config)", task_id)
+            else:
+                model = resolve_auto_model(model)
+                logger.info("[executor] task=%s resolved model 'auto' → %r", task_id, model)
         # ── A2A 远程 Agent 路由 ──
         if agent_id and agent_id.startswith("a2a:"):
             async for ev in self._run_remote_a2a(
