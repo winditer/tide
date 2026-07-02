@@ -13,6 +13,7 @@ import {
   Sparkles,
   Scale,
   Webhook,
+  BrainCircuit,
   type LucideIcon,
 } from "lucide-react";
 
@@ -51,6 +52,12 @@ const ITEMS: SettingItem[] = [
     label: "规则引擎",
     description: "管理代码规范约束规则",
     icon: Scale,
+  },
+  {
+    href: "/settings/expert-teams",
+    label: "专家团",
+    description: "管理领域专家配置",
+    icon: BrainCircuit,
   },
   {
     href: "/settings/hooks",

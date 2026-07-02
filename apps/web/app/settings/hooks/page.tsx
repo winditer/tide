@@ -16,6 +16,7 @@ import {
   toast,
 } from "@tide/ui";
 import { apiClient } from "@tide/core";
+import { ProjectScopeSelector } from "@tide/views/components/project-scope-selector";
 import {
   ArrowLeft,
   PenLine,
@@ -86,12 +87,14 @@ export default function HooksPage() {
   const [eventFilter, setEventFilter] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Hook | null>(null);
+  const [projectId, setProjectId] = useState<string | null>(null);
 
   const fetchHooks = async () => {
     setLoading(true);
     try {
       const params = new URLSearchParams({ workspace_id: "default" });
       if (eventFilter) params.set("event", eventFilter);
+      if (projectId) params.set("project_id", projectId);
       const data = await apiClient.get<Hook[] | { hooks?: Hook[] }>(`/api/hooks?${params}`);
       setHooks(Array.isArray(data) ? data : data.hooks ?? []);
     } catch {
@@ -104,7 +107,7 @@ export default function HooksPage() {
   useEffect(() => {
     fetchHooks();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [eventFilter]);
+  }, [eventFilter, projectId]);
 
   const handleDelete = async (id: string) => {
     if (!confirm("确定要删除这个 Hook 吗？")) return;
@@ -119,10 +122,11 @@ export default function HooksPage() {
 
   const handleSave = async (data: Omit<Hook, "id" | "created_at" | "enabled">) => {
     try {
+      const body = { ...data };
       if (editing) {
-        await apiClient.put<Hook>(`/api/hooks/${editing.id}`, data);
+        await apiClient.put<Hook>(`/api/hooks/${editing.id}`, body);
       } else {
-        await apiClient.post<Hook>("/api/hooks", data);
+        await apiClient.post<Hook>("/api/hooks", body);
       }
       toast({ title: editing ? "已更新" : "已创建" });
       setDialogOpen(false);
@@ -171,13 +175,20 @@ export default function HooksPage() {
 
       {/* Filter */}
       <div className="bg-card rounded-xl shadow-card border border-border/50 p-3">
-        <div className="flex items-center gap-3">
-          <label className="text-sm font-medium text-muted-foreground whitespace-nowrap">事件筛选</label>
-          <Select
-            value={eventFilter}
-            onChange={(e) => setEventFilter(e.target.value)}
-            options={EVENT_OPTIONS}
-            className="max-w-xs rounded-lg border-border/50"
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          <div className="flex items-center gap-3">
+            <label className="text-sm font-medium text-muted-foreground whitespace-nowrap">事件筛选</label>
+            <Select
+              value={eventFilter}
+              onChange={(e) => setEventFilter(e.target.value)}
+              options={EVENT_OPTIONS}
+              className="max-w-xs rounded-lg border-border/50"
+            />
+          </div>
+          <ProjectScopeSelector
+            value={projectId}
+            onChange={(v) => setProjectId(v)}
+            className="w-full sm:w-56"
           />
         </div>
       </div>
@@ -309,8 +320,21 @@ function HookDialog({
   const [skillSlug, setSkillSlug] = useState("");
   const [conditions, setConditions] = useState("");
   const [priority, setPriority] = useState(0);
+  const [dialogProjectId, setDialogProjectId] = useState<string>("");
+  const [projects, setProjects] = useState<{ id: string; name: string; cwd?: string }[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Fetch projects for scope selector
+  useEffect(() => {
+    apiClient
+      .get<{ projects?: { id: string; name: string; cwd?: string }[] }>("/api/projects")
+      .then((data) => {
+        const list = data?.projects ?? [];
+        setProjects(Array.isArray(list) ? list : []);
+      })
+      .catch(() => setProjects([]));
+  }, []);
 
   useEffect(() => {
     if (open) {
@@ -326,6 +350,7 @@ function HookDialog({
         setSkillSlug((cfg.skill_slug as string) ?? "");
         setConditions(hook.conditions ? JSON.stringify(hook.conditions, null, 2) : "");
         setPriority(hook.priority ?? 0);
+        setDialogProjectId((hook as any).project_id ?? "");
       } else {
         setName("");
         setEvent("task.completed");
@@ -337,6 +362,7 @@ function HookDialog({
         setSkillSlug("");
         setConditions("");
         setPriority(0);
+        setDialogProjectId("");
       }
       setError(null);
     }
@@ -380,7 +406,8 @@ function HookDialog({
       action_config,
       conditions: parsedConditions,
       priority,
-    });
+      ...(dialogProjectId ? { project_id: dialogProjectId } : {}),
+    } as any);
     setSaving(false);
   };
 
@@ -403,6 +430,21 @@ function HookDialog({
               onChange={(e) => setName(e.target.value)}
               className="rounded-lg border-border/50"
             />
+          </Field>
+
+          <Field label="作用域">
+            <select
+              className="w-full border rounded-md px-3 py-2 text-sm bg-background"
+              value={dialogProjectId}
+              onChange={(e) => setDialogProjectId(e.target.value)}
+            >
+              <option value="">全局</option>
+              {projects.map((p) => (
+                <option key={p.id || p.cwd} value={p.id || p.cwd}>
+                  {p.name || p.cwd}
+                </option>
+              ))}
+            </select>
           </Field>
 
           <div className="grid grid-cols-2 gap-3">

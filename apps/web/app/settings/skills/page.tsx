@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Badge,
@@ -16,6 +16,7 @@ import {
 } from "@tide/ui";
 import { apiClient, useAuth } from "@tide/core";
 import { SimpleMarkdown } from "@tide/views/shared/SimpleMarkdown";
+import { ProjectScopeSelector } from "@tide/views/components/project-scope-selector";
 import {
   ArrowLeft,
   ChevronLeft,
@@ -90,6 +91,7 @@ export default function SettingsSkillsPage() {
   const [skills, setSkills] = useState<Skill[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [projectId, setProjectId] = useState<string | null>(null);
 
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -118,6 +120,7 @@ export default function SettingsSkillsPage() {
     try {
       const params = new URLSearchParams({ workspace_id: "default" });
       if (category) params.set("category", category);
+      if (projectId) params.set("project_id", projectId);
       const data = await apiClient.get<Skill[]>(`/api/skills?${params}`);
       setSkills(Array.isArray(data) ? data : []);
     } catch (e: any) {
@@ -129,7 +132,7 @@ export default function SettingsSkillsPage() {
 
   useEffect(() => {
     if (hydrated) fetchSkills();
-  }, [hydrated, category]);
+  }, [hydrated, category, projectId]);
 
   // Filter by search
   const filtered = useMemo(() => {
@@ -181,6 +184,7 @@ export default function SettingsSkillsPage() {
     category: string;
     tags: string;
     content: string;
+    project_id?: string | null;
   }) => {
     setSaving(true);
     try {
@@ -196,6 +200,7 @@ export default function SettingsSkillsPage() {
           .filter(Boolean),
         content: data.content,
       };
+      if (data.project_id) body.project_id = data.project_id;
       if (editing) {
         await apiClient.put<Skill>(`/api/skills/${editing.id}?workspace_id=default`, body);
       } else {
@@ -273,6 +278,11 @@ export default function SettingsSkillsPage() {
             className="w-full sm:w-48"
             options={CATEGORY_OPTIONS}
           />
+          <ProjectScopeSelector
+            value={projectId}
+            onChange={(v) => { setProjectId(v); setPage(1); }}
+            className="w-full sm:w-56"
+          />
         </div>
       </div>
 
@@ -343,7 +353,14 @@ export default function SettingsSkillsPage() {
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <Badge variant="outline">{skill.source || "custom"}</Badge>
+                      <div className="flex items-center gap-1.5">
+                        <Badge variant="outline">{skill.source || "custom"}</Badge>
+                        {(skill as any).project_id ? (
+                          <span className="inline-flex rounded-md bg-blue-500/15 text-blue-600 border border-blue-500/30 px-1.5 py-0.5 text-[10px] font-medium">项目</span>
+                        ) : (
+                          <span className="inline-flex rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">全局</span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
                       v{skill.version}
@@ -480,6 +497,7 @@ function SkillDialog({
     category: string;
     tags: string;
     content: string;
+    project_id?: string | null;
   }) => void;
 }) {
   const [name, setName] = useState("");
@@ -488,8 +506,10 @@ function SkillDialog({
   const [cat, setCat] = useState("general");
   const [tags, setTags] = useState("");
   const [content, setContent] = useState("");
+  const [dialogProjectId, setDialogProjectId] = useState<string | null>(null);
   const [slugManual, setSlugManual] = useState(false);
-  const [preview, setPreview] = useState(false);
+  const [preview, setPreview] = useState(true);
+  const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (open) {
@@ -500,6 +520,7 @@ function SkillDialog({
         setCat(skill.category || "general");
         setTags(skill.tags.join(", "));
         setContent(skill.content);
+        setDialogProjectId((skill as any).project_id || null);
         setSlugManual(true);
         setPreview(true);
       } else {
@@ -509,11 +530,54 @@ function SkillDialog({
         setCat("general");
         setTags("");
         setContent("");
+        setDialogProjectId(null);
         setSlugManual(false);
         setPreview(false);
       }
     }
   }, [open, skill]);
+
+  // Cleanup auto-save timer on unmount
+  useEffect(() => {
+    return () => {
+      if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
+    };
+  }, []);
+
+  // Auto-save: debounce content changes (only for existing skills)
+  const scheduleAutoSave = useCallback(
+    (newContent: string) => {
+      if (!skill) return;
+      if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
+      autoSaveTimer.current = setTimeout(() => {
+        onSave({
+          name,
+          slug: slug || slugify(name),
+          description,
+          category: cat,
+          tags,
+          content: newContent,
+          project_id: dialogProjectId,
+        });
+      }, 1500);
+    },
+    [skill, name, slug, description, cat, tags, dialogProjectId, onSave]
+  );
+
+  // Auto-save on blur (only for existing skills)
+  const handleContentBlur = useCallback(() => {
+    if (!skill || !content.trim()) return;
+    if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
+    onSave({
+      name,
+      slug: slug || slugify(name),
+      description,
+      category: cat,
+      tags,
+      content,
+      project_id: dialogProjectId,
+    });
+  }, [skill, name, slug, description, cat, tags, content, dialogProjectId, onSave]);
 
   useEffect(() => {
     if (!slugManual && name) {
@@ -527,12 +591,12 @@ function SkillDialog({
       toast({ title: "请填写必填字段", variant: "destructive" });
       return;
     }
-    onSave({ name, slug: slug || slugify(name), description, category: cat, tags, content });
+    onSave({ name, slug: slug || slugify(name), description, category: cat, tags, content, project_id: dialogProjectId });
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto overflow-x-hidden">
+      <DialogContent className="w-[90vw] max-w-4xl max-h-[90vh] overflow-y-auto overflow-x-hidden">
         <DialogHeader>
           <DialogTitle>{skill ? "编辑技能" : "新建技能"}</DialogTitle>
         </DialogHeader>
@@ -588,6 +652,14 @@ function SkillDialog({
             </div>
           </div>
           <div className="space-y-1.5">
+            <label className="text-sm font-medium">作用域</label>
+            <ProjectScopeSelector
+              value={dialogProjectId}
+              onChange={(v) => setDialogProjectId(v)}
+              className="w-full"
+            />
+          </div>
+          <div className="space-y-1.5">
             <div className="flex items-center justify-between">
               <label className="text-sm font-medium">内容 (Markdown) *</label>
               {content && (
@@ -607,7 +679,11 @@ function SkillDialog({
             ) : (
               <textarea
                 value={content}
-                onChange={(e) => setContent(e.target.value)}
+                onChange={(e) => {
+                  setContent(e.target.value);
+                  scheduleAutoSave(e.target.value);
+                }}
+                onBlur={handleContentBlur}
                 placeholder="在此输入技能指南内容（支持 Markdown）…"
                 rows={14}
                 className="w-full rounded-lg border border-border/50 bg-background px-3 py-2 text-sm font-mono placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring resize-y min-h-[200px]"

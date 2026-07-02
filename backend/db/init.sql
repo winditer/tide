@@ -115,9 +115,7 @@ CREATE TABLE IF NOT EXISTS approvals (
 );
 CREATE INDEX IF NOT EXISTS idx_approvals_task ON approvals(task_id);
 CREATE INDEX IF NOT EXISTS idx_approvals_workspace_status ON approvals(workspace_id, status);
--- 防止同一 task+plan+type 组合重复创建 pending 审批
-CREATE UNIQUE INDEX IF NOT EXISTS idx_approvals_unique_pending
-    ON approvals(task_id, COALESCE(plan_id, ''), type) WHERE status = 'pending';
+-- idx_approvals_unique_pending 在 engine.py 迁移后创建（兼容旧表缺少 plan_id/type 列）
 
 -- schedules 定时任务
 CREATE TABLE IF NOT EXISTS schedules (
@@ -386,12 +384,14 @@ CREATE TABLE IF NOT EXISTS skills (
     version INTEGER DEFAULT 1,
     enabled INTEGER DEFAULT 1,
     source TEXT DEFAULT 'custom',
+    project_id TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(workspace_id, slug)
 );
 CREATE INDEX IF NOT EXISTS idx_skills_workspace ON skills(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_skills_category ON skills(workspace_id, category);
+-- idx_skills_project / idx_skills_project_category 在 engine.py 迁移后创建（兼容旧表缺少 project_id 列）
 
 -- ============================================================
 -- Rules 规则引擎
@@ -413,6 +413,7 @@ CREATE TABLE IF NOT EXISTS rules (
 );
 CREATE INDEX IF NOT EXISTS idx_rules_workspace ON rules(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_rules_scope ON rules(workspace_id, scope);
+-- idx_rules_scope_project 在 engine.py 迁移后创建（兼容旧表缺少 project_id 列）
 
 -- ============================================================
 -- Hooks 事件驱动
@@ -426,12 +427,14 @@ CREATE TABLE IF NOT EXISTS hooks (
     action_type TEXT NOT NULL,
     action_config TEXT NOT NULL,
     conditions TEXT,
+    project_id TEXT,
     priority INTEGER DEFAULT 0,
     enabled INTEGER DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_hooks_event ON hooks(workspace_id, event);
+-- idx_hooks_project_event 在 engine.py 迁移后创建（兼容旧表缺少 project_id 列）
 
 -- ============================================================
 -- Security 安全审查
@@ -446,11 +449,13 @@ CREATE TABLE IF NOT EXISTS security_rules (
     severity TEXT DEFAULT 'medium',
     description TEXT,
     remediation TEXT,
+    project_id TEXT,
     enabled INTEGER DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_security_rules_workspace ON security_rules(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_security_rules_category ON security_rules(workspace_id, category);
+-- idx_security_rules_project 在 engine.py 迁移后创建（兼容旧表缺少 project_id 列）
 
 CREATE TABLE IF NOT EXISTS security_findings (
     id TEXT PRIMARY KEY,
@@ -463,6 +468,7 @@ CREATE TABLE IF NOT EXISTS security_findings (
     location TEXT,
     description TEXT,
     remediation TEXT,
+    project_id TEXT,
     status TEXT DEFAULT 'open',
     dismissed_by TEXT,
     dismissed_at TIMESTAMP,
@@ -470,6 +476,7 @@ CREATE TABLE IF NOT EXISTS security_findings (
 );
 CREATE INDEX IF NOT EXISTS idx_security_findings_task ON security_findings(task_id);
 CREATE INDEX IF NOT EXISTS idx_security_findings_workspace ON security_findings(workspace_id, status);
+-- idx_security_findings_project 在 engine.py 迁移后创建（兼容旧表缺少 project_id 列）
 
 -- ============================================================
 -- 项目组（Project Groups）
@@ -511,3 +518,25 @@ CREATE TABLE IF NOT EXISTS project_group_user_members (
 );
 CREATE INDEX IF NOT EXISTS idx_pgum_user ON project_group_user_members(user_id);
 CREATE INDEX IF NOT EXISTS idx_pgum_group ON project_group_user_members(group_id);
+
+-- ============================================================
+-- Expert Teams 专家团队
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS expert_teams (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL DEFAULT 'default',
+    project_id TEXT,
+    name TEXT NOT NULL,
+    slug TEXT NOT NULL,
+    description TEXT,
+    agent_id TEXT NOT NULL,
+    model TEXT,
+    skill_slugs TEXT DEFAULT '[]',
+    role_prompt TEXT,
+    enabled INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(workspace_id, slug)
+);
+CREATE INDEX IF NOT EXISTS idx_expert_teams_project ON expert_teams(workspace_id, project_id);

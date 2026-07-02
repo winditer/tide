@@ -5,6 +5,7 @@
 
 import json
 import logging
+import subprocess
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,6 +30,7 @@ from backend.models.schemas import (
 )
 from backend.services.ai_decompose_service import ai_decompose_service
 from backend.services.work_item_service import work_item_service
+from backend.db.engine import async_session_factory
 
 logger = logging.getLogger("tide.api.work_items")
 
@@ -434,6 +436,21 @@ async def get_artifact_content(
 
     project_id = item.get("project_id") or ""
     project_path = await work_item_service._get_project_path(project_id)
+
+    # 项目组场景：产物可能来自不同子项目，优先从关联 task 的 cwd 定位 project root
+    task_id = target.get("task_id") or ""
+    if task_id:
+        async with async_session_factory() as session:
+            from sqlalchemy import text
+            task_row = (await session.execute(
+                text("SELECT cwd FROM tasks WHERE id = :id"),
+                {"id": task_id},
+            )).fetchone()
+            if task_row:
+                task_cwd = dict(task_row._mapping).get("cwd", "")
+                if task_cwd and Path(task_cwd).is_dir():
+                    project_path = task_cwd
+
     if not project_path:
         raise HTTPException(status_code=404, detail="Project path not found")
 
@@ -457,7 +474,74 @@ async def get_artifact_content(
             raise HTTPException(status_code=403, detail="Path traversal forbidden")
 
     if not target_path.exists() or not target_path.is_file():
-        raise HTTPException(status_code=404, detail="File not found")
+        # 文件不在磁盘上（worktree 已清理），尝试从 git 对象读取
+        commit_hash = (target.get("commit_hash") or "").strip()
+
+        # 用相对路径从 git show 读取
+        rel_path = file_path
+        if Path(file_path).is_absolute():
+            try:
+                rel_path = str(Path(file_path).relative_to(project_root))
+            except ValueError:
+                raise HTTPException(status_code=404, detail="File not found")
+
+        # 构建候选路径列表（worktree 前缀路径 → 去除前缀后的纯相对路径）
+        import re as _re
+        git_ref_paths = [rel_path]
+        wt_prefix_match = _re.match(r"\.tide/worktrees/[^/]+/(.+)", rel_path)
+        if wt_prefix_match:
+            git_ref_paths.insert(0, wt_prefix_match.group(1))
+
+        # 如果没有 commit_hash，尝试从 git log 查找包含该文件的最新 commit
+        if not commit_hash:
+            for ref_path in git_ref_paths:
+                try:
+                    log_result = subprocess.run(
+                        ["git", "log", "--all", "-1", "--pretty=format:%H", "--", ref_path],
+                        capture_output=True, timeout=10,
+                        cwd=str(project_root),
+                    )
+                    if log_result.returncode == 0 and log_result.stdout.strip():
+                        commit_hash = log_result.stdout.strip().decode()
+                        break
+                except Exception:
+                    continue
+
+        if not commit_hash:
+            raise HTTPException(status_code=404, detail="File not found and cannot locate in git history")
+
+        content: Optional[bytes] = None
+        for ref_path in git_ref_paths:
+            try:
+                result = subprocess.run(
+                    ["git", "show", f"{commit_hash}:{ref_path}"],
+                    capture_output=True, timeout=10,
+                    cwd=str(project_root),
+                )
+                if result.returncode == 0:
+                    content = result.stdout
+                    break
+            except Exception:
+                continue
+
+        if content is None:
+            raise HTTPException(status_code=404, detail="File not found on disk or in git history")
+
+        suffix = Path(file_path).suffix.lower()
+        content_type = TEXT_CONTENT_TYPES.get(suffix)
+        if content_type:
+            try:
+                text = content.decode("utf-8")
+            except UnicodeDecodeError:
+                text = content.decode("utf-8", errors="replace")
+            return PlainTextResponse(content=text, media_type=content_type)
+
+        from fastapi.responses import Response
+        return Response(
+            content=content,
+            media_type="application/octet-stream",
+            headers={"Content-Disposition": f'attachment; filename="{Path(file_path).name}"'},
+        )
 
     suffix = target_path.suffix.lower()
     content_type = TEXT_CONTENT_TYPES.get(suffix)
@@ -602,8 +686,13 @@ async def ai_decompose_work_items(
         logger.warning("[ai-decompose] LLM 调用失败: %s", exc)
         raise HTTPException(status_code=502, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
-        logger.exception("[ai-decompose] 未预期错误")
-        raise HTTPException(status_code=500, detail=f"AI decompose failed: {exc}")
+        logger.exception(
+            "[ai-decompose] 内部错误: %s, result_type=%s, result_preview=%s",
+            exc,
+            type(result).__name__ if 'result' in dir() else 'undefined',
+            repr(result)[:200] if 'result' in dir() and result is not None else 'N/A',
+        )
+        raise HTTPException(status_code=500, detail=f"内部错误：{type(exc).__name__}: {str(exc)}")
 
     return {
         "items": result.get("items", []),

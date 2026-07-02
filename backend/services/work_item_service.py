@@ -35,6 +35,49 @@ AUTO_EXEC_PREFIX = (
     "如果需要生成文件，直接生成；如果需要修改代码，直接修改。\n\n"
 )
 
+
+def _title_slug(title: str, max_words: int = 6) -> str:
+    """从工作项标题中提取简短英文 slug，用于文件命名。
+
+    策略：提取标题中的英文单词（含数字），小写，连字符连接，最多 max_words 个词。
+    如果没有英文单词，则对中文标题取前 20 字符做 safe 处理。
+    """
+    import re
+    # 提取英文单词和数字
+    words = re.findall(r"[a-zA-Z][a-zA-Z0-9]*", title)
+    if words:
+        slug = "-".join(w.lower() for w in words[:max_words])
+    else:
+        # 纯中文标题：取前20字符
+        slug = title[:20].strip()
+    # 替换文件名不安全字符（保留字母、数字、连字符、中文）
+    slug = re.sub(r"[^\w\-]", "-", slug).strip("-")
+    slug = re.sub(r"-{2,}", "-", slug)
+    return slug or "doc"
+
+
+def _doc_naming_instruction(item_id: str, title: str = "", project_name: str = "") -> str:
+    """生成文档命名规范指令，确保产物文件名带工作项 ID + 标题摘要前缀。
+
+    当 project_name 非空时（多项目组场景），文件名中加入项目名以区分不同项目的产物。
+    """
+    slug = _title_slug(title) if title else ""
+    prefix = f"wi-{item_id[:8]}"
+    if slug:
+        prefix = f"{prefix}-{slug}"
+    if project_name:
+        full_prefix = f"{prefix}-{project_name}"
+        return (
+            f"\n\n【文档命名规范】生成的所有文档文件（如技术方案、测试报告、修改点等）"
+            f"必须以 `{full_prefix}-` 作为文件名前缀。"
+            f"例如：`{full_prefix}-技术方案.md`、`{full_prefix}-测试报告.md`、`{full_prefix}-修改点.md`。\n"
+        )
+    return (
+        f"\n\n【文档命名规范】生成的所有文档文件（如技术方案、测试报告、修改点等）"
+        f"必须以 `{prefix}-` 作为文件名前缀。"
+        f"例如：`{prefix}-技术方案.md`、`{prefix}-测试报告.md`、`{prefix}-修改点.md`。\n"
+    )
+
 from backend.db.engine import async_session_factory
 from backend.services.ws_hub import ws_hub
 
@@ -1103,8 +1146,8 @@ class WorkItemService:
                 if item.get("description"):
                     prompt += f"\n\n{item['description']}"
 
-            # 添加自动执行系统指令前缀
-            prompt = AUTO_EXEC_PREFIX + prompt
+            # 添加自动执行系统指令前缀 + 文档命名规范
+            prompt = AUTO_EXEC_PREFIX + prompt + _doc_naming_instruction(item["id"], title=item.get("title", ""))
 
             # 创建 task
             task = await task_service.create_task(
@@ -1338,8 +1381,8 @@ class WorkItemService:
                     f"你现在在 `{project_name}` 仓库（{project_cwd}）中工作。\n"
                     f"请只修改本仓库相关的代码。如果此需求不涉及本仓库，请输出'无需修改'并结束。"
                 )
-                # 添加自动执行系统指令前缀
-                task_prompt = AUTO_EXEC_PREFIX + task_prompt
+                # 添加自动执行系统指令前缀 + 文档命名规范
+                task_prompt = AUTO_EXEC_PREFIX + task_prompt + _doc_naming_instruction(item["id"], title=item.get("title", ""), project_name=project_name)
 
                 plan_task_def = {
                     "title": f"[{project_name}] {item['title'][:50]}",
@@ -1559,6 +1602,9 @@ class WorkItemService:
 
         穿透 condition、approval、stage 等中间节点，
         直到找到第一个有 output 的 agent 节点。
+
+        优先返回 agent_final_output（精炼的业务摘要），
+        降级返回 output（完整日志，仅作兜底）。
         """
         edges = definition.get("edges", [])
         nodes = {n["id"]: n for n in definition.get("nodes", [])}
@@ -1583,8 +1629,11 @@ class WorkItemService:
                 # 如果是 agent 节点且有输出，返回
                 if upstream_node.get("type") == "agent":
                     node_ctx = context.get(uid)
-                    if isinstance(node_ctx, dict) and node_ctx.get("output"):
-                        return node_ctx["output"]
+                    if isinstance(node_ctx, dict):
+                        # 优先使用 agent_final_output（精炼摘要），降级使用 output
+                        final_out = node_ctx.get("agent_final_output") or node_ctx.get("output")
+                        if final_out:
+                            return final_out
 
                 # 否则继续向上游探索（穿透 condition、approval、stage 等节点）
                 queue.append(uid)
@@ -1796,7 +1845,10 @@ class WorkItemService:
         return version_branch_name(result[0])
 
     async def _trigger_git_merge_node(self, item: dict, node: dict):
-        """处理 git_merge 节点：将工作项所有相关分支（含 Plan 子任务分支）合入目标分支。"""
+        """处理 git_merge 节点：将工作项所有相关分支（含 Plan 子任务分支）合入目标分支。
+        
+        项目组场景下，会按项目分组分别执行合并。
+        """
         logger.info(
             "[WorkItem] _trigger_git_merge_node called: item=%s node=%s",
             item.get("id", "?"), node.get("id", "?"),
@@ -1816,8 +1868,8 @@ class WorkItemService:
         delete_source = data.get("deleteSource", True)  # 工作项场景默认删除源分支
         on_conflict = data.get("onConflict", "fail")
 
-        # 1. 收集工作项下所有相关分支（工作项分支 + Plan 子任务分支）
-        # branch_records: list of {"branch": str, "worktree_path": str, "type": "work_item" | "plan_task"}
+        # 1. 收集工作项下所有相关分支（工作项分支 + Plan 子任务分支），含 cwd 信息
+        # branch_records: list of {"branch": str, "worktree_path": str, "type": str, "cwd": str}
         branch_records: list[dict] = []
         seen_branches: set[str] = set()
 
@@ -1825,7 +1877,7 @@ class WorkItemService:
             # 1a. 获取工作项自身的分支
             wi_rows = await session.execute(
                 text("""
-                    SELECT DISTINCT t.branch_name, t.worktree_path
+                    SELECT DISTINCT t.branch_name, t.worktree_path, t.cwd
                     FROM work_item_transitions wit
                     JOIN tasks t ON t.id = wit.task_id
                     WHERE wit.work_item_id = :item_id
@@ -1838,14 +1890,15 @@ class WorkItemService:
             for row in wi_rows.fetchall():
                 branch = row[0] or ""
                 wt = row[1] or ""
+                cwd = row[2] or ""
                 if branch and branch not in seen_branches:
                     seen_branches.add(branch)
-                    branch_records.append({"branch": branch, "worktree_path": wt, "type": "work_item"})
+                    branch_records.append({"branch": branch, "worktree_path": wt, "type": "work_item", "cwd": cwd})
 
             # 1b. 获取 Plan 子任务的分支
             plan_rows = await session.execute(
                 text("""
-                    SELECT DISTINCT t2.branch_name, t2.worktree_path
+                    SELECT DISTINCT t2.branch_name, t2.worktree_path, t2.cwd
                     FROM work_item_transitions wit
                     JOIN tasks t ON t.id = wit.task_id
                     JOIN plan_tasks pt ON pt.plan_id = t.plan_id
@@ -1861,9 +1914,19 @@ class WorkItemService:
             for row in plan_rows.fetchall():
                 branch = row[0] or ""
                 wt = row[1] or ""
+                cwd = row[2] or ""
                 if branch and branch not in seen_branches:
                     seen_branches.add(branch)
-                    branch_records.append({"branch": branch, "worktree_path": wt, "type": "plan_task"})
+                    branch_records.append({"branch": branch, "worktree_path": wt, "type": "plan_task", "cwd": cwd})
+
+        # 2. 获取主项目路径（用于 fallback）
+        from backend.runtime.git_utils import git_repo_root, git_merge_branch, cleanup_work_item_worktree, cleanup_plan_worktree, find_worktree_for_branch
+
+        primary_cwd = await self._get_project_path(item["project_id"])
+        if not primary_cwd:
+            logger.error("[work_item] git_merge: cannot resolve project path for project_id=%s, skip merge", item.get("project_id"))
+            await self._advance_past_node(item, node)
+            return
 
         # Fallback：如果找不到任何分支
         if not branch_records:
@@ -1871,7 +1934,7 @@ class WorkItemService:
             if not fallback_branch:
                 fallback_branch = work_item_branch_name(item["id"])
                 logger.info("[work_item] git_merge node: no branches found, using work item branch as source: %s", fallback_branch)
-            branch_records.append({"branch": fallback_branch, "worktree_path": "", "type": "work_item"})
+            branch_records.append({"branch": fallback_branch, "worktree_path": "", "type": "work_item", "cwd": primary_cwd})
 
         # 排除与目标分支相同的分支（no-op）
         branch_records = [r for r in branch_records if r["branch"] != target_branch]
@@ -1880,138 +1943,161 @@ class WorkItemService:
             await self._advance_past_node(item, node)
             return
 
-        logger.info(
-            "[work_item] git_merge: item=%s target=%s branches_to_merge=%s",
-            item["id"], target_branch, [r["branch"] for r in branch_records],
-        )
-
-        # 2. 获取 repo root
-        from backend.runtime.git_utils import git_repo_root, git_merge_branch, cleanup_work_item_worktree, cleanup_plan_worktree, find_worktree_for_branch
-
-        project_cwd = await self._get_project_path(item["project_id"])
-        if not project_cwd:
-            logger.error("[work_item] git_merge: cannot resolve project path for project_id=%s, skip merge", item.get("project_id"))
-            await self._advance_past_node(item, node)
-            return
-        cwd = project_cwd
-        repo_root = await git_repo_root(Path(cwd))
-
-        if repo_root is None:
-            logger.error("[work_item] git_merge: not a git repo: %s", cwd)
-            await self._advance_past_node(item, node)
-            return
-
-        # 2.5 检查 target_branch 是否被 worktree 占用
-        merge_root = repo_root
-        wt_path = await find_worktree_for_branch(repo_root, target_branch)
-        if wt_path:
-            logger.info(
-                "[work_item] git_merge: target_branch '%s' is in worktree at '%s', will merge there",
-                target_branch, wt_path,
-            )
-            merge_root = Path(wt_path)
-
-        # 3. 逐一合并所有分支
-        merged_results: list[dict] = []  # {"branch": str, "type": str, "success": bool, "output": str, "conflicts": list}
-        all_success = True
-        should_abort = False
+        # 3. 按项目 repo 分组分支
+        # 使用 git_repo_root 来确定每个分支所属的 repo
+        repo_branch_map: dict[str, list[dict]] = {}  # repo_root_str -> [branch_records]
 
         for record in branch_records:
-            if should_abort:
-                merged_results.append({
-                    "branch": record["branch"],
-                    "type": record["type"],
-                    "success": False,
-                    "output": "skipped due to previous conflict (on_conflict=manual)",
-                    "conflicts": [],
-                })
-                continue
-
-            source_branch = record["branch"]
-            success, output, conflicts = await git_merge_branch(
-                repo_root=merge_root,
-                source_branch=source_branch,
-                target_branch=target_branch,
-                strategy=strategy,
-                delete_source=delete_source,
-            )
-
-            merged_results.append({
-                "branch": source_branch,
-                "type": record["type"],
-                "success": success,
-                "output": output[:1000] if output else "",
-                "conflicts": conflicts or [],
-            })
-
-            if success:
-                logger.info(
-                    "[work_item] git_merge success: item=%s source=%s target=%s",
-                    item["id"], source_branch, target_branch,
-                )
-            else:
-                all_success = False
-                logger.warning(
-                    "[work_item] git_merge failed: item=%s source=%s conflicts=%s",
-                    item["id"], source_branch, conflicts,
-                )
-                # 如果 on_conflict 是 manual，停止后续合并
-                if on_conflict == "manual":
-                    should_abort = True
-
-        # 4. 处理合并结果
-        if all_success:
-            logger.info(
-                "[work_item] git_merge all branches merged successfully: item=%s count=%d",
-                item["id"], len(merged_results),
-            )
-            # 4a. auto push
-            auto_push = data.get("autoPush", False)
-            if auto_push:
-                git_config = await self.get_project_git_config(item["project_id"])
-                repo_url = git_config.get("repo_url", "")
-                if repo_url:
-                    from backend.runtime.git_utils import git_ensure_remote, git_push
-                    remote_ok = await git_ensure_remote(repo_root, repo_url)
-                    if remote_ok:
-                        push_ok, push_output = await git_push(
-                            repo_root, target_branch, git_config=git_config
-                        )
-                        if not push_ok:
-                            logger.warning(
-                                "[work_item] auto push failed for %s: %s",
-                                target_branch, push_output,
-                            )
-                        else:
-                            logger.info(
-                                "[work_item] auto push success: branch=%s", target_branch,
-                            )
-                    else:
-                        logger.warning(
-                            "[work_item] failed to ensure remote for %s", repo_url,
-                        )
-
-            # 4b. 清理所有已成功合并的 worktree
-            for record in branch_records:
+            cwd = record.get("cwd") or primary_cwd
+            repo_root = await git_repo_root(Path(cwd))
+            if repo_root is None:
+                # 尝试从 worktree_path 获取
                 wt = record.get("worktree_path", "")
-                if not wt:
+                if wt:
+                    repo_root = await git_repo_root(Path(wt))
+            if repo_root is None:
+                repo_root = await git_repo_root(Path(primary_cwd))
+            if repo_root is None:
+                logger.warning("[work_item] git_merge: cannot find repo root for cwd=%s, skip branch %s", cwd, record["branch"])
+                continue
+            repo_key = str(repo_root)
+            if repo_key not in repo_branch_map:
+                repo_branch_map[repo_key] = []
+            repo_branch_map[repo_key].append(record)
+
+        if not repo_branch_map:
+            logger.error("[work_item] git_merge: no valid repos found, skip merge")
+            await self._advance_past_node(item, node)
+            return
+
+        logger.info(
+            "[work_item] git_merge: item=%s target=%s repos=%d branches_per_repo=%s",
+            item["id"], target_branch,
+            len(repo_branch_map),
+            {Path(k).name: [r["branch"] for r in v] for k, v in repo_branch_map.items()},
+        )
+
+        # 4. 对每个 repo 分别执行合并
+        all_repo_results: list[dict] = []  # {"repo": str, "project_name": str, "success": bool, "merged_results": [...]}
+
+        for repo_root_str, repo_branches in repo_branch_map.items():
+            repo_root = Path(repo_root_str)
+            project_name = repo_root.name
+
+            # 检查 target_branch 是否被 worktree 占用
+            merge_root = repo_root
+            wt_path = await find_worktree_for_branch(repo_root, target_branch)
+            if wt_path:
+                logger.info(
+                    "[work_item] git_merge: target_branch '%s' is in worktree at '%s' (project: %s), will merge there",
+                    target_branch, wt_path, project_name,
+                )
+                merge_root = Path(wt_path)
+
+            # 逐一合并该 repo 下的分支（git_merge_branch 内部会自动创建不存在的目标分支）
+            merged_results: list[dict] = []
+            repo_all_success = True
+            should_abort = False
+
+            for record in repo_branches:
+                if should_abort:
+                    merged_results.append({
+                        "branch": record["branch"],
+                        "type": record["type"],
+                        "success": False,
+                        "output": "skipped due to previous conflict (on_conflict=manual)",
+                        "conflicts": [],
+                    })
                     continue
-                branch_to_clean = "" if delete_source else record["branch"]
-                if record["type"] == "plan_task":
-                    await cleanup_plan_worktree(
-                        worktree_path=wt,
-                        branch_name=branch_to_clean,
-                        repo_root=repo_root,
+
+                source_branch = record["branch"]
+                success, output, conflicts = await git_merge_branch(
+                    repo_root=merge_root,
+                    source_branch=source_branch,
+                    target_branch=target_branch,
+                    strategy=strategy,
+                    delete_source=delete_source,
+                )
+
+                merged_results.append({
+                    "branch": source_branch,
+                    "type": record["type"],
+                    "success": success,
+                    "output": output[:1000] if output else "",
+                    "conflicts": conflicts or [],
+                })
+
+                if success:
+                    logger.info(
+                        "[work_item] git_merge success: item=%s project=%s source=%s target=%s",
+                        item["id"], project_name, source_branch, target_branch,
                     )
                 else:
-                    await cleanup_work_item_worktree(
-                        worktree_path=wt,
-                        branch_name=branch_to_clean,
-                        repo_root=repo_root,
+                    repo_all_success = False
+                    logger.warning(
+                        "[work_item] git_merge failed: item=%s project=%s source=%s conflicts=%s",
+                        item["id"], project_name, source_branch, conflicts,
                     )
-                logger.info("[work_item] git_merge: cleaned worktree for branch=%s path=%s", record["branch"], wt)
+                    if on_conflict == "manual":
+                        should_abort = True
 
-            # 4c. 记录合并结果到 metadata
+            # 合并成功后清理 worktree
+            if repo_all_success:
+                for record in repo_branches:
+                    wt = record.get("worktree_path", "")
+                    if not wt:
+                        continue
+                    branch_to_clean = "" if delete_source else record["branch"]
+                    if record["type"] == "plan_task":
+                        await cleanup_plan_worktree(
+                            worktree_path=wt,
+                            branch_name=branch_to_clean,
+                            repo_root=repo_root,
+                        )
+                    else:
+                        await cleanup_work_item_worktree(
+                            worktree_path=wt,
+                            branch_name=branch_to_clean,
+                            repo_root=repo_root,
+                        )
+                    logger.info("[work_item] git_merge: cleaned worktree for branch=%s path=%s", record["branch"], wt)
+
+            all_repo_results.append({
+                "repo": repo_root_str,
+                "project_name": project_name,
+                "success": repo_all_success,
+                "merged_results": merged_results,
+            })
+
+        # 5. 汇总所有 repo 的结果
+        overall_success = all(r["success"] for r in all_repo_results)
+
+        if overall_success:
+            logger.info(
+                "[work_item] git_merge all repos merged successfully: item=%s repos=%d",
+                item["id"], len(all_repo_results),
+            )
+            # auto push
+            auto_push = data.get("autoPush", False)
+            if auto_push:
+                for repo_result in all_repo_results:
+                    repo_root = Path(repo_result["repo"])
+                    git_config = await self.get_project_git_config(item["project_id"])
+                    repo_url = git_config.get("repo_url", "")
+                    if repo_url:
+                        from backend.runtime.git_utils import git_ensure_remote, git_push
+                        remote_ok = await git_ensure_remote(repo_root, repo_url)
+                        if remote_ok:
+                            push_ok, push_output = await git_push(
+                                repo_root, target_branch, git_config=git_config
+                            )
+                            if not push_ok:
+                                logger.warning(
+                                    "[work_item] auto push failed for %s (project: %s): %s",
+                                    target_branch, repo_result["project_name"], push_output,
+                                )
+
+            # 记录合并结果到 metadata
             existing_meta = {}
             if item.get("metadata"):
                 try:
@@ -2021,9 +2107,15 @@ class WorkItemService:
 
             existing_meta["git_merge_result"] = {
                 "success": True,
-                "merged_branches": [
-                    {"branch": r["branch"], "type": r["type"], "success": r["success"]}
-                    for r in merged_results
+                "repos": [
+                    {
+                        "project_name": r["project_name"],
+                        "merged_branches": [
+                            {"branch": mr["branch"], "type": mr["type"], "success": mr["success"]}
+                            for mr in r["merged_results"]
+                        ],
+                    }
+                    for r in all_repo_results
                 ],
                 "target_branch": target_branch,
                 "strategy": strategy,
@@ -2039,17 +2131,29 @@ class WorkItemService:
                 )
                 await session.commit()
 
-            # 4d. 自动推进到下游节点
+            # 自动推进到下游节点
             await self._advance_past_node(item, node)
         else:
-            # 存在合并失败的分支
-            first_failed = next((r for r in merged_results if not r["success"]), None)
+            # 存在合并失败的 repo
+            failed_repo = next((r for r in all_repo_results if not r["success"]), None)
+            first_failed = next(
+                (mr for mr in (failed_repo["merged_results"] if failed_repo else []) if not mr["success"]),
+                None
+            )
             conflict_files = first_failed["conflicts"] if first_failed else []
             failed_output = first_failed["output"] if first_failed else ""
 
-            error_msg = f"Merge conflict on branch {first_failed['branch']}: {failed_output}" if first_failed else "Unknown merge failure"
+            # 构建清晰的错误信息：包含项目名、源分支、目标分支
+            project_name = failed_repo["project_name"] if failed_repo else "unknown"
+            source_branch_name = first_failed["branch"] if first_failed else "unknown"
+            error_msg = (
+                f"项目 [{project_name}] 合并失败：分支 {source_branch_name} → {target_branch}"
+            ) if first_failed else "合并失败：未知错误"
+            if failed_output:
+                short_output = failed_output[:200].strip()
+                error_msg += f"\n原因：{short_output}"
             if conflict_files:
-                error_msg += f" | Files: {', '.join(conflict_files)}"
+                error_msg += f"\n冲突文件（{len(conflict_files)} 个）：{', '.join(conflict_files[:10])}"
             logger.warning("[work_item] git_merge conflict: item=%s error=%s", item["id"], error_msg)
 
             if on_conflict == "manual":
@@ -2062,11 +2166,19 @@ class WorkItemService:
                         pass
                 existing_meta["git_merge_result"] = {
                     "success": False,
-                    "merged_branches": [
-                        {"branch": r["branch"], "type": r["type"], "success": r["success"]}
-                        for r in merged_results
+                    "repos": [
+                        {
+                            "project_name": r["project_name"],
+                            "merged_branches": [
+                                {"branch": mr["branch"], "type": mr["type"], "success": mr["success"]}
+                                for mr in r["merged_results"]
+                            ],
+                        }
+                        for r in all_repo_results
                     ],
+                    "source_branch": source_branch_name,
                     "target_branch": target_branch,
+                    "project_name": project_name,
                     "strategy": strategy,
                     "conflict": True,
                     "conflict_files": conflict_files,
@@ -2075,12 +2187,14 @@ class WorkItemService:
                     "output": failed_output[:2000] if failed_output else "",
                     "timestamp": _now_iso(),
                 }
-                existing_meta["merge_conflict"] = True  # 保持向后兼容
+                existing_meta["merge_conflict"] = True
                 existing_meta["merge_conflict_data"] = {
-                    "source_branch": first_failed["branch"] if first_failed else "",
+                    "source_branch": source_branch_name,
                     "target_branch": target_branch,
                     "conflict_files": conflict_files,
-                    "worktree_path": next((r["worktree_path"] for r in branch_records if r["branch"] == first_failed["branch"]), "") if first_failed else "",
+                    "project_name": project_name,
+                    "error_message": error_msg,
+                    "worktree_path": next((r["worktree_path"] for r in (failed_repo["merged_results"] if failed_repo else []) if r.get("branch") == source_branch_name), ""),
                 }
                 async with async_session_factory() as session:
                     metadata = json.dumps(existing_meta, ensure_ascii=False)
@@ -2090,10 +2204,10 @@ class WorkItemService:
                     )
                     await session.commit()
             else:
-                # fail/abort: 记录错误并推进到下游，避免工作项卡住
+                # fail/abort: 记录错误，停留在当前节点等待处理
                 logger.warning(
-                    "[work_item] git_merge failed for item=%s, failed_branch=%s, auto-advancing",
-                    item["id"], first_failed["branch"] if first_failed else "?",
+                    "[work_item] git_merge failed for item=%s, project=%s, failed_branch=%s, staying at current node",
+                    item["id"], project_name, source_branch_name,
                 )
                 existing_meta = {}
                 if item.get("metadata"):
@@ -2103,11 +2217,19 @@ class WorkItemService:
                         pass
                 existing_meta["git_merge_result"] = {
                     "success": False,
-                    "merged_branches": [
-                        {"branch": r["branch"], "type": r["type"], "success": r["success"]}
-                        for r in merged_results
+                    "repos": [
+                        {
+                            "project_name": r["project_name"],
+                            "merged_branches": [
+                                {"branch": mr["branch"], "type": mr["type"], "success": mr["success"]}
+                                for mr in r["merged_results"]
+                            ],
+                        }
+                        for r in all_repo_results
                     ],
+                    "source_branch": source_branch_name,
                     "target_branch": target_branch,
+                    "project_name": project_name,
                     "strategy": strategy,
                     "conflict": True,
                     "conflict_files": conflict_files[:5] if conflict_files else [],
@@ -2116,16 +2238,126 @@ class WorkItemService:
                     "output": failed_output[:2000] if failed_output else "",
                     "timestamp": _now_iso(),
                 }
-                existing_meta["git_merge_failed"] = True  # 保持向后兼容
+                existing_meta["git_merge_failed"] = True
                 existing_meta["git_merge_conflicts"] = conflict_files[:5] if conflict_files else []
+                existing_meta["merge_conflict_data"] = {
+                    "source_branch": source_branch_name,
+                    "target_branch": target_branch,
+                    "conflict_files": conflict_files[:5] if conflict_files else [],
+                    "project_name": project_name,
+                    "error_message": error_msg,
+                }
                 async with async_session_factory() as session:
                     await session.execute(
                         text("UPDATE work_items SET metadata = :meta WHERE id = :id"),
                         {"meta": json.dumps(existing_meta, ensure_ascii=False), "id": item["id"]}
                     )
                     await session.commit()
-                # 推进到下游节点
-                await self._advance_past_node(item, node)
+                # 不推进：停留在 git_merge 节点，等待用户手动处理后重试
+
+    async def _cleanup_work_item_branches(self, item: dict):
+        """清理工作项关联的所有 worktree 目录和分支。
+        
+        在工作项到达终态（end/cancel/error）且未经过 git_merge 节点时调用，
+        避免残留 worktree 目录和分支。
+        """
+        try:
+            from backend.runtime.git_utils import (
+                git_repo_root,
+                cleanup_work_item_worktree,
+                cleanup_plan_worktree,
+            )
+
+            # 收集所有关联分支和 worktree 信息
+            branch_records: list[dict] = []
+            async with async_session_factory() as session:
+                # 工作项自身的分支
+                wi_rows = await session.execute(
+                    text("""
+                        SELECT DISTINCT t.branch_name, t.worktree_path, t.cwd
+                        FROM work_item_transitions wit
+                        JOIN tasks t ON t.id = wit.task_id
+                        WHERE wit.work_item_id = :item_id
+                          AND t.branch_name IS NOT NULL
+                          AND t.branch_name != ''
+                    """),
+                    {"item_id": item["id"]}
+                )
+                for row in wi_rows.fetchall():
+                    branch_records.append({
+                        "branch": row[0] or "",
+                        "worktree_path": row[1] or "",
+                        "cwd": row[2] or "",
+                        "type": "work_item",
+                    })
+
+                # Plan 子任务的分支
+                plan_rows = await session.execute(
+                    text("""
+                        SELECT DISTINCT t2.branch_name, t2.worktree_path, t2.cwd
+                        FROM work_item_transitions wit
+                        JOIN tasks t ON t.id = wit.task_id
+                        JOIN plan_tasks pt ON pt.plan_id = t.plan_id
+                        JOIN tasks t2 ON t2.id = pt.task_id
+                        WHERE wit.work_item_id = :item_id
+                          AND t.plan_id IS NOT NULL
+                          AND t2.branch_name IS NOT NULL
+                          AND t2.branch_name != ''
+                    """),
+                    {"item_id": item["id"]}
+                )
+                for row in plan_rows.fetchall():
+                    branch_records.append({
+                        "branch": row[0] or "",
+                        "worktree_path": row[1] or "",
+                        "cwd": row[2] or "",
+                        "type": "plan_task",
+                    })
+
+            if not branch_records:
+                return
+
+            # 获取主项目路径
+            primary_cwd = await self._get_project_path(item["project_id"])
+
+            for record in branch_records:
+                cwd = record.get("cwd") or primary_cwd
+                if not cwd:
+                    continue
+
+                repo_root = await git_repo_root(Path(cwd))
+                if repo_root is None and record.get("worktree_path"):
+                    # worktree_path 的父目录可能能定位 repo
+                    wt_parent = Path(record["worktree_path"]).parent.parent.parent
+                    repo_root = await git_repo_root(wt_parent)
+                if repo_root is None:
+                    continue
+
+                wt = record.get("worktree_path", "")
+                branch = record.get("branch", "")
+
+                if record["type"] == "plan_task":
+                    await cleanup_plan_worktree(
+                        worktree_path=wt,
+                        branch_name=branch,
+                        repo_root=repo_root,
+                    )
+                else:
+                    await cleanup_work_item_worktree(
+                        worktree_path=wt,
+                        branch_name=branch,
+                        repo_root=repo_root,
+                    )
+
+            logger.info(
+                "[work_item] _cleanup_work_item_branches: cleaned %d branches for item=%s",
+                len(branch_records), item["id"][:8],
+            )
+        except Exception as e:
+            logger.warning(
+                "[work_item] _cleanup_work_item_branches failed for item=%s: %s",
+                item.get("id", "?")[:8], e,
+            )
 
     async def _advance_past_node(self, item: dict, node: dict):
         """自动推进工作项到指定节点的下游节点。"""
@@ -2359,6 +2591,13 @@ class WorkItemService:
         """
         artifacts: list = []
 
+        def _infer_file_stage(filename: str) -> str:
+            """根据文件名推断产物分类：测试报告归 test，其余归 code。"""
+            lower = filename.lower()
+            if "测试报告" in lower or "test-report" in lower or "test_report" in lower:
+                return "test"
+            return "code"
+
         # 提前获取 repo_url 与 project_path，供文件链接与 commit 链接复用
         repo_url: Optional[str] = None
         project_path: Optional[str] = None
@@ -2411,7 +2650,7 @@ class WorkItemService:
                     "id": str(uuid.uuid4()),
                     "type": "file",
                     "label": file_name,
-                    "stage": "code",
+                    "stage": _infer_file_stage(file_name),
                     "url": file_url,
                     "file_path": file_path,
                     "commit_hash": commit_hash,
@@ -2456,7 +2695,7 @@ class WorkItemService:
                         "id": str(uuid.uuid4()),
                         "type": "file",
                         "label": file_name,
-                        "stage": "code",
+                        "stage": _infer_file_stage(file_name),
                         "url": file_url,
                         "file_path": relative_path,
                         "commit_hash": commit_hash or "",
@@ -2682,6 +2921,271 @@ class WorkItemService:
             len(artifacts), work_item_id[:8], task_id[:8],
         )
 
+    async def _collect_plan_subtask_artifacts(self, work_item_id: str, task_id: str) -> None:
+        """收集 Plan 所有子任务的产物文件并生成汇总测试报告。
+
+        当 task 关联了 plan_id 时，遍历该 Plan 的所有子任务：
+        1. 收集每个子任务 worktree 中的变更文件作为产物
+        2. 从每个子任务的 agent_final_output 中提取测试报告段落
+        3. 合并为一份统一测试报告写入工作项 worktree 并作为产物记录
+
+        容错：任何单个子任务的失败不影响其他子任务的产物收集。
+        """
+        # 查询当前 task 是否关联 Plan
+        async with async_session_factory() as session:
+            row = (await session.execute(
+                text("SELECT plan_id, worktree_path FROM tasks WHERE id = :id"),
+                {"id": task_id},
+            )).fetchone()
+        if not row:
+            return
+        task_data = dict(row._mapping)
+        plan_id = task_data.get("plan_id")
+        if not plan_id:
+            return
+
+        # 查询 Plan 下所有子任务
+        async with async_session_factory() as session:
+            result = await session.execute(
+                text("""
+                    SELECT t.id, t.cwd, t.worktree_path, t.branch_name, t.agent_final_output
+                    FROM tasks t
+                    JOIN plan_tasks pt ON pt.task_id = t.id
+                    WHERE pt.plan_id = :plan_id
+                    ORDER BY pt.task_index
+                """),
+                {"plan_id": plan_id},
+            )
+            subtask_rows = [dict(r._mapping) for r in result.fetchall()]
+
+        if not subtask_rows:
+            return
+
+        logger.info(
+            "[work_item] collecting artifacts from %d plan subtasks for item=%s plan=%s",
+            len(subtask_rows), work_item_id[:8], plan_id[:8],
+        )
+
+        # 收集每个子任务的变更文件产物（排除已由主 task 收集过的）
+        for sub in subtask_rows:
+            sub_id = sub.get("id", "")
+            if sub_id == task_id:
+                continue  # 主 task 已在上层收集过
+            sub_wt = sub.get("worktree_path") or ""
+            sub_branch = sub.get("branch_name") or ""
+            if not sub_wt or not os.path.isdir(sub_wt):
+                continue
+
+            # 获取该子任务最近的 commit 变更文件
+            try:
+                from backend.runtime.git_utils import git_command
+                code, log_output = await git_command(
+                    Path(sub_wt), ["log", "-1", "--format=%H"], timeout=5
+                )
+                if code != 0:
+                    continue
+                sub_commit = log_output.strip()
+                if not sub_commit:
+                    continue
+                changed = await self._get_commit_changed_files(sub_wt, sub_commit)
+                if changed:
+                    # 确定 project_path（用子任务的 cwd）
+                    sub_cwd = sub.get("cwd") or ""
+                    await self._extract_and_save_artifacts(
+                        work_item_id,
+                        sub_id,
+                        "",  # 不重复解析 output 文本
+                        commit_hash=sub_commit,
+                        branch_name=sub_branch or None,
+                        project_id=None,
+                        changed_files=changed,
+                        worktree_path=sub_wt,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "[work_item] failed to collect artifacts from subtask %s: %s",
+                    sub_id[:8], exc,
+                )
+
+        # 从各子任务 agent_final_output 中提取测试报告并汇总
+        report_sections: list = []
+        for sub in subtask_rows:
+            agent_output = sub.get("agent_final_output") or ""
+            if not agent_output:
+                continue
+            # 推断项目名称
+            sub_cwd = sub.get("cwd") or ""
+            project_name = Path(sub_cwd).name if sub_cwd else f"task-{sub.get('id', '?')[:8]}"
+
+            # 提取测试报告段落（匹配 "测试报告" 标记之后的内容）
+            test_section = self._extract_test_report_section(agent_output)
+            if test_section:
+                report_sections.append((project_name, test_section))
+
+        if not report_sections:
+            return
+
+        # 生成统一测试报告 Markdown
+        report_lines = ["# 测试报告\n"]
+        for project_name, section in report_sections:
+            report_lines.append(f"## {project_name}\n")
+            report_lines.append(section.strip())
+            report_lines.append("")
+        report_content = "\n".join(report_lines)
+
+        # 写入工作项 worktree
+        # 优先使用工作项级 worktree，否则使用主 task 的 worktree
+        item = await self.get_work_item(work_item_id)
+        wi_worktree = ""
+        if item:
+            # 查找工作项级 worktree
+            async with async_session_factory() as session:
+                wt_row = (await session.execute(
+                    text("""
+                        SELECT worktree_path FROM tasks
+                        WHERE id IN (
+                            SELECT task_id FROM work_item_transitions
+                            WHERE work_item_id = :item_id AND task_id IS NOT NULL
+                        )
+                        AND worktree_path IS NOT NULL AND worktree_path != ''
+                        ORDER BY created_at ASC LIMIT 1
+                    """),
+                    {"item_id": work_item_id},
+                )).fetchone()
+            if wt_row:
+                wi_worktree = dict(wt_row._mapping).get("worktree_path") or ""
+
+        if not wi_worktree:
+            wi_worktree = task_data.get("worktree_path") or ""
+        if not wi_worktree or not os.path.isdir(wi_worktree):
+            # fallback：用第一个子任务的 worktree
+            for sub in subtask_rows:
+                sub_wt = sub.get("worktree_path") or ""
+                if sub_wt and os.path.isdir(sub_wt):
+                    wi_worktree = sub_wt
+                    break
+
+        if not wi_worktree:
+            logger.warning("[work_item] no valid worktree to write test report for item=%s", work_item_id[:8])
+            return
+
+        # 写入测试报告文件
+        report_dir = Path(wi_worktree) / "docs"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        wi_prefix = f"wi-{work_item_id[:8]}"
+        # 获取工作项标题用于文件命名
+        wi_title = ""
+        async with async_session_factory() as session:
+            title_row = (await session.execute(
+                text("SELECT title FROM work_items WHERE id = :id"),
+                {"id": work_item_id},
+            )).fetchone()
+            if title_row:
+                wi_title = dict(title_row._mapping).get("title", "")
+        slug = _title_slug(wi_title) if wi_title else ""
+        if slug:
+            report_filename = f"{wi_prefix}-{slug}-测试报告.md"
+        else:
+            report_filename = f"{wi_prefix}-测试报告.md"
+        report_path = report_dir / report_filename
+        report_path.write_text(report_content, encoding="utf-8")
+        logger.info(
+            "[work_item] wrote unified test report: %s for item=%s",
+            str(report_path), work_item_id[:8],
+        )
+
+        # 将测试报告 git add + commit，避免后续 merge 时 untracked 文件冲突
+        from backend.runtime.git_utils import git_command
+        await git_command(
+            Path(wi_worktree), ["add", str(report_path)], timeout=10
+        )
+        commit_code, commit_output = await git_command(
+            Path(wi_worktree),
+            ["commit", "-m", f"docs: 添加统一测试报告 {report_filename}", "--no-verify"],
+            timeout=15,
+        )
+        report_commit_hash = ""
+        if commit_code == 0:
+            _, hash_out = await git_command(
+                Path(wi_worktree), ["rev-parse", "HEAD"], timeout=5
+            )
+            report_commit_hash = hash_out.strip()
+            logger.info("[work_item] committed test report: %s commit=%s", report_filename, report_commit_hash[:8])
+        else:
+            logger.warning("[work_item] failed to commit test report: %s", commit_output[:200])
+
+        # 将测试报告作为产物记录
+        from urllib.parse import quote
+        art_id = str(uuid.uuid4())
+        rel_path = f"docs/{report_filename}"
+        content_url = f"/api/work-items/{work_item_id}/artifacts/{art_id}/content"
+        view_url = f"/docs/view?url={quote(content_url, safe='')}&title={quote(report_filename, safe='')}"
+
+        artifact = {
+            "id": art_id,
+            "type": "file",
+            "label": report_filename,
+            "stage": "test",
+            "url": view_url,
+            "file_path": str(report_path),
+            "commit_hash": report_commit_hash,
+            "created_at": _now_iso(),
+            "task_id": task_id,
+        }
+
+        # 追加到 metadata.artifacts
+        async with async_session_factory() as session:
+            row = (await session.execute(
+                text("SELECT metadata FROM work_items WHERE id = :id"),
+                {"id": work_item_id},
+            )).fetchone()
+            if row:
+                metadata = _safe_json_loads(dict(row._mapping).get("metadata"), {}) or {}
+                existing = metadata.get("artifacts") or []
+                if not isinstance(existing, list):
+                    existing = []
+                existing.append(artifact)
+                metadata["artifacts"] = existing
+                await session.execute(
+                    text("UPDATE work_items SET metadata = :meta WHERE id = :id"),
+                    {"id": work_item_id, "meta": json.dumps(metadata, ensure_ascii=False)},
+                )
+                await session.commit()
+        logger.info(
+            "[work_item] test report artifact saved for item=%s",
+            work_item_id[:8],
+        )
+
+    @staticmethod
+    def _extract_test_report_section(text_output: str) -> str:
+        """从 agent_final_output 中提取测试报告段落。
+
+        匹配策略：找到 '测试报告' 标记后的内容直到下一个同级标题或文末。
+        """
+        import re
+        # 尝试匹配 "测试报告：" 或 "## 测试报告" 后的内容
+        patterns = [
+            r"(?:^|\n)(?:##?\s*)?测试报告[：:]\s*\n([\s\S]+?)(?=\n##?\s|\Z)",
+            r"(?:^|\n)测试报告[：:]?\s*\n([\s\S]+?)(?=\n##?\s|\Z)",
+            r"测试报告[：:]\s*\n([\s\S]+?)$",
+        ]
+        for pattern in patterns:
+            m = re.search(pattern, text_output)
+            if m:
+                return m.group(1).strip()
+
+        # 兜底：如果有 "测试报告" 字样后跟列表
+        idx = text_output.find("测试报告")
+        if idx >= 0:
+            after = text_output[idx + len("测试报告"):]
+            # 取到末尾或下一个标题
+            end_match = re.search(r"\n##?\s", after)
+            if end_match:
+                return after[:end_match.start()].strip().lstrip("：: \n")
+            return after.strip().lstrip("：: \n")
+
+        return ""
+
     async def on_work_item_task_completed(self, task_id: str, result: str):
         """
         Agent task 完成回调（事件驱动 + 轮询兜底，调用幂等）：
@@ -2818,6 +3322,15 @@ class WorkItemService:
                     "[work_item] artifact extraction failed for item=%s task=%s: %s",
                     item_id[:8], task_id[:8], exc,
                 )
+
+        # Plan 完成时：收集所有子任务的产物文件 + 生成汇总测试报告
+        try:
+            await self._collect_plan_subtask_artifacts(item_id, task_id)
+        except Exception as exc:
+            logger.warning(
+                "[work_item] plan subtask artifact collection failed for item=%s task=%s: %s",
+                item_id[:8], task_id[:8], exc,
+            )
 
         # 如果工作项不存在，提前返回
         if not item:

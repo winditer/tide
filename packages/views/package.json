@@ -17,6 +17,7 @@
     "./workflows/nodes/*": "./src/workflows/nodes/*.tsx",
     "./work-items/*": "./src/work-items/*.tsx",
     "./shared/*": "./src/shared/*.tsx",
+    "./components/*": "./src/components/*.tsx",
     "./code-editor": "./src/code-editor/index.ts",
     "./code-editor/*": "./src/code-editor/*.tsx"
   },

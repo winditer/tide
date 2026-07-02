@@ -18,6 +18,7 @@ from backend.core.dependencies import get_optional_user
 from backend.runtime.git_utils import (
     git_command, git_log_files, git_diff_full,
     git_push, git_fetch, git_ensure_remote,
+    git_list_remote_branches, git_merge_branch, git_repo_root,
 )
 from backend.db.engine import async_session_factory
 from pathlib import Path
@@ -103,6 +104,29 @@ def _decode_project_path(project_id: str) -> str:
     raise HTTPException(status_code=400, detail=f"无效的 project_id: {project_id}")
 
 
+def _decode_git_path(path: str) -> str:
+    """解码 git 输出中的八进制转义路径。
+
+    git 对含非 ASCII 字符的文件名会输出如 "docs/\\346\\265\\213\\350\\257\\225.md" 格式，
+    本方法将其解码为正常 UTF-8 字符串。
+    """
+    import re
+    path = path.strip('"')
+    if not re.search(r'\\[0-9]{3}', path):
+        return path
+    parts = re.split(r'(\\[0-9]{3})', path)
+    result = b''
+    for part in parts:
+        if re.match(r'\\[0-9]{3}', part):
+            result += bytes([int(part[1:], 8)])
+        else:
+            result += part.encode('utf-8')
+    try:
+        return result.decode('utf-8')
+    except (UnicodeDecodeError, ValueError):
+        return path
+
+
 def _parse_log_output(raw: str) -> list[dict]:
     """解析 git log --numstat --format=%H|%an|%aI|%s 的输出。
 
@@ -146,7 +170,7 @@ def _parse_log_output(raw: str) -> list[dict]:
             if len(parts) >= 3:
                 raw_add = parts[0].strip()
                 raw_del = parts[1].strip()
-                file_path = "\t".join(parts[2:]).strip()
+                file_path = _decode_git_path("\t".join(parts[2:]).strip())
                 # 非数字值（如二进制文件的 "-"）解析为 0
                 additions = int(raw_add) if raw_add.isdigit() else 0
                 deletions = int(raw_del) if raw_del.isdigit() else 0
@@ -170,6 +194,69 @@ def _parse_log_output(raw: str) -> list[dict]:
     return commits
 
 
+@router.post("/{project_id}/git/cleanup-branches")
+async def cleanup_stale_branches(
+    project_id: str,
+):
+    """清理项目中已完成/取消工作项的残留分支和 worktree。
+    
+    1. 执行 git worktree prune 清理 stale worktree 引用
+    2. 强制移除 tide/ 前缀分支对应的 worktree 目录
+    3. 删除所有 tide/ 前缀的分支
+    """
+    cwd = _decode_project_path(project_id)
+    if not Path(cwd).is_dir():
+        raise HTTPException(status_code=404, detail=f"项目路径不存在: {cwd}")
+
+    # 1. prune stale worktrees
+    await git_command(Path(cwd), ["worktree", "prune"], timeout=10)
+
+    # 2. 获取所有 worktree 及其分支的映射
+    code_wt, wt_output = await git_command(
+        Path(cwd), ["worktree", "list", "--porcelain"], timeout=10
+    )
+    # 解析 worktree 列表：每个 worktree 块以空行分隔
+    worktree_map: dict[str, str] = {}  # branch -> worktree_path
+    current_wt_path = ""
+    if code_wt == 0:
+        for line in wt_output.splitlines():
+            if line.startswith("worktree "):
+                current_wt_path = line.replace("worktree ", "").strip()
+            elif line.startswith("branch refs/heads/"):
+                branch = line.replace("branch refs/heads/", "").strip()
+                if branch.startswith("tide/"):
+                    worktree_map[branch] = current_wt_path
+
+    # 3. 强制移除 tide/ 分支对应的 worktree
+    for branch, wt_path in worktree_map.items():
+        if wt_path and wt_path != cwd:  # 不要误删主 worktree
+            await git_command(
+                Path(cwd), ["worktree", "remove", "--force", wt_path], timeout=30
+            )
+
+    # 4. 再次 prune
+    await git_command(Path(cwd), ["worktree", "prune"], timeout=10)
+
+    # 5. 获取剩余的 tide/ 分支并删除
+    code, output = await git_command(
+        Path(cwd), ["branch", "--format=%(refname:short)"], timeout=10
+    )
+    if code != 0:
+        raise HTTPException(status_code=500, detail=f"获取分支列表失败: {output[:300]}")
+
+    branches = [b.strip() for b in output.splitlines() if b.strip()]
+    tide_branches = [b for b in branches if b.startswith("tide/")]
+
+    cleaned = []
+    for branch in tide_branches:
+        code3, _ = await git_command(
+            Path(cwd), ["branch", "-D", branch], timeout=10
+        )
+        if code3 == 0:
+            cleaned.append(branch)
+
+    return {"cleaned": len(cleaned), "branches": cleaned}
+
 @router.get("/{project_id}/git/branches")
 async def get_project_branches(
     project_id: str,
@@ -178,6 +265,9 @@ async def get_project_branches(
     cwd = _decode_project_path(project_id)
     if not Path(cwd).is_dir():
         raise HTTPException(status_code=404, detail=f"项目路径不存在: {cwd}")
+
+    # 先清理已删除目录的 stale worktree 引用
+    await git_command(Path(cwd), ["worktree", "prune"], timeout=10)
 
     code, output = await git_command(
         Path(cwd), ["branch", "--format=%(refname:short)"], timeout=10
@@ -194,6 +284,20 @@ async def get_project_branches(
     current_branch = current_output.strip() if code2 == 0 else None
 
     return {"branches": branches, "current": current_branch}
+
+
+@router.get("/{project_id}/git/remote-branches")
+async def get_remote_branches(project_id: str):
+    """获取项目远程分支列表（基于本地 tracking 信息）。"""
+    cwd = _decode_project_path(project_id)
+    if not Path(cwd).is_dir():
+        raise HTTPException(status_code=404, detail=f"项目路径不存在: {cwd}")
+
+    branches, error = await git_list_remote_branches(Path(cwd))
+    if error:
+        raise HTTPException(status_code=500, detail=f"获取远程分支失败: {error}")
+
+    return {"branches": branches}
 
 
 @router.get("/{project_id}/git/commits")
@@ -223,13 +327,16 @@ async def get_project_commits(
         from backend.runtime.git_utils import work_item_branch_name
         effective_branch = work_item_branch_name(work_item_id)
 
+    # 当未指定具体分支时，默认查询所有分支，避免版本分支提交不可见
+    effective_all_branches = all_branches or (not effective_branch)
+
     code, output = await git_log_files(
         cwd=cwd,
         branch=effective_branch,
         limit=limit,
         since=since,
         until=until,
-        all_branches=all_branches,
+        all_branches=effective_all_branches,
     )
     if code != 0:
         raise HTTPException(status_code=500, detail=f"git log 失败: {output[:500]}")
@@ -414,7 +521,7 @@ async def _time_range_stats(
             if len(parts) >= 3:
                 add_str = parts[0].strip()
                 del_str = parts[1].strip()
-                file_path = "\t".join(parts[2:])
+                file_path = _decode_git_path("\t".join(parts[2:]))
                 total_additions += int(add_str) if add_str.isdigit() else 0
                 total_deletions += int(del_str) if del_str.isdigit() else 0
                 all_files.add(file_path)
@@ -921,7 +1028,7 @@ async def get_uncommitted_changes(
         # porcelain 格式: XY path 或 XY path -> new_path
         index_status = line[0]  # 暂存区状态
         work_status = line[1]   # 工作区状态
-        file_path = line[3:].strip()
+        file_path = _decode_git_path(line[3:].strip())
 
         # 确定文件状态
         if index_status == "?" and work_status == "?":
@@ -1009,6 +1116,13 @@ class GitPullRequest(BaseModel):
     remote: str = "origin"
 
 
+class GitLocalMergeRequest(BaseModel):
+    source_branch: str
+    target_branch: str
+    strategy: str = "merge"  # merge | squash | rebase
+    delete_source: bool = False
+
+
 class GitMergeRequestCreate(BaseModel):
     source_branch: str
     target_branch: str
@@ -1072,7 +1186,7 @@ async def git_discard_files(
             continue
         index_status = line[0]
         work_status = line[1]
-        file_path = line[3:].strip()
+        file_path = _decode_git_path(line[3:].strip())
         if index_status == "?" and work_status == "?":
             untracked_files.add(file_path)
         elif index_status != " " and index_status != "?":
@@ -1218,7 +1332,10 @@ async def delete_branch(
     branch_name: str,
     current_user: Optional[dict] = Depends(get_optional_user),
 ):
-    """删除本地分支（不允许删除当前分支）。"""
+    """删除本地分支（不允许删除当前分支）。
+    
+    如果分支被 worktree 占用，会先移除 worktree 再删除分支。
+    """
     cwd = _decode_project_path(project_id)
     if not Path(cwd).is_dir():
         raise HTTPException(status_code=404, detail=f"项目路径不存在: {cwd}")
@@ -1229,6 +1346,15 @@ async def delete_branch(
     )
     if code == 0 and current_output.strip() == branch_name:
         raise HTTPException(status_code=400, detail="不能删除当前所在分支")
+
+    # 检查分支是否被 worktree 占用，如果是则先移除 worktree
+    from backend.runtime.git_utils import find_worktree_for_branch
+    wt_path = await find_worktree_for_branch(Path(cwd), branch_name)
+    if wt_path:
+        # 强制移除 worktree
+        await git_command(Path(cwd), ["worktree", "remove", "--force", wt_path], timeout=30)
+        # prune 清理残留引用
+        await git_command(Path(cwd), ["worktree", "prune"], timeout=10)
 
     # 先尝试安全删除
     code, output = await git_command(Path(cwd), ["branch", "-d", branch_name], timeout=10)
@@ -1313,6 +1439,26 @@ async def git_pull_branch(
         raise HTTPException(status_code=500, detail=f"合并失败: {merge_output[:500]}")
 
     return {"ok": True, "output": merge_output[:500]}
+
+
+@router.post("/{project_id}/git/merge")
+async def git_local_merge(project_id: str, req: GitLocalMergeRequest):
+    """执行本地分支合并。"""
+    cwd = _decode_project_path(project_id)
+    repo_root = await git_repo_root(Path(cwd))
+    if not repo_root:
+        raise HTTPException(status_code=400, detail="Not a git repository")
+
+    success, output, conflicts = await git_merge_branch(
+        repo_root, req.source_branch, req.target_branch,
+        req.strategy, req.delete_source,
+    )
+
+    return {
+        "ok": success,
+        "output": output[:1000],
+        "conflicts": conflicts,
+    }
 
 
 @router.post("/{project_id}/git/merge-request")

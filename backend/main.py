@@ -45,6 +45,7 @@ from backend.api.project_groups import router as project_groups_router
 from backend.api.knowledge import router as knowledge_router
 from backend.api.files import router as files_router
 from backend.api.git_audit import router as git_audit_router
+from backend.api.expert_teams import router as expert_teams_router
 from backend.services.auth_service import auth_service
 
 logger = logging.getLogger("tide.main")
@@ -174,6 +175,7 @@ app.include_router(project_groups_router)
 app.include_router(knowledge_router)
 app.include_router(files_router)
 app.include_router(git_audit_router)
+app.include_router(expert_teams_router)
 
 
 @app.get("/health")

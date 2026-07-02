@@ -207,8 +207,8 @@ def _file_session_to_task(item: dict, workspace_id: str) -> dict:
 
 
 def _sort_key(item: dict) -> str:
-    """排序优先级：completed_at > created_at > last_active。"""
-    for key in ("completed_at", "created_at", "last_active"):
+    """排序优先级：created_at > last_active > completed_at。"""
+    for key in ("created_at", "last_active", "completed_at"):
         v = item.get(key)
         if v:
             return str(v)

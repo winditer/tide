@@ -114,6 +114,11 @@ function toast({ ...props }: Toast) {
     toast: { ...props, id, open: true, onOpenChange: (open) => { if (!open) dismiss() } },
   })
 
+  // Auto-dismiss after TOAST_REMOVE_DELAY
+  setTimeout(() => {
+    dismiss()
+  }, TOAST_REMOVE_DELAY)
+
   return { id, dismiss, update }
 }
 

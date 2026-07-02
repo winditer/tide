@@ -19,7 +19,7 @@ from backend.runtime.adapters import (
     try_parse_claude_result,
     try_parse_token_usage,
 )
-from backend.runtime.config import APPROVED_CODEX_APPROVAL_POLICY, APPROVED_CODEX_SANDBOX_MODE
+from backend.runtime.config import APPROVED_CODEX_APPROVAL_POLICY, APPROVED_CODEX_SANDBOX_MODE, resolve_auto_model
 from backend.runtime.task_runtime import CodexTaskRuntime
 
 logger = logging.getLogger("tide.executor")
@@ -108,7 +108,7 @@ class AgentExecutor:
         agent_id: str,
         prompt: str,
         cwd: str,
-        model: str = "",
+        model: Optional[str] = "",
         approved_retry: bool = False,
         conversation_id: str = "",
         session_id: str = "",
@@ -123,6 +123,10 @@ class AgentExecutor:
         5. 若 resume 失败（thread 不存在），自动降级为新建会话重试。
         6. 若 agent_id 以 ``a2a:`` 为前缀，路由到 :class:`A2AAdapter` 远程执行。
         """
+        # ── 解析 "auto" 模型：避免将字面量 "auto" 传给 LLM API 网关 ──
+        if model and model.strip().lower() == "auto":
+            model = resolve_auto_model(model)
+            logger.info("[executor] task=%s resolved model 'auto' → %r", task_id, model)
         # ── A2A 远程 Agent 路由 ──
         if agent_id and agent_id.startswith("a2a:"):
             async for ev in self._run_remote_a2a(

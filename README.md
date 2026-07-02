@@ -400,6 +400,7 @@ ECC 为 Tide 提供五大企业级治理能力，全部通过 Web 工作台 Sett
 | **Hooks 事件驱动** | 任务/工作流事件触发自动化动作（脚本/Webhook/通知/技能调用） | Settings → Hooks |
 | **Security 安全审查** | 正则模式扫描 Agent 输出，检测密钥泄露/代码质量/合规问题 | Settings → Security |
 | **Cost Tracking 成本追踪** | 按 agent/model/project 维度统计 Token 用量与费用 | Dashboard 首页 |
+| **Expert Teams 专家团** | 定义领域专家（绑定 Agent + Skills + 角色提示词），工作流中选用专家团自动注入配置 | Settings → Expert Teams |
 
 ### 快速开始
 
@@ -500,6 +501,37 @@ python3 -m backend.scripts.import_security_rules --workspace default
 ```
 
 > 注意：`import_ecc_skills` 的 `<skills_dir>` 必须是实际存在的目录路径，不支持占位符。
+
+### 专家团 (Expert Teams)
+
+专家团允许用户将 Agent、Skills 和角色提示词捆绑为"领域专家"预设。在工作流 Agent 节点中选择专家团后，系统自动：
+- 切换到指定 Agent（Codex / Claude Code / Qoder / 远程 A2A Agent）
+- 注入绑定的 Skills
+- 在 Prompt 前注入角色提示词
+
+管理入口：Settings → Expert Teams
+
+**API 端点**：
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/expert-teams` | 列出专家团（支持 project_id 过滤） |
+| POST | `/api/expert-teams` | 创建专家团 |
+| GET | `/api/expert-teams/{id}` | 专家团详情 |
+| PUT | `/api/expert-teams/{id}` | 更新专家团 |
+| DELETE | `/api/expert-teams/{id}` | 删除专家团 |
+
+### 项目级配置 (Project-Scoped Settings)
+
+Skills、Rules、Hooks、Security 四个模块均支持项目级配置，采用**继承+覆盖**模式：
+
+- `project_id IS NULL` 表示全局配置
+- `project_id = <项目ID>` 表示项目级配置
+- 运行时按 slug/name 合并：项目配置覆盖全局同名项，未覆盖的全局项保留
+
+**权限模型**：
+- 全局 admin：管理所有配置
+- 项目 admin/owner：管理本项目配置
+- 项目 member/viewer：查看和使用配置
 
 ---
 

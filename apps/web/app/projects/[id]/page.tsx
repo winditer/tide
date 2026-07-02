@@ -22,6 +22,7 @@ import {
   useAddProjectMember,
   useAuth,
   useBindProjectWorkflow,
+  useCleanupBranches,
   useCreateBranch,
   useCreateMergeRequest,
   useCreateVersion,
@@ -29,6 +30,7 @@ import {
   useDeleteProject,
   useDeleteVersion,
   useGitBranches,
+  useLocalMerge,
   useProject,
   useProjectChats,
   useProjectMembers,
@@ -37,6 +39,7 @@ import {
   useProjectWorkflow,
   usePullBranch,
   usePushBranch,
+  useRemoteBranches,
   useRemoveProjectMember,
   useUnbindProjectWorkflow,
   useUpdateProjectMember,
@@ -53,6 +56,7 @@ import {
   Download,
   FileCode,
   GitBranch,
+  GitMerge,
   GitPullRequest,
   Pencil,
   Plus,
@@ -988,9 +992,14 @@ function BranchManagementCard({ projectId }: { projectId: string }) {
 
   const createBranch = useCreateBranch(projectId);
   const deleteBranch = useDeleteBranch(projectId);
+  const cleanupBranches = useCleanupBranches(projectId);
   const pushBranch = usePushBranch(projectId);
   const pullBranch = usePullBranch(projectId);
   const createMR = useCreateMergeRequest(projectId);
+
+  const { data: remoteBranchesData } = useRemoteBranches(projectId);
+  const remoteBranchSet = new Set(remoteBranchesData?.branches ?? []);
+  const localMerge = useLocalMerge(projectId);
 
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newBranchName, setNewBranchName] = useState("");
@@ -998,6 +1007,13 @@ function BranchManagementCard({ projectId }: { projectId: string }) {
   const [mrTitle, setMrTitle] = useState("");
   const [mrTargetBranch, setMrTargetBranch] = useState("");
   const [mrDescription, setMrDescription] = useState("");
+
+  // Merge 弹窗 state
+  const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
+  const [mergeSource, setMergeSource] = useState("");
+  const [mergeTarget, setMergeTarget] = useState("");
+  const [mergeStrategy, setMergeStrategy] = useState("merge");
+  const [deleteSource, setDeleteSource] = useState(false);
 
   const handleCreateBranch = () => {
     if (!newBranchName.trim()) return;
@@ -1048,7 +1064,7 @@ function BranchManagementCard({ projectId }: { projectId: string }) {
   };
 
   const handleCreateMR = () => {
-    if (!mrDialogBranch || !mrTargetBranch) return;
+    if (!mrDialogBranch || !mrTargetBranch || mrDialogBranch === mrTargetBranch) return;
     createMR.mutate(
       {
         source_branch: mrDialogBranch,
@@ -1088,14 +1104,34 @@ function BranchManagementCard({ projectId }: { projectId: string }) {
           <h2 className="text-base font-medium">本地分支管理</h2>
           <Badge variant="secondary" className="text-xs">{branches.length}</Badge>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => setShowCreateForm((v) => !v)}
-        >
-          <Plus className="h-3.5 w-3.5 mr-1" />
-          新建分支
-        </Button>
+        <div className="flex items-center gap-2">
+          {branches.some((b) => b.startsWith("tide/")) && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-destructive hover:text-destructive"
+              disabled={cleanupBranches.isPending}
+              onClick={() => {
+                if (!confirm("确定清理所有 tide/ 前缀的工作分支吗？将同时删除关联的 worktree。")) return;
+                cleanupBranches.mutate(undefined, {
+                  onSuccess: (data) => toast({ title: "清理完成", description: `已删除 ${(data as { cleaned: number }).cleaned} 个分支` }),
+                  onError: (err) => toast({ title: "清理失败", description: getApiErrorMessage(err), variant: "destructive" }),
+                });
+              }}
+            >
+              <Trash2 className="h-3.5 w-3.5 mr-1" />
+              {cleanupBranches.isPending ? "清理中…" : "清理工作分支"}
+            </Button>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowCreateForm((v) => !v)}
+          >
+            <Plus className="h-3.5 w-3.5 mr-1" />
+            新建分支
+          </Button>
+        </div>
       </div>
 
       {/* Create Form */}
@@ -1156,7 +1192,17 @@ function BranchManagementCard({ projectId }: { projectId: string }) {
                   variant="ghost"
                   size="sm"
                   className="h-7 w-7 p-0"
-                  title="Merge Request"
+                  title="本地合并"
+                  onClick={() => { setMergeSource(branch); setMergeTarget(""); setMergeDialogOpen(true); }}
+                >
+                  <GitMerge className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 w-7 p-0"
+                  title={remoteBranchSet.has(branch) ? "Merge Request" : "分支未推送到远端，请先 Push"}
+                  disabled={!remoteBranchSet.has(branch)}
                   onClick={() => openMrDialog(branch)}
                 >
                   <GitPullRequest className="h-3.5 w-3.5" />
@@ -1188,15 +1234,30 @@ function BranchManagementCard({ projectId }: { projectId: string }) {
             <div className="space-y-4 py-2">
               <label className="block">
                 <span className="mb-1.5 block text-sm font-medium">源分支</span>
-                <Input value={mrDialogBranch} disabled className="font-mono text-xs" />
+                <Select
+                  value={mrDialogBranch}
+                  onChange={(e) => {
+                    const newSource = e.target.value;
+                    setMrDialogBranch(newSource);
+                    setMrTitle(`Merge ${newSource} into ${mrTargetBranch}`);
+                    if (newSource === mrTargetBranch) {
+                      setMrTargetBranch("");
+                    }
+                  }}
+                  options={branches.filter((b) => b !== mrTargetBranch).map((b) => ({ value: b, label: b }))}
+                />
               </label>
               <label className="block">
                 <span className="mb-1.5 block text-sm font-medium">目标分支</span>
                 <Select
                   value={mrTargetBranch}
                   onChange={(e) => {
-                    setMrTargetBranch(e.target.value);
-                    setMrTitle(`Merge ${mrDialogBranch} into ${e.target.value}`);
+                    const newTarget = e.target.value;
+                    setMrTargetBranch(newTarget);
+                    setMrTitle(`Merge ${mrDialogBranch} into ${newTarget}`);
+                    if (newTarget === mrDialogBranch) {
+                      setMrDialogBranch("");
+                    }
                   }}
                   options={branches.filter((b) => b !== mrDialogBranch).map((b) => ({ value: b, label: b }))}
                 />
@@ -1224,8 +1285,99 @@ function BranchManagementCard({ projectId }: { projectId: string }) {
               <Button variant="outline" onClick={() => { setMrDialogBranch(null); setMrTitle(""); setMrTargetBranch(""); setMrDescription(""); }}>
                 取消
               </Button>
-              <Button onClick={handleCreateMR} disabled={createMR.isPending || !mrTargetBranch}>
+              <Button onClick={handleCreateMR} disabled={createMR.isPending || !mrDialogBranch || !mrTargetBranch || mrDialogBranch === mrTargetBranch}>
                 {createMR.isPending ? "创建中…" : "创建 MR"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Local Merge Dialog */}
+      {mergeDialogOpen && (
+        <Dialog open onOpenChange={(open) => { if (!open) setMergeDialogOpen(false); }}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>本地分支合并</DialogTitle>
+              <DialogDescription>
+                将源分支合并到目标分支（本地操作）
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-2">
+              <div>
+                <label className="mb-1.5 block text-sm font-medium">源分支</label>
+                <select
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  value={mergeSource}
+                  onChange={(e) => setMergeSource(e.target.value)}
+                >
+                  <option value="">选择源分支</option>
+                  {(branches || []).filter(b => b !== mergeTarget).map(b => (
+                    <option key={b} value={b}>{b}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium">目标分支</label>
+                <select
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  value={mergeTarget}
+                  onChange={(e) => setMergeTarget(e.target.value)}
+                >
+                  <option value="">选择目标分支</option>
+                  {(branches || []).filter(b => b !== mergeSource).map(b => (
+                    <option key={b} value={b}>{b}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium">合并策略</label>
+                <select
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  value={mergeStrategy}
+                  onChange={(e) => setMergeStrategy(e.target.value)}
+                >
+                  <option value="merge">Merge（保留提交历史）</option>
+                  <option value="squash">Squash（压缩为单次提交）</option>
+                  <option value="rebase">Rebase（变基）</option>
+                </select>
+              </div>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={deleteSource}
+                  onChange={(e) => setDeleteSource(e.target.checked)}
+                  className="rounded border-input"
+                />
+                <span className="text-sm">合并后删除源分支</span>
+              </label>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setMergeDialogOpen(false)}>
+                取消
+              </Button>
+              <Button
+                disabled={localMerge.isPending || !mergeSource || !mergeTarget || mergeSource === mergeTarget}
+                onClick={() => {
+                  localMerge.mutate(
+                    { source_branch: mergeSource, target_branch: mergeTarget, strategy: mergeStrategy, delete_source: deleteSource },
+                    {
+                      onSuccess: (data) => {
+                        if (data.ok) {
+                          toast({ title: "合并成功", description: data.output?.slice(0, 200) });
+                          setMergeDialogOpen(false);
+                        } else {
+                          toast({ title: "合并失败", description: data.conflicts?.length ? `冲突文件: ${data.conflicts.join(", ")}` : data.output?.slice(0, 200), variant: "destructive" });
+                        }
+                      },
+                      onError: (err: any) => {
+                        toast({ title: "合并出错", description: err?.message || "未知错误", variant: "destructive" });
+                      },
+                    }
+                  );
+                }}
+              >
+                {localMerge.isPending ? "合并中…" : "执行合并"}
               </Button>
             </DialogFooter>
           </DialogContent>

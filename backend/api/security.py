@@ -10,7 +10,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from backend.core.dependencies import get_optional_user
+from backend.core.dependencies import check_project_config_permission, get_optional_user
 from backend.services.security_scanner import security_scanner
 
 router = APIRouter(prefix="/api/security", tags=["security"])
@@ -28,6 +28,7 @@ class ScanRequest(BaseModel):
     text: str
     workspace_id: str = "default"
     task_id: Optional[str] = None
+    project_id: Optional[str] = None
 
 
 class ScanFindingResponse(BaseModel):
@@ -49,6 +50,7 @@ class RuleCreate(BaseModel):
     description: Optional[str] = None
     remediation: Optional[str] = None
     enabled: Optional[int] = 1
+    project_id: Optional[str] = None
 
 
 class RuleUpdate(BaseModel):
@@ -59,6 +61,7 @@ class RuleUpdate(BaseModel):
     description: Optional[str] = None
     remediation: Optional[str] = None
     enabled: Optional[int] = None
+    project_id: Optional[str] = None
 
 
 class RuleResponse(BaseModel):
@@ -71,6 +74,7 @@ class RuleResponse(BaseModel):
     description: Optional[str] = None
     remediation: Optional[str] = None
     enabled: int = 1
+    project_id: Optional[str] = None
     created_at: Optional[str] = None
 
     class Config:
@@ -122,6 +126,7 @@ async def scan_text(
         output=body.text,
         workspace_id=body.workspace_id,
         task_id=body.task_id,
+        project_id=body.project_id,
     )
     return [
         ScanFindingResponse(
@@ -144,11 +149,13 @@ async def scan_text(
 async def list_rules(
     workspace_id: str = Query("default"),
     category: Optional[str] = Query(None),
+    project_id: Optional[str] = Query(None),
     current_user=Depends(get_optional_user),
 ):
     items = await security_scanner.list_rules(
         workspace_id=workspace_id,
         category=category,
+        project_id=project_id,
     )
     return items
 
@@ -171,6 +178,7 @@ async def create_rule(
     current_user=Depends(get_optional_user),
 ):
     _ensure_not_viewer(current_user)
+    await check_project_config_permission(body.project_id, current_user)
     try:
         item = await security_scanner.create_rule(
             workspace_id=body.workspace_id,
@@ -191,6 +199,7 @@ async def update_rule(
     current_user=Depends(get_optional_user),
 ):
     _ensure_not_viewer(current_user)
+    await check_project_config_permission(body.project_id, current_user)
     payload = body.model_dump(exclude_unset=True)
     try:
         item = await security_scanner.update_rule(
@@ -209,9 +218,11 @@ async def update_rule(
 async def delete_rule(
     rule_id: str,
     workspace_id: str = Query("default"),
+    project_id: Optional[str] = Query(None),
     current_user=Depends(get_optional_user),
 ):
     _ensure_not_viewer(current_user)
+    await check_project_config_permission(project_id, current_user)
     ok = await security_scanner.delete_rule(workspace_id, rule_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Security rule not found")
@@ -226,12 +237,14 @@ async def list_findings(
     workspace_id: str = Query("default"),
     task_id: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
+    project_id: Optional[str] = Query(None),
     current_user=Depends(get_optional_user),
 ):
     items = await security_scanner.list_findings(
         workspace_id=workspace_id,
         task_id=task_id,
         status=status,
+        project_id=project_id,
     )
     return items
 

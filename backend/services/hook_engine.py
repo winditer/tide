@@ -45,10 +45,10 @@ class HookEngine:
 
     # ── trigger ─────────────────────────────────────────
 
-    async def trigger(self, event: str, workspace_id: str, payload: dict):
+    async def trigger(self, event: str, workspace_id: str, payload: dict, project_id: Optional[str] = None):
         """触发指定事件的所有匹配 Hooks（异步执行，失败不阻塞主流程）。"""
         try:
-            hooks = await self._load_hooks(workspace_id, event)
+            hooks = await self._load_hooks(workspace_id, event, project_id=project_id)
         except Exception:
             logger.exception("Hook load failed: event=%s ws=%s", event, workspace_id)
             return
@@ -76,23 +76,44 @@ class HookEngine:
 
     # ── load ────────────────────────────────────────────
 
-    async def _load_hooks(self, workspace_id: str, event: str) -> list[dict]:
-        """从数据库加载匹配指定 workspace + event 的 enabled hooks，按 priority DESC 排序。"""
+    async def _load_hooks(self, workspace_id: str, event: str, project_id: Optional[str] = None) -> list[dict]:
+        """从数据库加载匹配指定 workspace + event 的 enabled hooks，按 priority DESC 排序。
+
+        当 project_id 提供时，加载全局 hooks（project_id IS NULL）和项目级 hooks 两层。
+        """
         async with async_session_factory() as session:
-            result = await session.execute(
-                text(
-                    """
-                    SELECT id, workspace_id, name, event, action_type, action_config,
-                           conditions, priority, enabled, created_at, updated_at
-                    FROM hooks
-                    WHERE workspace_id = :workspace_id
-                      AND event = :event
-                      AND enabled = 1
-                    ORDER BY priority DESC, created_at ASC
-                    """
-                ),
-                {"workspace_id": workspace_id, "event": event},
-            )
+            if project_id:
+                result = await session.execute(
+                    text(
+                        """
+                        SELECT id, workspace_id, name, event, action_type, action_config,
+                               conditions, project_id, priority, enabled, created_at, updated_at
+                        FROM hooks
+                        WHERE workspace_id = :workspace_id
+                          AND event = :event
+                          AND enabled = 1
+                          AND (project_id IS NULL OR project_id = :pid)
+                        ORDER BY priority DESC, created_at ASC
+                        """
+                    ),
+                    {"workspace_id": workspace_id, "event": event, "pid": project_id},
+                )
+            else:
+                result = await session.execute(
+                    text(
+                        """
+                        SELECT id, workspace_id, name, event, action_type, action_config,
+                               conditions, project_id, priority, enabled, created_at, updated_at
+                        FROM hooks
+                        WHERE workspace_id = :workspace_id
+                          AND event = :event
+                          AND enabled = 1
+                          AND project_id IS NULL
+                        ORDER BY priority DESC, created_at ASC
+                        """
+                    ),
+                    {"workspace_id": workspace_id, "event": event},
+                )
             rows = result.fetchall()
         return [dict(r._mapping) for r in rows]
 
@@ -278,6 +299,7 @@ class HookEngine:
         workspace_id: str = "default",
         event: Optional[str] = None,
         enabled: Optional[int] = None,
+        project_id: Optional[str] = None,
         limit: int = 200,
         offset: int = 0,
     ) -> list[dict]:
@@ -293,13 +315,16 @@ class HookEngine:
         if enabled is not None:
             conditions.append("enabled = :enabled")
             params["enabled"] = int(bool(enabled))
+        if project_id is not None:
+            conditions.append("project_id = :project_id")
+            params["project_id"] = project_id
         where = " AND ".join(conditions)
         async with async_session_factory() as session:
             result = await session.execute(
                 text(
                     f"""
                     SELECT id, workspace_id, name, event, action_type, action_config,
-                           conditions, priority, enabled, created_at, updated_at
+                           conditions, project_id, priority, enabled, created_at, updated_at
                     FROM hooks
                     WHERE {where}
                     ORDER BY priority DESC, updated_at DESC
@@ -317,7 +342,7 @@ class HookEngine:
                 text(
                     """
                     SELECT id, workspace_id, name, event, action_type, action_config,
-                           conditions, priority, enabled, created_at, updated_at
+                           conditions, project_id, priority, enabled, created_at, updated_at
                     FROM hooks
                     WHERE workspace_id = :workspace_id AND id = :id
                     """
@@ -350,9 +375,9 @@ class HookEngine:
                     """
                     INSERT INTO hooks
                         (id, workspace_id, name, event, action_type, action_config,
-                         conditions, priority, enabled, created_at, updated_at)
+                         conditions, project_id, priority, enabled, created_at, updated_at)
                     VALUES (:id, :workspace_id, :name, :event, :action_type, :action_config,
-                            :conditions, :priority, :enabled, :created_at, :updated_at)
+                            :conditions, :project_id, :priority, :enabled, :created_at, :updated_at)
                     """
                 ),
                 {
@@ -363,6 +388,7 @@ class HookEngine:
                     "action_type": action_type,
                     "action_config": self._dump_json(action_config),
                     "conditions": self._dump_json(data.get("conditions")) if data.get("conditions") is not None else None,
+                    "project_id": data.get("project_id") or None,
                     "priority": int(data.get("priority") or 0),
                     "enabled": int(bool(data.get("enabled", 1))),
                     "created_at": now,
@@ -400,6 +426,9 @@ class HookEngine:
             params["conditions"] = (
                 self._dump_json(data["conditions"]) if data["conditions"] is not None else None
             )
+        if "project_id" in data:
+            sets.append("project_id = :project_id")
+            params["project_id"] = data["project_id"] or None
         if "priority" in data and data["priority"] is not None:
             sets.append("priority = :priority")
             params["priority"] = int(data["priority"])

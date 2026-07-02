@@ -10,7 +10,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from backend.core.dependencies import get_optional_user
+from backend.core.dependencies import check_project_config_permission, get_optional_user
 from backend.services.skill_service import skill_service
 
 router = APIRouter(prefix="/api/skills", tags=["skills"])
@@ -31,6 +31,7 @@ class SkillCreate(BaseModel):
     content: str
     enabled: Optional[int] = 1
     source: Optional[str] = "custom"
+    project_id: Optional[str] = None
 
 
 class SkillUpdate(BaseModel):
@@ -42,6 +43,7 @@ class SkillUpdate(BaseModel):
     content: Optional[str] = None
     enabled: Optional[int] = None
     source: Optional[str] = None
+    project_id: Optional[str] = None
 
 
 class SkillResponse(BaseModel):
@@ -56,6 +58,7 @@ class SkillResponse(BaseModel):
     version: int = 1
     enabled: int = 1
     source: Optional[str] = None
+    project_id: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -68,6 +71,7 @@ async def list_skills(
     workspace_id: str = Query("default"),
     category: Optional[str] = Query(None),
     enabled: Optional[int] = Query(None),
+    project_id: Optional[str] = Query(None),
     limit: int = Query(200, ge=1, le=500),
     offset: int = Query(0, ge=0),
     current_user=Depends(get_optional_user),
@@ -79,6 +83,7 @@ async def list_skills(
         workspace_id=workspace_id,
         category=category,
         enabled_only=enabled_only,
+        project_id=project_id,
         limit=limit,
         offset=offset,
     )
@@ -103,6 +108,7 @@ async def create_skill(
     current_user=Depends(get_optional_user),
 ):
     _ensure_not_viewer(current_user)
+    await check_project_config_permission(body.project_id, current_user)
     try:
         item = await skill_service.create_skill(
             workspace_id=body.workspace_id,
@@ -123,6 +129,7 @@ async def update_skill(
     current_user=Depends(get_optional_user),
 ):
     _ensure_not_viewer(current_user)
+    await check_project_config_permission(body.project_id, current_user)
     payload = body.model_dump(exclude_unset=True)
     item = await skill_service.update_skill(
         workspace_id=workspace_id,
@@ -138,9 +145,11 @@ async def update_skill(
 async def delete_skill(
     skill_id: str,
     workspace_id: str = Query("default"),
+    project_id: Optional[str] = Query(None),
     current_user=Depends(get_optional_user),
 ):
     _ensure_not_viewer(current_user)
+    await check_project_config_permission(project_id, current_user)
     ok = await skill_service.delete_skill(workspace_id, skill_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Skill not found")

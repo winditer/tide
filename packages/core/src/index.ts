@@ -612,9 +612,12 @@ export {
   gitIgnore,
   createBranch,
   deleteBranch,
+  cleanupBranches,
   pushBranch,
   pullBranch,
   createMergeRequest,
+  getRemoteBranches,
+  localMergeBranches,
 } from "./api/git-audit";
 export type {
   GitCommit,
@@ -636,9 +639,12 @@ export {
   useGitIgnoreMutation,
   useCreateBranch,
   useDeleteBranch,
+  useCleanupBranches,
   usePushBranch,
   usePullBranch,
   useCreateMergeRequest,
+  useRemoteBranches,
+  useLocalMerge,
 } from "./hooks/use-git-audit";
 
 // Files (code editor)

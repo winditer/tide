@@ -25,6 +25,7 @@ import {
   Download,
   FolderGit2,
   GitBranch,
+  GitMerge,
   GitPullRequest,
   Hash,
   Pencil,
@@ -61,6 +62,7 @@ import {
   useAddGroupUserMember,
   useAdminUsers,
   useAuth,
+  useCleanupBranches,
   useCreateBranch,
   useCreateMergeRequest,
   useDeleteBranch,
@@ -74,10 +76,12 @@ import {
   useGroupUserMembers,
   useGroupVersions,
   useGroupWorkflow,
+  useLocalMerge,
   useProjectGroup,
   useProjects,
   usePullBranch,
   usePushBranch,
+  useRemoteBranches,
   useRemoveGroupMember,
   useRemoveGroupUserMember,
   useSetGroupWorkflow,
@@ -864,13 +868,22 @@ function ProjectBranchCard({
 }) {
   const createBranch = useCreateBranch(project.project_id);
   const deleteBranch = useDeleteBranch(project.project_id);
+  const cleanupBranches = useCleanupBranches(project.project_id);
   const pushBranch = usePushBranch(project.project_id);
   const pullBranch = usePullBranch(project.project_id);
+  const { data: remoteBranchesData } = useRemoteBranches(project.project_id);
+  const remoteBranchSet = new Set(remoteBranchesData?.branches ?? []);
+  const localMerge = useLocalMerge(project.project_id);
   const qc = useQueryClient();
 
   const [expanded, setExpanded] = useState(true);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newBranchName, setNewBranchName] = useState("");
+  const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
+  const [mergeSource, setMergeSource] = useState("");
+  const [mergeTarget, setMergeTarget] = useState("");
+  const [mergeStrategy, setMergeStrategy] = useState("merge");
+  const [deleteSource, setDeleteSource] = useState(false);
 
   const handleCreate = () => {
     if (!newBranchName.trim()) return;
@@ -922,15 +935,37 @@ function ProjectBranchCard({
           {project.name}
           <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{project.branches.length}</Badge>
         </button>
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-7 text-xs"
-          onClick={() => setShowCreateForm((v) => !v)}
-        >
-          <Plus className="h-3 w-3 mr-1" />
-          新建分支
-        </Button>
+        <div className="flex items-center gap-2">
+          {project.branches.some((b) => b.startsWith("tide/")) && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs text-destructive hover:text-destructive"
+              disabled={cleanupBranches.isPending}
+              onClick={() => {
+                if (!confirm(`确定清理 ${project.name} 中所有 tide/ 前缀的工作分支吗？`)) return;
+                cleanupBranches.mutateAsync(undefined)
+                  .then((data) => {
+                    qc.invalidateQueries({ queryKey: ["project-group", groupId, "branches"] });
+                    toast({ title: "清理完成", description: `已删除 ${(data as { cleaned: number }).cleaned} 个分支` });
+                  })
+                  .catch((e) => toast({ title: "清理失败", description: getApiErrorMessage(e), variant: "destructive" }));
+              }}
+            >
+              <Trash2 className="h-3 w-3 mr-1" />
+              {cleanupBranches.isPending ? "清理中…" : "清理"}
+            </Button>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 text-xs"
+            onClick={() => setShowCreateForm((v) => !v)}
+          >
+            <Plus className="h-3 w-3 mr-1" />
+            新建分支
+          </Button>
+        </div>
       </div>
 
       {/* Create Form */}
@@ -977,7 +1012,17 @@ function ProjectBranchCard({
                   <Button variant="ghost" size="sm" className="h-6 w-6 p-0" title="Pull" onClick={() => handlePull(branch)}>
                     <Download className="h-3 w-3" />
                   </Button>
-                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0" title="Merge Request" onClick={() => onMrRequest(project.project_id, branch, project.branches)}>
+                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0" title="本地合并" onClick={() => { setMergeSource(branch); setMergeTarget(""); setMergeDialogOpen(true); }}>
+                    <GitMerge className="h-3 w-3" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 w-6 p-0"
+                    title={remoteBranchSet.has(branch) ? "Merge Request" : "分支未推送到远端，请先 Push"}
+                    disabled={!remoteBranchSet.has(branch)}
+                    onClick={() => onMrRequest(project.project_id, branch, project.branches)}
+                  >
                     <GitPullRequest className="h-3 w-3" />
                   </Button>
                   <Button
@@ -995,6 +1040,94 @@ function ProjectBranchCard({
             ))
           )}
         </div>
+      )}
+
+      {/* Local Merge Dialog */}
+      {mergeDialogOpen && (
+        <Dialog open onOpenChange={(open) => { if (!open) setMergeDialogOpen(false); }}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>本地分支合并</DialogTitle>
+              <DialogDescription>将源分支合并到目标分支（本地操作）</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-2">
+              <div>
+                <label className="mb-1.5 block text-sm font-medium">源分支</label>
+                <select
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  value={mergeSource}
+                  onChange={(e) => setMergeSource(e.target.value)}
+                >
+                  <option value="">选择源分支</option>
+                  {(project.branches || []).filter(b => b !== mergeTarget).map(b => (
+                    <option key={b} value={b}>{b}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium">目标分支</label>
+                <select
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  value={mergeTarget}
+                  onChange={(e) => setMergeTarget(e.target.value)}
+                >
+                  <option value="">选择目标分支</option>
+                  {(project.branches || []).filter(b => b !== mergeSource).map(b => (
+                    <option key={b} value={b}>{b}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium">合并策略</label>
+                <select
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  value={mergeStrategy}
+                  onChange={(e) => setMergeStrategy(e.target.value)}
+                >
+                  <option value="merge">Merge（保留提交历史）</option>
+                  <option value="squash">Squash（压缩为单次提交）</option>
+                  <option value="rebase">Rebase（变基）</option>
+                </select>
+              </div>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={deleteSource}
+                  onChange={(e) => setDeleteSource(e.target.checked)}
+                  className="rounded border-input"
+                />
+                <span className="text-sm">合并后删除源分支</span>
+              </label>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setMergeDialogOpen(false)}>取消</Button>
+              <Button
+                disabled={localMerge.isPending || !mergeSource || !mergeTarget || mergeSource === mergeTarget}
+                onClick={() => {
+                  localMerge.mutate(
+                    { source_branch: mergeSource, target_branch: mergeTarget, strategy: mergeStrategy, delete_source: deleteSource },
+                    {
+                      onSuccess: (data) => {
+                        if (data.ok) {
+                          toast({ title: "合并成功", description: data.output?.slice(0, 200) });
+                          setMergeDialogOpen(false);
+                          qc.invalidateQueries({ queryKey: ["project-group", groupId, "branches"] });
+                        } else {
+                          toast({ title: "合并失败", description: data.conflicts?.length ? `冲突文件: ${data.conflicts.join(", ")}` : data.output?.slice(0, 200), variant: "destructive" });
+                        }
+                      },
+                      onError: (err: any) => {
+                        toast({ title: "合并出错", description: err?.message || "未知错误", variant: "destructive" });
+                      },
+                    }
+                  );
+                }}
+              >
+                {localMerge.isPending ? "合并中…" : "执行合并"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       )}
     </div>
   );

@@ -43,10 +43,10 @@ class SecurityScanner:
     # ── scan ─────────────────────────────────────────────
 
     async def scan_output(
-        self, output: str, workspace_id: str, task_id: str = None
+        self, output: str, workspace_id: str, task_id: str = None, project_id: str = None
     ) -> list[SecurityFinding]:
         """扫描 Agent 输出中的安全问题。"""
-        rules = await self._load_rules(workspace_id)
+        rules = await self._load_rules(workspace_id, project_id=project_id)
         findings: list[SecurityFinding] = []
         for rule in rules:
             try:
@@ -70,25 +70,49 @@ class SecurityScanner:
 
         # 如果有 task_id，持久化 findings
         if task_id and findings:
-            await self._save_findings(workspace_id, task_id, findings)
+            await self._save_findings(workspace_id, task_id, findings, project_id=project_id)
 
         return findings
 
-    async def _load_rules(self, workspace_id: str) -> list[dict]:
-        """加载启用的安全规则。"""
+    async def _load_rules(self, workspace_id: str, project_id: str = None) -> list[dict]:
+        """加载启用的安全规则。
+
+        当 project_id 提供时，加载全局规则 + 项目规则，项目规则同名覆盖全局规则。
+        """
         async with async_session_factory() as session:
-            rows = (
-                await session.execute(
-                    text(
-                        "SELECT * FROM security_rules WHERE workspace_id = :ws AND enabled = 1"
-                    ),
-                    {"ws": workspace_id},
-                )
-            ).fetchall()
-            return [dict(r._mapping) for r in rows]
+            if project_id:
+                rows = (
+                    await session.execute(
+                        text(
+                            "SELECT * FROM security_rules WHERE workspace_id = :ws AND enabled = 1"
+                            " AND (project_id IS NULL OR project_id = :pid)"
+                        ),
+                        {"ws": workspace_id, "pid": project_id},
+                    )
+                ).fetchall()
+                # 合并策略：项目规则同名覆盖全局规则
+                rules_by_name: dict[str, dict] = {}
+                for r in rows:
+                    rule = dict(r._mapping)
+                    name = rule.get("name", "")
+                    existing = rules_by_name.get(name)
+                    if existing is None or rule.get("project_id"):
+                        rules_by_name[name] = rule
+                return list(rules_by_name.values())
+            else:
+                rows = (
+                    await session.execute(
+                        text(
+                            "SELECT * FROM security_rules WHERE workspace_id = :ws AND enabled = 1"
+                            " AND project_id IS NULL"
+                        ),
+                        {"ws": workspace_id},
+                    )
+                ).fetchall()
+                return [dict(r._mapping) for r in rows]
 
     async def _save_findings(
-        self, workspace_id: str, task_id: str, findings: list[SecurityFinding]
+        self, workspace_id: str, task_id: str, findings: list[SecurityFinding], project_id: str = None
     ):
         """将扫描结果持久化。"""
         async with async_session_factory() as session:
@@ -96,8 +120,8 @@ class SecurityScanner:
                 await session.execute(
                     text(
                         """INSERT INTO security_findings
-                            (id, workspace_id, task_id, rule_id, category, severity, snippet, location, description, remediation)
-                            VALUES (:id, :ws, :task_id, :rule_id, :cat, :sev, :snippet, :loc, :desc, :rem)"""
+                            (id, workspace_id, task_id, rule_id, category, severity, snippet, location, description, remediation, project_id)
+                            VALUES (:id, :ws, :task_id, :rule_id, :cat, :sev, :snippet, :loc, :desc, :rem, :project_id)"""
                     ),
                     {
                         "id": str(uuid.uuid4()),
@@ -110,6 +134,7 @@ class SecurityScanner:
                         "loc": f.location,
                         "desc": f.description,
                         "rem": f.remediation,
+                        "project_id": project_id,
                     },
                 )
             await session.commit()
@@ -117,7 +142,7 @@ class SecurityScanner:
     # ── CRUD for rules ───────────────────────────────────
 
     async def list_rules(
-        self, workspace_id: str, category: str = None
+        self, workspace_id: str, category: str = None, project_id: str = None
     ) -> list[dict]:
         """列出安全规则。"""
         conditions = ["workspace_id = :ws"]
@@ -125,6 +150,11 @@ class SecurityScanner:
         if category:
             conditions.append("category = :category")
             params["category"] = category
+        if project_id:
+            conditions.append("(project_id IS NULL OR project_id = :project_id)")
+            params["project_id"] = project_id
+        else:
+            conditions.append("project_id IS NULL")
         where = " AND ".join(conditions)
         async with async_session_factory() as session:
             rows = (
@@ -173,8 +203,8 @@ class SecurityScanner:
             await session.execute(
                 text(
                     """INSERT INTO security_rules
-                        (id, workspace_id, name, category, pattern, severity, description, remediation, enabled)
-                        VALUES (:id, :ws, :name, :category, :pattern, :severity, :description, :remediation, :enabled)"""
+                        (id, workspace_id, name, category, pattern, severity, description, remediation, enabled, project_id)
+                        VALUES (:id, :ws, :name, :category, :pattern, :severity, :description, :remediation, :enabled, :project_id)"""
                 ),
                 {
                     "id": rule_id,
@@ -186,6 +216,7 @@ class SecurityScanner:
                     "description": data.get("description"),
                     "remediation": data.get("remediation"),
                     "enabled": int(bool(data.get("enabled", 1))),
+                    "project_id": data.get("project_id"),
                 },
             )
             await session.commit()
@@ -228,6 +259,9 @@ class SecurityScanner:
         if "enabled" in data and data["enabled"] is not None:
             sets.append("enabled = :enabled")
             params["enabled"] = int(bool(data["enabled"]))
+        if "project_id" in data:
+            sets.append("project_id = :project_id")
+            params["project_id"] = data["project_id"]
 
         if not sets:
             return existing
@@ -262,7 +296,7 @@ class SecurityScanner:
     # ── Findings management ──────────────────────────────
 
     async def list_findings(
-        self, workspace_id: str, task_id: str = None, status: str = None
+        self, workspace_id: str, task_id: str = None, status: str = None, project_id: str = None
     ) -> list[dict]:
         """列出扫描结果。"""
         conditions = ["workspace_id = :ws"]
@@ -273,6 +307,9 @@ class SecurityScanner:
         if status:
             conditions.append("status = :status")
             params["status"] = status
+        if project_id:
+            conditions.append("project_id = :project_id")
+            params["project_id"] = project_id
         where = " AND ".join(conditions)
         async with async_session_factory() as session:
             rows = (

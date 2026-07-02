@@ -2,7 +2,7 @@
 
 
 import { useMemo, useState, useCallback } from "react";
-import { Pencil, Trash2, AlertTriangle, GitMerge, Maximize2, Minimize2, CheckCircle2, ArrowRight, Clock } from "lucide-react";
+import { Pencil, Trash2, AlertTriangle, GitMerge, GitBranch, Maximize2, Minimize2, CheckCircle2, ArrowRight, Clock } from "lucide-react";
 import { Button, Badge, Input, Select } from "@tide/ui";
 import {
   useWorkItem,
@@ -397,14 +397,14 @@ export function WorkItemDetailPanel({
                       </span>
                     </div>
                     {(t.task_id || sessionId) && (
-                      <div className="mt-2 flex flex-wrap items-center gap-3">
+                      <div className="mt-2 flex min-w-0 flex-wrap items-center gap-3">
                         {t.task_id && !t.plan_tasks?.length && (
                           t.task_info ? (
                             <a
                               href={`/tasks/${t.task_info.id}`}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="flex items-center gap-2 rounded-md px-2 py-1.5 transition-smooth hover:bg-muted/50"
+                              className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 transition-smooth hover:bg-muted/50"
                             >
                               <span
                                 className={`inline-block h-2 w-2 shrink-0 rounded-full ${
@@ -414,7 +414,7 @@ export function WorkItemDetailPanel({
                               <span className="min-w-0 flex-1 truncate text-xs text-foreground">
                                 {t.task_info.prompt?.slice(0, 60) || t.task_id.slice(0, 8)}
                               </span>
-                              <span className="shrink-0 text-[10px] text-muted-foreground">
+                              <span className="shrink-0 whitespace-nowrap text-[10px] text-muted-foreground">
                                 {TASK_STATUS_LABEL[t.task_info.status] ?? t.task_info.status}
                               </span>
                             </a>
@@ -782,6 +782,14 @@ function WorkItemMergeConflictSection({ item }: { item: WorkItem }) {
     delete_source?: boolean;
     output?: string;
     timestamp?: string;
+    repos?: Array<{
+      project_name: string;
+      merged_branches: Array<{
+        branch: string;
+        type?: string;
+        success?: boolean;
+      }>;
+    }>;
   } | undefined;
 
   // 向后兼容：从旧结构读取冲突数据
@@ -791,6 +799,8 @@ function WorkItemMergeConflictSection({ item }: { item: WorkItem }) {
     source_branch?: string;
     target_branch?: string;
     conflict_files?: string[];
+    project_name?: string;
+    error_message?: string;
   } | undefined;
 
   // 无合并结果且无旧式冲突标记时不展示
@@ -798,22 +808,57 @@ function WorkItemMergeConflictSection({ item }: { item: WorkItem }) {
 
   // 合并成功展示
   if (mergeResult?.success) {
+    const repos = mergeResult.repos || [];
     return (
       <div>
         <div className="rounded-xl border border-emerald-200/70 bg-emerald-50/60 p-4 shadow-card">
           <div className="flex items-center gap-2">
             <CheckCircle2 className="h-4 w-4 text-emerald-600" />
             <span className="text-xs font-semibold text-emerald-800">合并成功</span>
+            {mergeResult.target_branch && (
+              <Badge variant="outline" className="text-[10px] font-mono ml-1">
+                → {mergeResult.target_branch}
+              </Badge>
+            )}
           </div>
-          <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-            <Badge variant="outline" className="text-[10px] font-mono">
-              {mergeResult.source_branch || "source"}
-            </Badge>
-            <ArrowRight className="h-3 w-3" />
-            <Badge variant="outline" className="text-[10px] font-mono">
-              {mergeResult.target_branch || "target"}
-            </Badge>
-          </div>
+
+          {/* 多项目合并详情 */}
+          {repos.length > 0 ? (
+            <div className="mt-3 space-y-2">
+              {repos.map((repo) => (
+                <div key={repo.project_name} className="rounded-lg bg-white/60 border border-emerald-100 px-3 py-2">
+                  <div className="flex items-center gap-1.5 text-[11px] font-medium text-emerald-900">
+                    <GitBranch className="h-3 w-3" />
+                    <span>{repo.project_name}</span>
+                  </div>
+                  {repo.merged_branches.map((mb) => (
+                    <div key={mb.branch} className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground pl-4">
+                      <Badge variant="outline" className="text-[10px] font-mono">
+                        {mb.branch}
+                      </Badge>
+                      <ArrowRight className="h-3 w-3" />
+                      <Badge variant="outline" className="text-[10px] font-mono">
+                        {mergeResult.target_branch || "target"}
+                      </Badge>
+                      {mb.success && <CheckCircle2 className="h-3 w-3 text-emerald-500" />}
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          ) : (
+            /* 单项目兼容 */
+            <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Badge variant="outline" className="text-[10px] font-mono">
+                {mergeResult.source_branch || "source"}
+              </Badge>
+              <ArrowRight className="h-3 w-3" />
+              <Badge variant="outline" className="text-[10px] font-mono">
+                {mergeResult.target_branch || "target"}
+              </Badge>
+            </div>
+          )}
+
           <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
             <span>策略: {mergeResult.strategy || "merge"}</span>
             {mergeResult.auto_push && <span>• 已自动推送</span>}
@@ -835,6 +880,8 @@ function WorkItemMergeConflictSection({ item }: { item: WorkItem }) {
   const targetBranch = mergeResult?.target_branch || conflictData?.target_branch || "target";
   const conflictFiles = mergeResult?.conflict_files || conflictData?.conflict_files || [];
   const cwd = conflictData?.cwd || "";
+  const projectName = conflictData?.project_name || "";
+  const errorMessage = conflictData?.error_message || "";
 
   if (showPanel && conflictFiles.length > 0) {
     return (
@@ -859,6 +906,11 @@ function WorkItemMergeConflictSection({ item }: { item: WorkItem }) {
         <div className="flex items-center gap-2">
           <AlertTriangle className="h-4 w-4 text-amber-700" />
           <span className="text-xs font-semibold text-amber-800">合并冲突</span>
+          {projectName && (
+            <Badge variant="secondary" className="text-[10px]">
+              {projectName}
+            </Badge>
+          )}
         </div>
         <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
           <Badge variant="outline" className="text-[10px] font-mono">
@@ -869,11 +921,17 @@ function WorkItemMergeConflictSection({ item }: { item: WorkItem }) {
             {targetBranch}
           </Badge>
         </div>
-        <p className="mt-1.5 text-[11px] text-muted-foreground">
-          {conflictFiles.length > 0
-            ? `${conflictFiles.length} 个文件存在冲突，需要手动解决`
-            : "存在合并冲突，需要解决"}
-        </p>
+        {errorMessage ? (
+          <p className="mt-1.5 text-[11px] text-muted-foreground whitespace-pre-line">
+            {errorMessage}
+          </p>
+        ) : (
+          <p className="mt-1.5 text-[11px] text-muted-foreground">
+            {conflictFiles.length > 0
+              ? `${conflictFiles.length} 个文件存在冲突，需要手动解决`
+              : "存在合并冲突，需要解决"}
+          </p>
+        )}
         {mergeResult?.timestamp && (
           <div className="mt-1 flex items-center gap-1 text-[10px] text-muted-foreground">
             <Clock className="h-3 w-3" />

@@ -10,7 +10,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from backend.core.dependencies import get_optional_user
+from backend.core.dependencies import check_project_config_permission, get_optional_user
 from backend.services.hook_engine import hook_engine
 
 router = APIRouter(prefix="/api/hooks", tags=["hooks"])
@@ -30,6 +30,7 @@ class HookCreate(BaseModel):
     conditions: Optional[Any] = None
     priority: Optional[int] = 0
     enabled: Optional[int] = 1
+    project_id: Optional[str] = None
 
 
 class HookUpdate(BaseModel):
@@ -40,6 +41,7 @@ class HookUpdate(BaseModel):
     conditions: Optional[Any] = None
     priority: Optional[int] = None
     enabled: Optional[int] = None
+    project_id: Optional[str] = None
 
 
 class HookResponse(BaseModel):
@@ -52,6 +54,7 @@ class HookResponse(BaseModel):
     conditions: Optional[Any] = None
     priority: int = 0
     enabled: int = 1
+    project_id: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -64,6 +67,7 @@ async def list_hooks(
     workspace_id: str = Query("default"),
     event: Optional[str] = Query(None),
     enabled: Optional[int] = Query(None),
+    project_id: Optional[str] = Query(None),
     limit: int = Query(200, ge=1, le=500),
     offset: int = Query(0, ge=0),
     current_user=Depends(get_optional_user),
@@ -72,6 +76,7 @@ async def list_hooks(
         workspace_id=workspace_id,
         event=event,
         enabled=enabled,
+        project_id=project_id,
         limit=limit,
         offset=offset,
     )
@@ -96,6 +101,7 @@ async def create_hook(
     current_user=Depends(get_optional_user),
 ):
     _ensure_not_viewer(current_user)
+    await check_project_config_permission(body.project_id, current_user)
     try:
         item = await hook_engine.create_hook(
             workspace_id=body.workspace_id,
@@ -116,6 +122,7 @@ async def update_hook(
     current_user=Depends(get_optional_user),
 ):
     _ensure_not_viewer(current_user)
+    await check_project_config_permission(body.project_id, current_user)
     payload = body.model_dump(exclude_unset=True)
     item = await hook_engine.update_hook(
         workspace_id=workspace_id,
@@ -131,9 +138,11 @@ async def update_hook(
 async def delete_hook(
     hook_id: str,
     workspace_id: str = Query("default"),
+    project_id: Optional[str] = Query(None),
     current_user=Depends(get_optional_user),
 ):
     _ensure_not_viewer(current_user)
+    await check_project_config_permission(project_id, current_user)
     ok = await hook_engine.delete_hook(workspace_id, hook_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Hook not found")

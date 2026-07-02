@@ -198,4 +198,69 @@ async def init_db():
             ON approvals(task_id, COALESCE(plan_id, ''), type) WHERE status = 'pending'
         """)
 
+        # skills 表补列 project_id（项目级隔离）
+        cursor = await db.execute("PRAGMA table_info(skills)")
+        skills_columns = {row[1] for row in await cursor.fetchall()}
+        if skills_columns and "project_id" not in skills_columns:
+            await db.execute("ALTER TABLE skills ADD COLUMN project_id TEXT")
+
+        # hooks 表补列 project_id
+        cursor = await db.execute("PRAGMA table_info(hooks)")
+        hooks_columns = {row[1] for row in await cursor.fetchall()}
+        if hooks_columns and "project_id" not in hooks_columns:
+            await db.execute("ALTER TABLE hooks ADD COLUMN project_id TEXT")
+
+        # security_rules 表补列 project_id
+        cursor = await db.execute("PRAGMA table_info(security_rules)")
+        sr_columns = {row[1] for row in await cursor.fetchall()}
+        if sr_columns and "project_id" not in sr_columns:
+            await db.execute("ALTER TABLE security_rules ADD COLUMN project_id TEXT")
+
+        # security_findings 表补列 project_id
+        cursor = await db.execute("PRAGMA table_info(security_findings)")
+        sf_columns = {row[1] for row in await cursor.fetchall()}
+        if sf_columns and "project_id" not in sf_columns:
+            await db.execute("ALTER TABLE security_findings ADD COLUMN project_id TEXT")
+
+        # rules 表补列 project_id（旧数据库兼容）
+        cursor = await db.execute("PRAGMA table_info(rules)")
+        rules_columns = {row[1] for row in await cursor.fetchall()}
+        if rules_columns and "project_id" not in rules_columns:
+            await db.execute("ALTER TABLE rules ADD COLUMN project_id TEXT")
+
+        # 项目级隔离索引（在 ALTER TABLE 之后安全创建）
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_skills_project ON skills(workspace_id, project_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_skills_project_category ON skills(workspace_id, project_id, category)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_hooks_project_event ON hooks(workspace_id, project_id, event)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_security_rules_project ON security_rules(workspace_id, project_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_security_findings_project ON security_findings(workspace_id, project_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_rules_scope_project ON rules(workspace_id, scope, project_id)")
+
+        # expert_teams 表（专家团队）
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS expert_teams (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL DEFAULT 'default',
+                project_id TEXT,
+                name TEXT NOT NULL,
+                slug TEXT NOT NULL,
+                description TEXT,
+                agent_id TEXT NOT NULL,
+                model TEXT,
+                skill_slugs TEXT DEFAULT '[]',
+                role_prompt TEXT,
+                enabled INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(workspace_id, slug)
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_expert_teams_project ON expert_teams(workspace_id, project_id)")
+
+        # expert_teams 补列 model（旧数据库兼容）
+        cursor = await db.execute("PRAGMA table_info(expert_teams)")
+        et_columns = {row[1] for row in await cursor.fetchall()}
+        if et_columns and "model" not in et_columns:
+            await db.execute("ALTER TABLE expert_teams ADD COLUMN model TEXT")
+
         await db.commit()

@@ -72,6 +72,8 @@ export function NodeRunList({
                       source_branch?: string;
                       target_branch?: string;
                       cwd?: string;
+                      project_name?: string;
+                      error_message?: string;
                     })
                   : null;
               const mergeSuccessOutput =
@@ -152,6 +154,11 @@ export function NodeRunList({
                           <div className="flex items-center gap-2">
                             <AlertTriangle className="h-4 w-4 text-amber-700" />
                             <span className="text-xs font-semibold text-amber-800">合并冲突</span>
+                            {mergeOutput.project_name && (
+                              <Badge variant="secondary" className="text-[10px]">
+                                {mergeOutput.project_name}
+                              </Badge>
+                            )}
                           </div>
                           <div className="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
                             <Badge variant="outline" className="text-[10px] font-mono">
@@ -162,9 +169,16 @@ export function NodeRunList({
                               {mergeOutput.target_branch || "target"}
                             </Badge>
                           </div>
-                          <p className="mt-1 text-[11px] text-muted-foreground">
-                            {mergeOutput.conflict_files?.length ?? 0} 个文件存在冲突
-                          </p>
+                          {mergeOutput.error_message && (
+                            <p className="mt-1.5 text-[11px] text-muted-foreground whitespace-pre-line">
+                              {mergeOutput.error_message}
+                            </p>
+                          )}
+                          {!mergeOutput.error_message && (
+                            <p className="mt-1 text-[11px] text-muted-foreground">
+                              {mergeOutput.conflict_files?.length ?? 0} 个文件存在冲突
+                            </p>
+                          )}
                           <Button
                             size="sm"
                             className="mt-2 h-7 text-[11px] bg-amber-600 hover:bg-amber-700 text-white"

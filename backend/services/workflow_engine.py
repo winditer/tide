@@ -35,6 +35,7 @@ from sqlalchemy import text
 from backend.db.engine import async_session_factory
 from backend.runtime.adapters import (
     AGENT_ADAPTERS,
+    _build_prompt_with_knowledge,
     _build_prompt_with_rules,
     _build_prompt_with_skills,
 )
@@ -526,6 +527,30 @@ class WorkflowEngine:
         run_info = self._runs.get(run_id) or {}
         workspace_id = run_info.get("workspace_id") or self._get_workspace_id(run_id)
 
+        # 专家团解析：若节点配置了 expert_team_id，覆盖 agent_id、合并 skills、注入角色提示词
+        if data.get("expert_team_id"):
+            try:
+                from backend.services.expert_team_service import ExpertTeamService
+                expert_team_svc = ExpertTeamService()
+                expert_team = await expert_team_svc.resolve_expert_team(
+                    data["expert_team_id"], workspace_id
+                )
+                if expert_team:
+                    # 覆盖 Agent
+                    agent_id = expert_team["agent_id"]
+                    # 覆盖模型（如果专家团配置了自定义模型）
+                    if expert_team.get("model"):
+                        model = expert_team["model"]
+                    # 合并 Skills（专家团技能 + 节点手动选择的技能）
+                    existing_skills = data.get("skills", []) or []
+                    combined_skills = expert_team.get("skill_slugs", []) + existing_skills
+                    data["skills"] = list(dict.fromkeys(combined_skills))  # 去重保序
+                    # 注入角色提示词
+                    if expert_team.get("role_prompt"):
+                        prompt = f"# 你的角色\n\n{expert_team['role_prompt']}\n\n---\n\n{prompt}"
+            except Exception as e:
+                logger.warning("Expert team resolution failed: %s", e)
+
         # Rules 注入（强制约束）：在 Skills 之前注入，作为 prompt 顶部前缀。
         # 异常静默回退，不阻塞主流程。
         project_id = (
@@ -538,6 +563,13 @@ class WorkflowEngine:
             )
         except Exception as e:
             logger.warning("Rules injection failed: %s", e)
+
+        # Knowledge 注入：项目知识库模块摘要，作为项目结构参考。
+        # 知识库不存在或加载失败时静默回退，不阻塞主流程。
+        try:
+            prompt = await _build_prompt_with_knowledge(prompt, cwd=cwd, project_id=project_id)
+        except Exception as e:
+            logger.warning("[workflow] inject knowledge failed run=%s node=%s: %s", run_id, node_id, e)
 
         # Skills 注入：读取 node.data.skills（slug 列表）并将 Skill 内容作为
         # prompt 前缀拼接。支持 list[str] 或逗号分隔的字符串。
@@ -659,6 +691,7 @@ class WorkflowEngine:
                 return
 
         output_parts: list[str] = []
+        agent_final_output: str = ""  # 仅存 completed 事件的精炼摘要
         final_status = "completed"
         try:
             async for event in agent_executor.run_task(
@@ -675,6 +708,7 @@ class WorkflowEngine:
                 elif event.type == "completed":
                     if event.content:
                         output_parts.append(event.content)
+                        agent_final_output = event.content
                     final_status = "completed"
                 elif event.type == "failed":
                     if event.content:
@@ -702,25 +736,32 @@ class WorkflowEngine:
 
         final_output = "\n".join(p for p in output_parts if p)
         db_status = "stopped" if final_status == "cancelled" else final_status
-        await self._finalize_task(task_id, db_status, final_output)
+        await self._finalize_task(task_id, db_status, final_output, agent_final_output)
 
         if final_status == "completed":
-            await self.on_task_completed(task_id, final_output)
+            await self.on_task_completed(task_id, final_output, agent_final_output)
         else:
             await self.on_task_failed(task_id, final_output or final_status)
 
-    async def _finalize_task(self, task_id: str, status: str, output: str):
+    async def _finalize_task(self, task_id: str, status: str, output: str, agent_final_output: str = ""):
         """更新 tasks 表的最终状态/结果。"""
         async with async_session_factory() as session:
             await session.execute(
                 text(
                     """
                     UPDATE tasks
-                    SET status = :status, completed_at = :now, result = :result
+                    SET status = :status, completed_at = :now, result = :result,
+                        agent_final_output = :agent_final_output
                     WHERE id = :id
                     """
                 ),
-                {"id": task_id, "now": _now_iso(), "status": status, "result": output},
+                {
+                    "id": task_id,
+                    "now": _now_iso(),
+                    "status": status,
+                    "result": output,
+                    "agent_final_output": agent_final_output or None,
+                },
             )
             await session.commit()
 
@@ -827,7 +868,7 @@ class WorkflowEngine:
 
     # ── callbacks ────────────────────────────────────────
 
-    async def on_task_completed(self, task_id: str, result: str):
+    async def on_task_completed(self, task_id: str, result: str, agent_final_output: str = ""):
         """Agent 任务完成回调。"""
         link = await self._find_node_run_by_task(task_id)
         if not link:
@@ -850,7 +891,11 @@ class WorkflowEngine:
             },
         )
 
-        context = await self._update_run_context(run_id, node_id, {"output": result})
+        # 存储到 context：output 为完整日志（调试用），agent_final_output 为精炼摘要（供下游引用）
+        ctx_data: dict = {"output": result}
+        if agent_final_output:
+            ctx_data["agent_final_output"] = agent_final_output
+        context = await self._update_run_context(run_id, node_id, ctx_data)
         await self._execute_next_nodes(run_id, node_id, context)
 
     async def on_task_failed(self, task_id: str, error: str):
@@ -1230,7 +1275,13 @@ class WorkflowEngine:
                 payload["node_type"] = node_type
             if extra:
                 payload.update(extra)
-            asyncio.create_task(hook_engine.trigger(event, workspace_id, payload))
+            # 从运行上下文中提取 project_id
+            run_ctx = (self._runs.get(run_id) or {}).get("context") or {}
+            _project_id = (
+                run_ctx.get("project_id", "")
+                or run_ctx.get("start", {}).get("input", {}).get("project_id", "")
+            ) or None
+            asyncio.create_task(hook_engine.trigger(event, workspace_id, payload, project_id=_project_id))
         except Exception:
             logger.debug("workflow hook trigger dispatch failed", exc_info=True)
 

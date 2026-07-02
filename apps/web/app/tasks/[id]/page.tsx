@@ -21,6 +21,8 @@ const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "
   running: "default",
   review: "outline",
   completed: "secondary",
+  committed: "secondary",
+  merged: "secondary",
   failed: "destructive",
   stopped: "outline",
   cancelled: "outline",
@@ -33,6 +35,8 @@ const STATUS_LABEL: Record<string, string> = {
   running: "运行中",
   review: "待审批",
   completed: "已完成",
+  committed: "已提交",
+  merged: "已合并",
   failed: "失败",
   stopped: "已停止",
   cancelled: "已取消",
@@ -45,6 +49,8 @@ const STATUS_DOT: Record<string, string> = {
   running: "bg-emerald-500",
   review: "bg-amber-500",
   completed: "bg-zinc-900",
+  committed: "bg-blue-600",
+  merged: "bg-violet-600",
   failed: "bg-red-600",
   stopped: "bg-zinc-500",
   cancelled: "bg-zinc-500",
@@ -440,8 +446,16 @@ export default function TaskDetailPage({
         />
         <StatCell
           label="完成时间"
-          primary={formatShort(task.completed_at)}
-          secondary={task.completed_at ? formatFull(task.completed_at) : "进行中…"}
+          primary={
+            ["completed", "failed", "stopped", "rejected", "cancelled", "committed", "merged"].includes(task.status) && task.completed_at
+              ? formatShort(task.completed_at)
+              : "进行中…"
+          }
+          secondary={
+            ["completed", "failed", "stopped", "rejected", "cancelled", "committed", "merged"].includes(task.status) && task.completed_at
+              ? formatFull(task.completed_at)
+              : "进行中…"
+          }
         />
       </section>
 

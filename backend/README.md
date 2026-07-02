@@ -165,6 +165,23 @@ cd /path/to/tide && uvicorn backend.main:app --reload --port 8000
 | CRUD | `/api/security/rules` | 安全规则管理 |
 | GET/PUT | `/api/security/findings` | 扫描发现管理 |
 
+> **项目级配置**：Skills、Hooks、Security 端点均支持 `project_id` 查询参数。传入 project_id 时返回全局+项目级合并结果；写操作需通过 `check_project_config_permission` 权限检查。
+
+### Expert Teams 专家团
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/expert-teams` | 列出专家团（支持 workspace_id、project_id、enabled 过滤） |
+| GET | `/api/expert-teams/{id}` | 专家团详情 |
+| POST | `/api/expert-teams` | 创建专家团 |
+| PUT | `/api/expert-teams/{id}` | 更新专家团 |
+| DELETE | `/api/expert-teams/{id}` | 删除专家团 |
+
+查询参数：
+- `workspace_id` — 工作空间（默认 "default"）
+- `project_id` — 项目 ID 过滤（返回全局+指定项目合并结果）
+- `enabled` — 启用状态过滤（0/1）
+
 ### Auth 认证
 
 | 方法 | 路径 | 说明 |
@@ -246,6 +263,7 @@ cd /path/to/tide && uvicorn backend.main:app --reload --port 8000
 | `project_group_members` | 项目组成员项目 |
 | `project_group_user_members` | 项目组用户成员 |
 | `work_items` | 工作项（含 AI 分解结果） |
+| `expert_teams` | 专家团定义：绑定 Agent + Skills + 角色提示词，支持项目级继承覆盖 |
 
 数据库文件：`tide.db`（SQLite WAL 模式）
 

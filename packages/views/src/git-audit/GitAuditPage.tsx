@@ -29,9 +29,8 @@ import {
   useGitCommitMutation,
   useGitDiscardMutation,
   useGitIgnoreMutation,
-  useWorkItems,
 } from "@tide/core";
-import type { GitChangeGroup, GitUncommittedFile, GitCommit, WorkItem } from "@tide/core";
+import type { GitChangeGroup, GitUncommittedFile, GitCommit } from "@tide/core";
 import { CommitList } from "./CommitList";
 import { FileChangeList } from "./FileChangeList";
 import { DiffPanel } from "./DiffPanel";
@@ -97,9 +96,8 @@ function formatRelativeTime(dateStr: string): string {
 
 export function GitAuditPage({ projectId }: GitAuditPageProps) {
   const [activeTab, setActiveTab] = useState<TabType>("commits");
-  const [timeRange, setTimeRange] = useState<TimeRange>("30d");
+  const [timeRange, setTimeRange] = useState<TimeRange>("today");
   const [branch, setBranch] = useState<string>("");
-  const [selectedWorkItem, setSelectedWorkItem] = useState<string>("");
   const [diffView, setDiffView] = useState<DiffViewState>({
     active: false,
     mode: "uncommitted",
@@ -113,13 +111,10 @@ export function GitAuditPage({ projectId }: GitAuditPageProps) {
   const branches = branchData?.branches ?? [];
   const currentBranch = branchData?.current ?? null;
 
-  const { data: workItems = [] } = useWorkItems(projectId);
-
   const { data: commits = [], isLoading: commitsLoading } = useGitCommits(
     projectId,
     {
-      branch: selectedWorkItem ? undefined : (branch || undefined),
-      work_item_id: selectedWorkItem || undefined,
+      branch: branch || undefined,
       since,
       limit: 100,
     },
@@ -153,13 +148,8 @@ export function GitAuditPage({ projectId }: GitAuditPageProps) {
     if (uncommittedFiles.length === 0) return false;
     // If a specific branch is selected, only show when it matches current branch
     if (branch && uncommittedBranch && uncommittedBranch !== branch) return false;
-    // If a specific work item is selected, check its associated branch
-    if (selectedWorkItem) {
-      const wiGroup = changesByWorkItem.find((g) => g.id === selectedWorkItem);
-      if (wiGroup?.branch && uncommittedBranch && uncommittedBranch !== wiGroup.branch) return false;
-    }
     return true;
-  }, [uncommittedFiles.length, branch, uncommittedBranch, selectedWorkItem, changesByWorkItem]);
+  }, [uncommittedFiles.length, branch, uncommittedBranch]);
 
   // Compute stats from commits
   const stats = useMemo(() => {
@@ -298,33 +288,13 @@ export function GitAuditPage({ projectId }: GitAuditPageProps) {
             value={branch}
             onChange={(e) => {
               setBranch(e.target.value);
-              if (e.target.value) setSelectedWorkItem("");
             }}
-            disabled={!!selectedWorkItem}
-            className="h-8 w-44 rounded-md border border-zinc-200 bg-white px-2.5 text-xs text-zinc-800 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="h-8 w-44 rounded-md border border-zinc-200 bg-white px-2.5 text-xs text-zinc-800 focus:outline-none focus:ring-1 focus:ring-blue-500"
           >
             <option value="">全部分支</option>
             {branches.map((b) => (
               <option key={b} value={b}>
                 {b}{b === currentBranch ? " (当前)" : ""}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="flex items-center gap-2">
-          <Users className="h-4 w-4 text-zinc-400" />
-          <select
-            value={selectedWorkItem}
-            onChange={(e) => {
-              setSelectedWorkItem(e.target.value);
-              if (e.target.value) setBranch("");
-            }}
-            className="h-8 w-52 rounded-md border border-zinc-200 bg-white px-2.5 text-xs text-zinc-800 focus:outline-none focus:ring-1 focus:ring-blue-500"
-          >
-            <option value="">全部工作项</option>
-            {workItems.map((wi: WorkItem) => (
-              <option key={wi.id} value={wi.id}>
-                {wi.title}
               </option>
             ))}
           </select>
@@ -343,11 +313,6 @@ export function GitAuditPage({ projectId }: GitAuditPageProps) {
             <option value="all">全部</option>
           </select>
         </div>
-        {selectedWorkItem && (
-          <span className="text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded">
-            已按工作项筛选（分支选择已禁用）
-          </span>
-        )}
       </div>
 
       {/* Stat cards */}

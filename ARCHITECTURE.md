@@ -216,6 +216,17 @@ Lark 消息/按钮 → LARK_ALLOWED_OPEN_IDS 白名单
 - `TIDE_REQUIRE_AUTH=0` 时权限检查为 best-effort，不阻止操作
 - 权限不足时向 Lark 用户回复友好提示消息
 
+#### 项目级配置继承
+
+Skills、Rules、Hooks、Security 四个 ECC 模块均支持项目级配置，采用继承+覆盖模式：
+
+- 存储：`project_id IS NULL` = 全局配置；`project_id = <pid>` = 项目级配置
+- 合并：运行时加载全局 + 项目配置，按 slug/name 合并（项目覆盖全局同名项）
+- 权限：通过 `check_project_config_permission()` 函数（`backend/core/dependencies.py`）统一检查
+  - 全局 admin：管理所有层级
+  - 项目 admin/owner：管理本项目配置
+  - 项目 member/viewer：只读使用
+
 ---
 
 ## 4. 前端结构（Monorepo）
@@ -413,7 +424,7 @@ Web 操作 → REST API → Service 写 SQLite
 
 ## 10. ECC 企业能力中心（Enterprise Capability Center）
 
-ECC 是 Tide 的 **可扩展能力层**，为 Agent 执行提供企业级治理能力。五大能力（Skills / Rules / Hooks / Security / Cost Tracking）以统一的 API + Service + DB 三层架构实现，并通过 Prompt 注入和事件驱动与工作流引擎深度集成。
+ECC 是 Tide 的 **可扩展能力层**，为 Agent 执行提供企业级治理能力。六大能力（Skills / Rules / Hooks / Security / Cost Tracking / Expert Teams）以统一的 API + Service + DB 三层架构实现，并通过 Prompt 注入和事件驱动与工作流引擎深度集成。
 
 ### 10.1 架构总览
 
@@ -450,7 +461,18 @@ ECC 是 Tide 的 **可扩展能力层**，为 Agent 执行提供企业级治理�
 └──────────────┘    └──────────────────┘    └──────────────┘
 ```
 
-### 10.2 五大能力架构设计
+#### 能力总览
+
+| 能力 | 说明 | 管理入口 |
+|------|------|---------|
+| **Skills 技能库** | 可复用知识/指令，以 Markdown 编写，运行时追加到 Agent prompt | Settings → Skills |
+| **Rules 规则引擎** | 三层分级强制约束（global/language/project），注入 prompt 顶部 | Settings → Rules |
+| **Hooks 事件驱动** | 事件触发 + 条件匹配 → 异步执行动作（不阻塞主流程） | Settings → Hooks |
+| **Security 安全审查** | 正则模式匹配扫描引擎，检测密钥/质量/合规问题 | Settings → Security |
+| **Cost Tracking 成本追踪** | 多模型定价 + 多维度成本计算与 Dashboard 展示 | Dashboard → Cost |
+| **Expert Teams 专家团** | 定义领域专家预设（Agent + Skills + 角色提示词），工作流节点引用后自动展开注入 | Settings → Expert Teams |
+
+### 10.2 六大能力架构设计
 
 #### Skills 技能库
 
@@ -621,6 +643,65 @@ ReactFlow 画布事件过滤优化：忽略 `dimensions` 和 `select` 类型的 
 1. **Web UI**：Settings → Security → Rules Tab → 创建。
 2. **批量导入**：`python3 -m backend.scripts.import_security_rules --workspace default`
 3. 规则格式：正则模式 + 严重级别 + 类别标签。
+
+### 10.8 专家团管理 (Expert Teams)
+
+#### 设计定位
+
+专家团是 Agent 节点的"快捷预设"——将 Agent 选择、技能配置和角色提示词封装为可复用的领域专家配置。它不引入新的工作流节点类型，而是在现有 Agent 节点中通过 `expert_team_id` 引用，运行时自动展开。
+
+#### 数据模型
+
+```sql
+CREATE TABLE expert_teams (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL DEFAULT 'default',
+    project_id TEXT,              -- NULL = 全局专家团
+    name TEXT NOT NULL,
+    slug TEXT NOT NULL,
+    description TEXT,
+    agent_id TEXT NOT NULL,       -- "codex"|"claude"|"qoder"|"a2a:{slug}"
+    skill_slugs TEXT DEFAULT '[]', -- JSON array of skill slugs
+    role_prompt TEXT,             -- 角色系统提示词
+    enabled INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(workspace_id, slug)
+);
+```
+
+#### API 路由
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/expert-teams` | 列出专家团（支持 project_id 过滤，返回全局+项目合并结果） |
+| GET | `/api/expert-teams/{id}` | 专家团详情 |
+| POST | `/api/expert-teams` | 创建专家团（需 `check_project_config_permission`） |
+| PUT | `/api/expert-teams/{id}` | 更新专家团 |
+| DELETE | `/api/expert-teams/{id}` | 删除专家团 |
+
+#### Service 层（`backend/services/expert_team_service.py`）
+
+核心方法：
+- `list_expert_teams(workspace_id, project_id)` — 列表查询
+- `get_expert_teams_for_project(workspace_id, project_id)` — 继承合并（项目覆盖全局同 slug 项）
+- `resolve_expert_team(team_id, workspace_id)` — 运行时解析，返回 agent_id + skills 内容 + role_prompt
+
+#### 工作流集成
+
+在 `workflow_engine.py` 的 Agent 节点执行前：
+1. 检查 `data.expert_team_id` 是否存在
+2. 调用 `resolve_expert_team()` 获取完整配置
+3. 覆盖 `agent_id`
+4. 合并 `skills`（专家团技能 + 节点手动选择的技能，去重保序）
+5. 注入 `role_prompt` 到 prompt 前缀
+
+**Prompt 注入顺序**：`Role Prompt（角色定位）→ Rules（强制约束）→ Skills（参考指南）→ Original Prompt（任务指令）`
+
+#### 前端集成
+
+- 管理页面：`apps/web/app/settings/expert-teams/page.tsx`（CRUD + 项目选择器）
+- 工作流编辑器：`PropertyPanel.tsx` 中 Agent 节点属性面板添加专家团选择器
 
 ---
 

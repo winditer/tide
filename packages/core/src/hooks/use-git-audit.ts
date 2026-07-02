@@ -10,9 +10,12 @@ import {
   gitIgnore,
   createBranch,
   deleteBranch,
+  cleanupBranches,
   pushBranch,
   pullBranch,
   createMergeRequest,
+  getRemoteBranches,
+  localMergeBranches,
   type GitCommitsParams,
   type GitChangesParams,
   type GitUncommittedResponse,
@@ -153,6 +156,19 @@ export function useDeleteBranch(projectId: string | undefined) {
 }
 
 /**
+ * 清理所有 tide/ 前缀残留分支 mutation。
+ */
+export function useCleanupBranches(projectId: string | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => cleanupBranches(projectId!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["git-audit", "branches", projectId] });
+    },
+  });
+}
+
+/**
  * 推送分支 mutation。
  */
 export function usePushBranch(projectId: string | undefined) {
@@ -183,5 +199,36 @@ export function useCreateMergeRequest(projectId: string | undefined) {
   return useMutation({
     mutationFn: (params: { source_branch: string; target_branch: string; title: string; description?: string }) =>
       createMergeRequest(projectId!, params),
+  });
+}
+
+/**
+ * 获取远程分支列表（用于 MR 按钮远程检测）。
+ */
+export function useRemoteBranches(projectId: string | undefined) {
+  return useQuery({
+    queryKey: ["git-audit", "remote-branches", projectId],
+    queryFn: () => getRemoteBranches(projectId!),
+    enabled: !!projectId,
+    staleTime: 30000,
+  });
+}
+
+/**
+ * 本地分支合并 mutation。
+ */
+export function useLocalMerge(projectId: string | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (params: {
+      source_branch: string;
+      target_branch: string;
+      strategy?: string;
+      delete_source?: boolean;
+    }) => localMergeBranches(projectId!, params),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["git-audit", "branches", projectId] });
+      queryClient.invalidateQueries({ queryKey: ["git-audit", "remote-branches", projectId] });
+    },
   });
 }

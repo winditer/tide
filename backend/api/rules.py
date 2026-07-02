@@ -10,7 +10,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from backend.core.dependencies import get_optional_user
+from backend.core.dependencies import check_project_config_permission, get_optional_user
 from backend.services.rule_service import rule_service
 
 router = APIRouter(prefix="/api/rules", tags=["rules"])
@@ -99,6 +99,8 @@ async def create_rule(
     current_user=Depends(get_optional_user),
 ):
     _ensure_not_viewer(current_user)
+    if body.project_id:
+        await check_project_config_permission(body.project_id, current_user)
     try:
         item = await rule_service.create_rule(
             workspace_id=body.workspace_id,
@@ -119,6 +121,16 @@ async def update_rule(
     current_user=Depends(get_optional_user),
 ):
     _ensure_not_viewer(current_user)
+    # 检查现有规则的项目权限
+    existing = await rule_service.get_rule(workspace_id, rule_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    existing_project_id = existing.get("project_id")
+    if existing_project_id:
+        await check_project_config_permission(existing_project_id, current_user)
+    # 如果更新目标项目，也检查新项目的权限
+    if body.project_id and body.project_id != existing_project_id:
+        await check_project_config_permission(body.project_id, current_user)
     payload = body.model_dump(exclude_unset=True)
     item = await rule_service.update_rule(
         workspace_id=workspace_id,
@@ -137,6 +149,13 @@ async def delete_rule(
     current_user=Depends(get_optional_user),
 ):
     _ensure_not_viewer(current_user)
+    # 查询规则获取其 project_id，检查权限
+    existing = await rule_service.get_rule(workspace_id, rule_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    rule_project_id = existing.get("project_id")
+    if rule_project_id:
+        await check_project_config_permission(rule_project_id, current_user)
     ok = await rule_service.delete_rule(workspace_id, rule_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Rule not found")

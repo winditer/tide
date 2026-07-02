@@ -78,6 +78,7 @@ class SkillService:
         workspace_id: str = "default",
         category: Optional[str] = None,
         enabled_only: bool = True,
+        project_id: Optional[str] = None,
         limit: int = 200,
         offset: int = 0,
     ) -> list[dict]:
@@ -92,13 +93,18 @@ class SkillService:
             params["category"] = category
         if enabled_only:
             conditions.append("enabled = 1")
+        if project_id is not None:
+            conditions.append("project_id = :project_id")
+            params["project_id"] = project_id
+        else:
+            conditions.append("project_id IS NULL")
         where = " AND ".join(conditions)
         async with async_session_factory() as session:
             result = await session.execute(
                 text(
                     f"""
                     SELECT id, workspace_id, name, slug, description, category,
-                           tags, content, version, enabled, source,
+                           tags, content, version, enabled, source, project_id,
                            created_at, updated_at
                     FROM skills
                     WHERE {where}
@@ -119,7 +125,7 @@ class SkillService:
                 text(
                     """
                     SELECT id, workspace_id, name, slug, description, category,
-                           tags, content, version, enabled, source,
+                           tags, content, version, enabled, source, project_id,
                            created_at, updated_at
                     FROM skills
                     WHERE workspace_id = :workspace_id AND id = :id
@@ -138,7 +144,7 @@ class SkillService:
                 text(
                     """
                     SELECT id, workspace_id, name, slug, description, category,
-                           tags, content, version, enabled, source,
+                           tags, content, version, enabled, source, project_id,
                            created_at, updated_at
                     FROM skills
                     WHERE workspace_id = :workspace_id AND slug = :slug
@@ -168,7 +174,7 @@ class SkillService:
                 text(
                     f"""
                     SELECT id, workspace_id, name, slug, description, category,
-                           tags, content, version, enabled, source,
+                           tags, content, version, enabled, source, project_id,
                            created_at, updated_at
                     FROM skills
                     WHERE workspace_id = :workspace_id
@@ -186,6 +192,53 @@ class SkillService:
 
     # ── Write ───────────────────────────────────────────
 
+    async def get_skills_for_project(self, workspace_id: str, project_id: str) -> list[dict]:
+        """加载全局 + 项目 Skills，按 slug 合并（项目覆盖全局）。"""
+        async with async_session_factory() as session:
+            # 1. 查询全局 skills
+            result = await session.execute(
+                text(
+                    """
+                    SELECT id, workspace_id, name, slug, description, category,
+                           tags, content, version, enabled, source, project_id,
+                           created_at, updated_at
+                    FROM skills
+                    WHERE workspace_id = :workspace_id
+                      AND project_id IS NULL
+                      AND enabled = 1
+                    """
+                ),
+                {"workspace_id": workspace_id},
+            )
+            global_rows = result.fetchall()
+
+            # 2. 查询项目 skills
+            result = await session.execute(
+                text(
+                    """
+                    SELECT id, workspace_id, name, slug, description, category,
+                           tags, content, version, enabled, source, project_id,
+                           created_at, updated_at
+                    FROM skills
+                    WHERE workspace_id = :workspace_id
+                      AND project_id = :project_id
+                      AND enabled = 1
+                    """
+                ),
+                {"workspace_id": workspace_id, "project_id": project_id},
+            )
+            project_rows = result.fetchall()
+
+        # 3. 合并：项目 skill 同 slug 覆盖全局 skill
+        merged: dict[str, dict] = {}
+        for r in global_rows:
+            item = _row_to_dict(r)
+            merged[item["slug"]] = item
+        for r in project_rows:
+            item = _row_to_dict(r)
+            merged[item["slug"]] = item
+        return list(merged.values())
+
     async def create_skill(
         self, workspace_id: str, data: dict
     ) -> dict:
@@ -201,16 +254,17 @@ class SkillService:
 
         skill_id = str(uuid.uuid4())
         now = _now_iso()
+        project_id = data.get("project_id") or None
         async with async_session_factory() as session:
             await session.execute(
                 text(
                     """
                     INSERT INTO skills
                         (id, workspace_id, name, slug, description, category,
-                         tags, content, version, enabled, source,
+                         tags, content, version, enabled, source, project_id,
                          created_at, updated_at)
                     VALUES (:id, :workspace_id, :name, :slug, :description, :category,
-                            :tags, :content, 1, :enabled, :source,
+                            :tags, :content, 1, :enabled, :source, :project_id,
                             :created_at, :updated_at)
                     """
                 ),
@@ -225,6 +279,7 @@ class SkillService:
                     "content": content,
                     "enabled": int(data.get("enabled", 1) or 0),
                     "source": data.get("source") or "custom",
+                    "project_id": project_id,
                     "created_at": now,
                     "updated_at": now,
                 },
@@ -273,6 +328,9 @@ class SkillService:
         if "source" in data and data["source"] is not None:
             sets.append("source = :source")
             params["source"] = data["source"]
+        if "project_id" in data:
+            sets.append("project_id = :project_id")
+            params["project_id"] = data["project_id"] or None
 
         if not sets:
             return existing

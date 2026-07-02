@@ -233,30 +233,34 @@ async def git_diff_summary(cwd: Path) -> str:
 # ── .gitignore 维护 ────────────────────────────────────────────────────────
 
 def ensure_tide_gitignore(repo_root: Path) -> None:
-    """确保 .tide/ 在项目的 .gitignore 中，防止内部目录被 Git 追踪。
+    """确保 .gitignore 包含 Tide 和常见构建缓存条目。
 
-    - 若 .gitignore 存在且已包含 `.tide/` 或 `.tide`，跳过。
-    - 若 .gitignore 存在但未包含，追加条目。
-    - 若 .gitignore 不存在，创建并写入条目。
+    检查并追加以下条目（若缺失）：
+    - .tide/        — Tide 内部目录
+    - .pnpm-store/  — pnpm 本地 store
 
     该函数为同步操作（仅本地文件读写），在 worktree 准备前调用。
     """
+    REQUIRED_ENTRIES = [
+        ".tide/",
+        ".pnpm-store/",
+    ]
+
     gitignore_path = repo_root / ".gitignore"
-    entry = ".tide/"
 
     try:
-        if gitignore_path.exists():
-            content = gitignore_path.read_text(encoding="utf-8")
-            lines = content.splitlines()
-            if any(line.strip() == entry or line.strip() == ".tide" for line in lines):
-                return  # 已存在
-            # 追加
-            if content and not content.endswith("\n"):
-                content += "\n"
-            content += f"{entry}\n"
-            gitignore_path.write_text(content, encoding="utf-8")
-        else:
-            gitignore_path.write_text(f"{entry}\n", encoding="utf-8")
+        content = gitignore_path.read_text(encoding="utf-8") if gitignore_path.exists() else ""
+        lines = {line.strip() for line in content.splitlines()}
+
+        missing = [entry for entry in REQUIRED_ENTRIES if entry not in lines]
+        if not missing:
+            return
+
+        # 追加缺失条目
+        if content and not content.endswith("\n"):
+            content += "\n"
+        content += "\n".join(missing) + "\n"
+        gitignore_path.write_text(content, encoding="utf-8")
     except OSError as e:
         logger.warning(
             "[git_utils] ensure_tide_gitignore failed: repo_root=%s error=%s",
@@ -454,8 +458,10 @@ async def commit_changes(cwd: Path, message: str) -> str | None:
         return None
 
     # 仍可能 add 后没有暂存内容（例如 .gitignore 过滤），再次确认
+    # 使用 --no-verify 跳过 pre-commit/commit-msg hooks，
+    # 避免外部 hooks（如 husky/lint-staged）阻断系统自动提交。
     code, output = await git_command(
-        cwd, ["commit", "-m", message or "tide auto commit"], timeout=60
+        cwd, ["commit", "--no-verify", "-m", message or "tide auto commit"], timeout=60
     )
     if code != 0:
         logger.warning(
@@ -597,7 +603,18 @@ async def git_merge_branch(
     if strategy not in {"merge", "squash", "rebase"}:
         return False, f"unsupported merge strategy: {strategy}", []
 
+    # 记录当前分支，merge 完成后恢复
+    code_orig, original_branch_raw = await git_command(
+        repo_root, ["rev-parse", "--abbrev-ref", "HEAD"], timeout=10
+    )
+    original_branch = original_branch_raw.strip() if code_orig == 0 else ""
+
     outputs: list[str] = []
+
+    async def _restore_original_branch() -> None:
+        """尝试恢复到 merge 前的分支。"""
+        if original_branch and original_branch != target_branch:
+            await git_command(repo_root, ["checkout", original_branch], timeout=60)
 
     async def _abort_and_collect(kind: str) -> list[str]:
         """收集冲突文件并中止进行中的 merge/rebase。"""
@@ -676,6 +693,7 @@ async def git_merge_branch(
                 target_branch,
                 conflicts,
             )
+            await _restore_original_branch()
             return False, "\n".join(outputs), conflicts
 
         # 3. checkout target (auto-create if not exists)
@@ -711,6 +729,7 @@ async def git_merge_branch(
                     target_branch,
                     conflicts,
                 )
+                await _restore_original_branch()
                 return False, "\n".join(outputs), conflicts
             # squash 后需要手动 commit
             commit_msg = f"Merge branch '{source_branch}' (squash)"
@@ -741,6 +760,7 @@ async def git_merge_branch(
                     target_branch,
                     conflicts,
                 )
+                await _restore_original_branch()
                 return False, "\n".join(outputs), conflicts
 
     logger.info(
@@ -763,6 +783,9 @@ async def git_merge_branch(
             )
         else:
             logger.info("[git_utils] source branch deleted: %s", source_branch)
+
+    # 恢复到 merge 前的分支
+    await _restore_original_branch()
 
     return True, "\n".join(o for o in outputs if o), []
 
@@ -1151,3 +1174,27 @@ async def git_conflict_content(cwd: str, path: str) -> dict[str, str]:
         pass
 
     return result
+
+
+async def git_list_remote_branches(
+    repo_root: Path,
+    remote: str = "origin",
+) -> tuple[list[str], str]:
+    """获取远程分支列表（基于本地 tracking 信息，不发起网络请求）。
+
+    Returns: (branch_names, error_message)
+    """
+    code, output = await git_command(
+        repo_root, ["branch", "-r", "--format=%(refname:short)"],
+        timeout=10,
+    )
+    if code != 0:
+        return [], output[:200]
+
+    prefix = f"{remote}/"
+    branches = []
+    for line in output.splitlines():
+        name = line.strip()
+        if name.startswith(prefix) and not name.endswith("/HEAD"):
+            branches.append(name[len(prefix):])
+    return branches, ""

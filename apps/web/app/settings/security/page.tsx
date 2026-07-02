@@ -16,6 +16,7 @@ import {
   toast,
 } from "@tide/ui";
 import { apiClient, useWs } from "@tide/core";
+import { ProjectScopeSelector } from "@tide/views/components/project-scope-selector";
 import {
   ArrowLeft,
   PenLine,
@@ -33,6 +34,7 @@ import {
 interface SecurityRule {
   id: string;
   workspace_id: string;
+  project_id?: string | null;
   name: string;
   category: string;
   severity: string;
@@ -41,6 +43,12 @@ interface SecurityRule {
   remediation?: string;
   enabled: boolean;
   created_at?: string;
+}
+
+interface ProjectItem {
+  id?: string;
+  cwd?: string;
+  name?: string;
 }
 
 interface SecurityFinding {
@@ -119,6 +127,7 @@ export default function SecurityPage() {
   const router = useRouter();
   const [tab, setTab] = useState<"rules" | "findings">("rules");
   const [scanOpen, setScanOpen] = useState(false);
+  const [projectId, setProjectId] = useState<string | null>(null);
 
   return (
     <main className="mx-auto max-w-6xl space-y-6 px-4 py-8">
@@ -149,6 +158,17 @@ export default function SecurityPage() {
         </div>
       </header>
 
+      {/* Project Scope Selector */}
+      <div className="bg-card rounded-xl shadow-card border border-border/50 p-3">
+        <div className="flex items-center gap-3">
+          <ProjectScopeSelector
+            value={projectId}
+            onChange={(v) => setProjectId(v)}
+            className="w-full sm:w-56"
+          />
+        </div>
+      </div>
+
       {/* Tab Switch */}
       <div className="flex gap-1 rounded-lg bg-muted/50 p-1 w-fit">
         <button
@@ -175,7 +195,7 @@ export default function SecurityPage() {
         </button>
       </div>
 
-      {tab === "rules" ? <RulesTab /> : <FindingsTab />}
+      {tab === "rules" ? <RulesTab projectId={projectId} /> : <FindingsTab projectId={projectId} />}
 
       <ScanDialog open={scanOpen} onOpenChange={setScanOpen} />
     </main>
@@ -184,17 +204,35 @@ export default function SecurityPage() {
 
 // ── Rules Tab ────────────────────────────────────────────────────────────────
 
-function RulesTab() {
+function RulesTab({ projectId }: { projectId: string | null }) {
   const [rules, setRules] = useState<SecurityRule[]>([]);
+  const [projects, setProjects] = useState<ProjectItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<SecurityRule | null>(null);
 
+  const fetchProjects = async () => {
+    try {
+      const data = await apiClient.get<ProjectItem[] | { projects?: ProjectItem[] }>("/api/projects");
+      setProjects(Array.isArray(data) ? data : data.projects ?? []);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const getProjectName = (pid: string | null | undefined): string => {
+    if (!pid) return "全局";
+    const p = projects.find((x) => (x.id || x.cwd) === pid);
+    return p ? (p.name || p.cwd || pid) : pid.slice(0, 8);
+  };
+
   const fetchRules = async () => {
     setLoading(true);
     try {
+      const params = new URLSearchParams({ workspace_id: "default" });
+      if (projectId) params.set("project_id", projectId);
       const data = await apiClient.get<SecurityRule[] | { rules?: SecurityRule[] }>(
-        `/api/security/rules?workspace_id=default`,
+        `/api/security/rules?${params}`,
       );
       setRules(Array.isArray(data) ? data : data.rules ?? []);
     } catch {
@@ -206,6 +244,10 @@ function RulesTab() {
 
   useEffect(() => {
     fetchRules();
+  }, [projectId]);
+
+  useEffect(() => {
+    fetchProjects();
   }, []);
 
   const handleDelete = async (id: string) => {
@@ -221,6 +263,7 @@ function RulesTab() {
 
   const handleSave = async (data: {
     workspace_id: string;
+    project_id?: string | null;
     name: string;
     category: string;
     severity: string;
@@ -281,6 +324,7 @@ function RulesTab() {
               <thead>
                 <tr className="border-b border-border/50 bg-muted/30 text-left text-xs uppercase tracking-wider text-muted-foreground">
                   <th className="px-4 py-3 font-medium">名称</th>
+                  <th className="px-4 py-3 font-medium">作用域</th>
                   <th className="px-4 py-3 font-medium">类别</th>
                   <th className="px-4 py-3 font-medium">严重级别</th>
                   <th className="px-4 py-3 font-medium">模式</th>
@@ -292,6 +336,11 @@ function RulesTab() {
                 {rules.map((rule) => (
                   <tr key={rule.id} className="hover:bg-muted/40 transition-smooth">
                     <td className="px-4 py-3 font-medium">{rule.name}</td>
+                    <td className="px-4 py-3">
+                      <Badge variant={rule.project_id ? "outline" : "default"}>
+                        {getProjectName(rule.project_id)}
+                      </Badge>
+                    </td>
                     <td className="px-4 py-3">
                       <Badge variant="secondary">{rule.category}</Badge>
                     </td>
@@ -356,6 +405,7 @@ function RulesTab() {
           if (!v) setEditing(null);
         }}
         rule={editing}
+        defaultProjectId={projectId}
         onSave={handleSave}
       />
     </>
@@ -364,7 +414,7 @@ function RulesTab() {
 
 // ── Findings Tab ─────────────────────────────────────────────────────────────
 
-function FindingsTab() {
+function FindingsTab({ projectId }: { projectId: string | null }) {
   const [findings, setFindings] = useState<SecurityFinding[]>([]);
   const [summary, setSummary] = useState<FindingSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -376,6 +426,7 @@ function FindingsTab() {
     try {
       const params = new URLSearchParams({ workspace_id: "default" });
       if (statusFilter) params.set("status", statusFilter);
+      if (projectId) params.set("project_id", projectId);
       const data = await apiClient.get<SecurityFinding[] | { findings?: SecurityFinding[] }>(
         `/api/security/findings?${params}`,
       );
@@ -389,8 +440,10 @@ function FindingsTab() {
 
   const fetchSummary = async () => {
     try {
+      const params = new URLSearchParams({ workspace_id: "default" });
+      if (projectId) params.set("project_id", projectId);
       const data = await apiClient.get<FindingSummary>(
-        `/api/security/findings/summary?workspace_id=default`,
+        `/api/security/findings/summary?${params}`,
       );
       setSummary(data);
     } catch {
@@ -401,11 +454,11 @@ function FindingsTab() {
   useEffect(() => {
     fetchFindings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFilter]);
+  }, [statusFilter, projectId]);
 
   useEffect(() => {
     fetchSummary();
-  }, []);
+  }, [projectId]);
 
   // Auto-refresh when the backend pushes a security.alert WS event so the
   // Findings tab stays in sync with newly detected high-severity issues.
@@ -572,13 +625,16 @@ function RuleDialog({
   open,
   onOpenChange,
   rule,
+  defaultProjectId,
   onSave,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   rule: SecurityRule | null;
+  defaultProjectId: string | null;
   onSave: (data: {
     workspace_id: string;
+    project_id?: string | null;
     name: string;
     category: string;
     severity: string;
@@ -593,6 +649,7 @@ function RuleDialog({
   const [pattern, setPattern] = useState("");
   const [description, setDescription] = useState("");
   const [remediation, setRemediation] = useState("");
+  const [ruleProjectId, setRuleProjectId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -605,6 +662,7 @@ function RuleDialog({
         setPattern(rule.pattern);
         setDescription(rule.description ?? "");
         setRemediation(rule.remediation ?? "");
+        setRuleProjectId(rule.project_id ?? null);
       } else {
         setName("");
         setCategory("secret_detection");
@@ -612,10 +670,11 @@ function RuleDialog({
         setPattern("");
         setDescription("");
         setRemediation("");
+        setRuleProjectId(defaultProjectId);
       }
       setError(null);
     }
-  }, [open, rule]);
+  }, [open, rule, defaultProjectId]);
 
   const submit = async () => {
     setError(null);
@@ -632,6 +691,7 @@ function RuleDialog({
     setSaving(true);
     await onSave({
       workspace_id: "default",
+      project_id: ruleProjectId,
       name: name.trim(),
       category,
       severity,
@@ -660,6 +720,14 @@ function RuleDialog({
               value={name}
               onChange={(e) => setName(e.target.value)}
               className="rounded-lg border-border/50"
+            />
+          </Field>
+
+          <Field label="作用域">
+            <ProjectScopeSelector
+              value={ruleProjectId}
+              onChange={(v) => setRuleProjectId(v)}
+              className="w-full"
             />
           </Field>
 

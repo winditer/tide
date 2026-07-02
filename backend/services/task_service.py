@@ -61,7 +61,7 @@ class TaskService:
             if new_status == "running":
                 sets.append("started_at = :started_at")
                 params["started_at"] = self._now_iso()
-            if new_status in ("completed", "failed", "stopped", "rejected", "approved"):
+            if new_status in ("completed", "failed", "stopped", "rejected", "cancelled", "committed", "merged"):
                 sets.append("completed_at = :completed_at")
                 params["completed_at"] = self._now_iso()
                 # 确保 started_at 有值，避免只有 completed_at 而无 started_at
@@ -116,6 +116,12 @@ class TaskService:
             try:
                 task_row = await self.get_task(task_id)
                 output_text = str((task_row or {}).get("result") or "")
+                # 从任务 cwd 派生 project_id
+                _cwd = (task_row or {}).get("cwd") or ""
+                _project_id = None
+                if _cwd:
+                    from backend.core.dependencies import encode_project_id
+                    _project_id = encode_project_id(_cwd) or None
                 payload = {
                     "event": hook_event,
                     "task_id": task_id,
@@ -124,13 +130,13 @@ class TaskService:
                     "output": output_text,
                 }
                 asyncio.create_task(
-                    hook_engine.trigger(hook_event, workspace_id, payload)
+                    hook_engine.trigger(hook_event, workspace_id, payload, project_id=_project_id)
                 )
             except Exception:
                 logger.debug("hook trigger dispatch failed", exc_info=True)
 
         # 任务进入终态时清理残留的 pending 审批记录
-        if new_status in ("completed", "failed", "stopped", "rejected"):
+        if new_status in ("completed", "failed", "stopped", "rejected", "committed", "merged"):
             try:
                 from backend.services.approval_service import approval_service
                 await approval_service.cleanup_task_approvals(task_id)
@@ -394,7 +400,7 @@ class TaskService:
             choices = ", ".join(sorted(AGENT_ADAPTERS))
             raise ValueError(f"Unsupported agent_id: {agent_id!r}. Available agents: {choices}")
 
-        # 校验并规范化 model：无效 key 回退到 'auto' 而非让 CLI 报错
+        # 校验并规范化 model：'auto' 解析为真实模型名，无效 key 也回退为随机可用模型
         adapter = AGENT_ADAPTERS[agent_id]
         model = adapter.normalize_model(model)
 
@@ -538,7 +544,7 @@ class TaskService:
                 {"tid": task_id},
             )
             _guard_row = _guard_result.fetchone()
-            if not _guard_row or _guard_row[0] in ("cancelled", "completed", "failed", "stopped", "rejected"):
+            if not _guard_row or _guard_row[0] in ("cancelled", "completed", "failed", "stopped", "rejected", "committed", "merged"):
                 logger.warning(
                     "[task_service] _run_agent_real aborted: task %s already in terminal state '%s'",
                     task_id[:8], (_guard_row[0] if _guard_row else "NOT_FOUND"),
@@ -568,6 +574,10 @@ class TaskService:
                     # 仅收集 agent 的自然语言回复（不含 tool_output/progress）
                     if event.type == "output" and event.content:
                         agent_output_chunks.append(event.content)
+                    elif event.type == "tool_output":
+                        # 工具执行后清空之前的 output 累积，
+                        # 确保 agent_final_output 只保留最后一次工具调用之后的结论
+                        agent_output_chunks.clear()
                 elif event.type == "completed":
                     await self._finish_with_result(
                         task_id, workspace_id, "completed", event.content
@@ -835,7 +845,12 @@ class TaskService:
         # model 透传：DB 中已有非空 model 直接使用，仅为空时取默认值
         if not model:
             adapter = AGENT_ADAPTERS.get(agent_id)
-            model = adapter.default_model if adapter else "auto"
+            model = adapter.default_model if adapter else ""
+
+        # 确保 model 不是 "auto" 字面量
+        if model.strip().lower() == "auto":
+            from backend.runtime.config import resolve_auto_model
+            model = resolve_auto_model(model)
 
         # 判断是否为工作项关联任务：若是，必须以 full_auto 模式执行
         full_auto = await self._is_work_item_task(task_id)
@@ -962,7 +977,12 @@ class TaskService:
         # model 透传：DB 中已有非空 model 直接使用，仅为空时取默认值
         if not model:
             adapter = AGENT_ADAPTERS.get(agent_id)
-            model = adapter.default_model if adapter else "auto"
+            model = adapter.default_model if adapter else ""
+
+        # 确保 model 不是 "auto" 字面量
+        if model.strip().lower() == "auto":
+            from backend.runtime.config import resolve_auto_model
+            model = resolve_auto_model(model)
 
         # 判断是否为工作项关联任务或 Plan 子任务：若是，必须以 full_auto 模式执行
         full_auto = await self._is_work_item_task(task_id)

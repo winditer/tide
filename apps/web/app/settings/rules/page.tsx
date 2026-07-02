@@ -15,6 +15,7 @@ import {
   toast,
 } from "@tide/ui";
 import { apiClient, useAuth } from "@tide/core";
+import { ProjectScopeSelector } from "@tide/views/components/project-scope-selector";
 import {
   ArrowLeft,
   ChevronLeft,
@@ -79,6 +80,12 @@ const LANGUAGE_OPTIONS = [
 
 // ─── Page ────────────────────────────────────────────────────────────────────
 
+interface ProjectOption {
+  id: string;
+  name: string;
+  cwd?: string;
+}
+
 export default function SettingsRulesPage() {
   const router = useRouter();
   const { hydrated } = useAuth();
@@ -86,6 +93,8 @@ export default function SettingsRulesPage() {
   const [rules, setRules] = useState<Rule[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [projects, setProjects] = useState<ProjectOption[]>([]);
 
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -107,6 +116,20 @@ export default function SettingsRulesPage() {
     return () => clearTimeout(id);
   }, [search]);
 
+  // Fetch projects
+  useEffect(() => {
+    if (!hydrated) return;
+    (async () => {
+      try {
+        const data = await apiClient.get<{ projects: ProjectOption[] }>("/api/projects?workspace_id=default");
+        const list = data?.projects || (Array.isArray(data) ? data : []);
+        setProjects(list.map((p: any) => ({ id: p.id || p.cwd, name: p.name || p.cwd, cwd: p.cwd })));
+      } catch {
+        // ignore
+      }
+    })();
+  }, [hydrated]);
+
   // Fetch rules
   const fetchRules = async () => {
     setLoading(true);
@@ -114,6 +137,7 @@ export default function SettingsRulesPage() {
     try {
       const params = new URLSearchParams({ workspace_id: "default" });
       if (scope) params.set("scope", scope);
+      if (projectId) params.set("project_id", projectId);
       const data = await apiClient.get<Rule[]>(`/api/rules?${params}`);
       setRules(Array.isArray(data) ? data : []);
     } catch (e: any) {
@@ -125,7 +149,7 @@ export default function SettingsRulesPage() {
 
   useEffect(() => {
     if (hydrated) fetchRules();
-  }, [hydrated, scope]);
+  }, [hydrated, scope, projectId]);
 
   // Filter by search
   const filtered = useMemo(() => {
@@ -184,7 +208,7 @@ export default function SettingsRulesPage() {
         name: data.name,
         scope: data.scope || "global",
         scope_value: data.scope_value || null,
-        project_id: data.project_id || null,
+        project_id: data.project_id || projectId || null,
         content: data.content,
         priority: data.priority,
       };
@@ -264,6 +288,11 @@ export default function SettingsRulesPage() {
             }}
             className="w-full sm:w-48"
             options={SCOPE_OPTIONS}
+          />
+          <ProjectScopeSelector
+            value={projectId}
+            onChange={(v) => { setProjectId(v); setPage(1); }}
+            className="w-full sm:w-56"
           />
         </div>
       </div>
@@ -417,6 +446,7 @@ export default function SettingsRulesPage() {
         rule={editing}
         saving={saving}
         onSave={handleSave}
+        projects={projects}
       />
 
       {/* Delete Confirmation Dialog */}
@@ -450,6 +480,7 @@ function RuleDialog({
   rule,
   saving,
   onSave,
+  projects,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
@@ -463,6 +494,7 @@ function RuleDialog({
     content: string;
     priority: number;
   }) => void;
+  projects: ProjectOption[];
 }) {
   const [name, setName] = useState("");
   const [ruleScope, setRuleScope] = useState("global");
@@ -558,13 +590,19 @@ function RuleDialog({
 
           {ruleScope === "project" && (
             <div className="space-y-1.5">
-              <label className="text-sm font-medium">项目 ID</label>
-              <Input
+              <label className="text-sm font-medium">项目</label>
+              <select
+                className="w-full border rounded-md px-3 py-2 text-sm bg-background"
                 value={projectId}
                 onChange={(e) => setProjectId(e.target.value)}
-                placeholder="输入项目 ID"
-                className="font-mono text-xs"
-              />
+              >
+                <option value="">选择项目</option>
+                {projects.map((p) => (
+                  <option key={p.id || p.cwd} value={p.id || p.cwd}>
+                    {p.name || p.cwd}
+                  </option>
+                ))}
+              </select>
             </div>
           )}
 

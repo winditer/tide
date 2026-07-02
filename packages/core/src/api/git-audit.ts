@@ -221,6 +221,17 @@ export function deleteBranch(
 }
 
 /**
+ * 清理项目中所有 tide/ 前缀的残留 worktree 和分支。
+ */
+export function cleanupBranches(
+  projectId: string,
+): Promise<{ cleaned: number; branches: string[] }> {
+  return apiClient.post<{ cleaned: number; branches: string[] }>(
+    `/api/projects/${encodeURIComponent(projectId)}/git/cleanup-branches`,
+  );
+}
+
+/**
  * 推送分支到远端。
  */
 export function pushBranch(
@@ -262,6 +273,35 @@ export function createMergeRequest(
 ): Promise<{ ok: boolean; url: string }> {
   return apiClient.post<{ ok: boolean; url: string }>(
     `/api/projects/${encodeURIComponent(projectId)}/git/merge-request`,
+    params,
+  );
+}
+
+/**
+ * 获取远程分支列表。
+ */
+export async function getRemoteBranches(
+  projectId: string,
+): Promise<{ branches: string[] }> {
+  return apiClient.get<{ branches: string[] }>(
+    `/api/projects/${encodeURIComponent(projectId)}/git/remote-branches`,
+  );
+}
+
+/**
+ * 本地分支合并。
+ */
+export async function localMergeBranches(
+  projectId: string,
+  params: {
+    source_branch: string;
+    target_branch: string;
+    strategy?: string;
+    delete_source?: boolean;
+  },
+): Promise<{ ok: boolean; output: string; conflicts: string[] }> {
+  return apiClient.post(
+    `/api/projects/${encodeURIComponent(projectId)}/git/merge`,
     params,
   );
 }

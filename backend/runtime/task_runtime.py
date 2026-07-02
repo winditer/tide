@@ -24,7 +24,7 @@ class CodexTaskRuntime:
     cwd: Path
     prompt: str
     agent_id: str = "codex"
-    model: str = ""
+    model: Optional[str] = ""
     message_id: str = ""
     process: Optional[subprocess.Popen] = None
     status: str = ""

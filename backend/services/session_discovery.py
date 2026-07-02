@@ -35,6 +35,26 @@ from backend.services.project_discovery import (
     find_project_root,
 )
 
+# ---------- Worktree 路径归一化 ----------
+
+
+def _resolve_worktree_to_project(cwd: str) -> str:
+    """将 worktree 路径解析为其源项目路径。
+
+    当 CWD 位于 .tide/worktrees/ 或 .lark-codex/worktrees/ 下时，
+    提取该标记之前的部分作为真实项目根路径。
+
+    示例:
+        /Users/haifeng/.tide/users/xxx/fms-server/.tide/worktrees/wi-yyy
+        → /Users/haifeng/.tide/users/xxx/fms-server
+    """
+    for marker in ("/.tide/worktrees/", "/.lark-codex/worktrees/"):
+        idx = cwd.find(marker)
+        if idx != -1:
+            return cwd[:idx]
+    return cwd
+
+
 # ---------- 数据提取 ----------
 
 # 摘要标题最大长度
@@ -327,7 +347,14 @@ def _scan_all() -> List[Dict]:
                 continue
             if not sid:
                 sid = path.stem
-            project_root = find_project_root(cwd) if cwd else None
+            # Worktree 路径归一化：将 .tide/worktrees/wi-xxx 路径解析为源项目路径
+            resolved_cwd = cwd
+            if cwd:
+                resolved = _resolve_worktree_to_project(str(cwd))
+                resolved_path = Path(resolved)
+                if resolved_path.exists():
+                    resolved_cwd = resolved_path
+            project_root = find_project_root(resolved_cwd) if resolved_cwd else None
             project_name = project_root.name if project_root else None
             cwd_str = str(_normalize_path(cwd)) if cwd else None
             project_root_str = str(project_root) if project_root else None

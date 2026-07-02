@@ -39,6 +39,7 @@ from backend.runtime.config import (
     QODER_PERMISSION_MODE,
     QODER_PROCESS_HOME,
     QODER_TIMEOUT_SECONDS,
+    resolve_auto_model,
 )
 from backend.runtime.task_runtime import CodexTaskRuntime
 
@@ -718,19 +719,33 @@ async def _build_prompt_with_skills(
     prompt: str,
     skill_slugs: list[str],
     workspace_id: str = "default",
+    project_id: Optional[str] = None,
 ) -> str:
     """将选中的 Skills 内容注入到 prompt 前缀。
 
     工作流 Agent 节点可在 ``data.skills`` 中配置启用的 Skill slug 列表，
     引擎在构造 prompt 时调用本方法将 Skills 全文以可读 Markdown 段落注入。
     若 ``skill_slugs`` 为空或查不到任何 Skill，则原样返回 ``prompt``。
+
+    当提供 ``project_id`` 时，使用 ``get_skills_for_project()`` 加载全局+项目
+    技能并按 slug 合并（项目覆盖全局），再从合并结果中过滤出指定 slugs。
     """
     if not skill_slugs:
         return prompt
     # 局部导入避免循环依赖（services 反过来不依赖 adapters）
     from backend.services.skill_service import skill_service
 
-    skills = await skill_service.get_by_slugs(workspace_id, skill_slugs)
+    if project_id:
+        # 加载全局+项目 Skills 合并后，按 slug 过滤
+        all_skills = await skill_service.get_skills_for_project(workspace_id, project_id)
+        slug_set = set(skill_slugs)
+        skills = [s for s in all_skills if s["slug"] in slug_set]
+        # 保持与传入 slug 顺序一致
+        index = {s["slug"]: s for s in skills}
+        skills = [index[slug] for slug in skill_slugs if slug in index]
+    else:
+        skills = await skill_service.get_by_slugs(workspace_id, skill_slugs)
+
     if not skills:
         return prompt
 
@@ -742,6 +757,34 @@ async def _build_prompt_with_skills(
         + "\n\n---\n\n".join(skill_sections)
     )
     return f"{prefix}\n\n---\n\n# Task\n\n{prompt}"
+
+
+# ── Knowledge prompt 注入 ──
+
+
+async def _build_prompt_with_knowledge(
+    prompt: str,
+    cwd: str,
+    project_id: Optional[str] = None,
+) -> str:
+    """将项目知识库模块摘要注入到 prompt 前缀（在 Rules 之后、Skills 之前）。
+
+    知识库是项目结构的参考信息，加载失败或缺失时静默回退到原始 prompt，
+    不阻塞主流程。
+    """
+    if not cwd:
+        return prompt
+
+    try:
+        from backend.services.knowledge_service import knowledge_service
+
+        summary = await knowledge_service.get_project_modules_summary(cwd)
+        if not summary:
+            return prompt
+        return f"# Project Knowledge (模块结构)\n\n{summary}\n\n---\n\n{prompt}"
+    except Exception as e:
+        logger.debug("_build_prompt_with_knowledge failed: %s", e)
+        return prompt
 
 
 # ── Adapter 类定义 ──
@@ -758,22 +801,30 @@ class AgentAdapter:
     def normalize_model(self, model: str) -> str:
         """校验并规范化模型名。
 
-        如果 valid_model_keys 非空且 model 不在其中，回退到 'auto'（或空串使用默认值）。
+        如果 valid_model_keys 非空且 model 不在其中，回退到随机可用模型。
+        当 model 为 'auto' 时，从配置的可用模型列表中随机选择一个实际模型名，
+        避免将 "auto" 字面量传给 LLM API 网关导致 503 错误。
         子类可覆盖以实现 adapter 特定的校验逻辑。
         """
         if not model:
             return ""
+        # "auto" → 从可用模型列表中随机选择实际模型
+        if model.strip().lower() == "auto":
+            resolved = resolve_auto_model(model)
+            logger.info("[%s] Resolved model 'auto' → %r", self.id, resolved)
+            return resolved
         if not self.valid_model_keys:
             # 无限制列表，直接透传（Claude/Qoder 接受任意模型名）
             return model
         if model.lower() in self.valid_model_keys:
             return model.lower()
-        # 无效 model key —— 回退
+        # 无效 model key —— 回退到随机可用模型
+        resolved = resolve_auto_model("auto")
         logger.warning(
-            "[%s] Invalid model %r, falling back to 'auto'. Valid keys: %s",
-            self.id, model, ", ".join(sorted(self.valid_model_keys)),
+            "[%s] Invalid model %r, falling back to %r. Valid keys: %s",
+            self.id, model, resolved, ", ".join(sorted(self.valid_model_keys)),
         )
-        return "auto"
+        return resolved
 
     def build_command(self, task: CodexTaskRuntime, last_message_file: Optional[Path] = None) -> list[str]:
         raise NotImplementedError
@@ -799,11 +850,14 @@ class CodexAdapter(AgentAdapter):
 
     def build_command(self, task: CodexTaskRuntime, last_message_file: Optional[Path] = None) -> list[str]:
         common = [CODEX_BIN]
-        model = task.model or CODEX_MODEL
+        if task.model is None:
+            pass  # 不传 -m，让 CLI 自行决定模型
+        else:
+            model = task.model or CODEX_MODEL
+            if model:
+                common.extend(["-m", model])
         approval_policy = task.approval_policy or CODEX_APPROVAL_POLICY
         sandbox_mode = task.sandbox_mode or CODEX_SANDBOX_MODE
-        if model:
-            common.extend(["-m", model])
         if approval_policy:
             common.extend(["-a", approval_policy])
         if sandbox_mode:
@@ -854,9 +908,12 @@ class ClaudeAdapter(AgentAdapter):
 
     def build_command(self, task: CodexTaskRuntime, last_message_file: Optional[Path] = None) -> list[str]:
         argv = [CLAUDE_BIN, "--print", "--output-format", "stream-json", "--verbose"]
-        model = task.model or CLAUDE_MODEL
-        if model:
-            argv.extend(["--model", model])
+        if task.model is None:
+            pass  # 不传 --model，让 CLI 自行决定模型
+        else:
+            model = task.model or CLAUDE_MODEL
+            if model:
+                argv.extend(["--model", model])
         permission_mode = task.permission_mode or CLAUDE_PERMISSION_MODE
         if permission_mode:
             argv.extend(["--permission-mode", permission_mode])
@@ -970,9 +1027,12 @@ class QoderAdapter(AgentAdapter):
 
     def build_command(self, task: CodexTaskRuntime, last_message_file: Optional[Path] = None) -> list[str]:
         argv = [QODER_BIN, "--print", "--output-format", "stream-json", "--cwd", str(task.cwd)]
-        model = task.model or QODER_MODEL
-        if model:
-            argv.extend(["--model", model])
+        if task.model is None:
+            pass  # 不传 --model，让 CLI 自行决定模型
+        else:
+            model = task.model or QODER_MODEL
+            if model:
+                argv.extend(["--model", model])
         permission_mode = normalize_qoder_permission_mode(task.permission_mode or QODER_PERMISSION_MODE, "QODER_PERMISSION_MODE")
         if permission_mode:
             argv.extend(["--permission-mode", permission_mode])

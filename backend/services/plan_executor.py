@@ -530,6 +530,10 @@ class PlanExecutor:
                         # 仅收集 agent 的自然语言回复（不含 tool_output/progress）
                         if event.type == "output":
                             agent_output_chunks.append(event.content)
+                        elif event.type == "tool_output":
+                            # 工具执行后清空之前的 output 累积，
+                            # 确保 agent_final_output 只保留最后一次工具调用之后的结论
+                            agent_output_chunks.clear()
                 elif event.type == "session_id":
                     if event.session_id:
                         await self._update_task(task_id, session_id=event.session_id)
@@ -585,15 +589,22 @@ class PlanExecutor:
 
         # 将 agent 的自然语言回复单独存储到 agent_final_output，
         # 供下游工作流节点提取 agent 的最终结论（而非完整日志）。
-        if agent_output_chunks:
+        # 优先使用 completed 事件的精炼摘要（executor 提取的最后几行），
+        # 降级使用 agent_output_chunks（排除了 tool_output/progress 但可能含工具调用描述）。
+        agent_final_output_text = ""
+        if final_message and final_status == "completed":
+            agent_final_output_text = final_message
+        elif agent_output_chunks:
+            agent_final_output_text = "\n".join(agent_output_chunks)
+
+        if agent_final_output_text:
             try:
-                final_output_text = "\n".join(agent_output_chunks)
                 async with async_session_factory() as session:
                     await session.execute(
                         text(
                             "UPDATE tasks SET agent_final_output = :output WHERE id = :task_id"
                         ),
-                        {"output": final_output_text, "task_id": task_id},
+                        {"output": agent_final_output_text, "task_id": task_id},
                     )
                     await session.commit()
             except Exception:  # noqa: BLE001
@@ -660,7 +671,18 @@ class PlanExecutor:
                 f"**分支**\n`{task.get('branch_name') or '-'}`"
             )
 
-        if agent_status == "failed":
+        # Agent CLI 返回失败但有代码改动且测试通过时，视为成功（如 ESLint warning 导致非零退出码）
+        if agent_status == "failed" and changed and test_ok:
+            logger.warning(
+                "[plan_executor] task=%s agent reported failure but has changes and tests pass, "
+                "overriding to success",
+                task_id[:8],
+            )
+            parts.insert(0, "⚠️ Agent CLI 报告失败（可能由非关键性 warning 触发），"
+                         "但检测到代码改动且测试通过，已覆盖为成功。")
+
+        if agent_status == "failed" and not (changed and test_ok):
+            # Agent 确实失败：无代码改动或测试未通过
             new_status = "failed"
             if not agent_output:
                 parts.insert(0, "任务失败。")

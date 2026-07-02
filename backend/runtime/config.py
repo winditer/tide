@@ -5,6 +5,7 @@
 """
 
 import os
+import random
 import re
 from pathlib import Path
 
@@ -179,3 +180,28 @@ def ensure_user_dir(user_id: str) -> Path:
     root = user_projects_root(user_id)
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+# ─── Auto Model Resolution ────────────────────────────────────────────
+# 当用户选择 model="auto" 时，从该列表中随机选择一个实际模型名传给 CLI，
+# 避免将 "auto" 字面量传给 LLM API 网关导致 503 错误。
+# 可通过环境变量 AUTO_RESOLVE_MODELS 自定义（逗号分隔的模型名列表）。
+_AUTO_RESOLVE_MODELS_DEFAULT = [
+    "claude-sonnet-4-20250514",
+    "gpt-4o",
+]
+_AUTO_RESOLVE_MODELS_ENV = os.getenv("AUTO_RESOLVE_MODELS", "")
+AUTO_RESOLVE_MODELS: list[str] = [
+    m.strip() for m in _AUTO_RESOLVE_MODELS_ENV.split(",") if m.strip()
+] or _AUTO_RESOLVE_MODELS_DEFAULT
+
+
+def resolve_auto_model(model: str) -> str:
+    """当 model 为 'auto' 或空时，从可用模型列表中随机选择一个实际模型名。
+
+    非 'auto' 的模型名原样返回。
+    """
+    if not model or model.strip().lower() == "auto":
+        chosen = random.choice(AUTO_RESOLVE_MODELS)
+        return chosen
+    return model

@@ -4,10 +4,7 @@ import { useEffect, useState } from "react";
 import { Button, Input, Select } from "@tide/ui";
 import {
   useProjectMembers,
-  getAgents,
   apiClient,
-  type AgentInfo,
-  type AgentSkill,
   type WorkflowNode,
   type WorkflowNodeType,
 } from "@tide/core";
@@ -56,16 +53,6 @@ const OPERATOR_OPTIONS = [
   { label: "不包含 (⊅)", value: "not_contains" },
 ];
 
-const LOCAL_AGENT_OPTIONS = [
-  { label: "Codex", value: "codex" },
-  { label: "Claude Code", value: "claude" },
-  { label: "Qoder", value: "qoder" },
-];
-
-function isRemoteAgentId(id: string | undefined | null): boolean {
-  return typeof id === "string" && id.startsWith("a2a:");
-}
-
 interface PropertyPanelProps {
   node: WorkflowNode | null;
   onUpdate: (id: string, data: Record<string, any>) => void;
@@ -85,48 +72,32 @@ export function PropertyPanel({
   const { data: membersData } = useProjectMembers(projectId);
   const members = membersData?.members ?? [];
 
-  // 远程 Agent 列表：组件挂载时拉取一次，失败时降级为空数组仅显示本地 Agent。
-  const [remoteAgents, setRemoteAgents] = useState<AgentInfo[]>([]);
+  // 专家团列表
+  interface ExpertTeamOption {
+    id: string;
+    name: string;
+    description?: string;
+    agent_id: string;
+    skill_slugs: string[];
+    role_prompt?: string;
+    enabled: number;
+  }
+  const [expertTeams, setExpertTeams] = useState<ExpertTeamOption[]>([]);
   useEffect(() => {
     let cancelled = false;
-    getAgents()
-      .then((res) => {
-        if (cancelled) return;
-        const remotes = (res?.agents ?? []).filter(
-          (a) => a.type === "remote" || isRemoteAgentId(a.id),
-        );
-        setRemoteAgents(remotes);
-      })
-      .catch(() => {
-        // 降级：保持空列表，仅展示本地 Agent
-        if (!cancelled) setRemoteAgents([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // 可用 Skills 列表
-  interface SkillOption { id: string; slug: string; name: string; category?: string; description?: string }
-  const [availableSkills, setAvailableSkills] = useState<SkillOption[]>([]);
-  const [skillSearch, setSkillSearch] = useState("");
-  useEffect(() => {
-    let cancelled = false;
-    apiClient.get<SkillOption[]>("/api/skills?workspace_id=default&limit=500")
+    const params = new URLSearchParams({ workspace_id: "default" });
+    if (projectId) params.set("project_id", projectId);
+    apiClient
+      .get<ExpertTeamOption[]>(`/api/expert-teams?${params.toString()}`)
       .then((data) => {
-        if (!cancelled && Array.isArray(data)) setAvailableSkills(data);
+        if (!cancelled && Array.isArray(data)) {
+          setExpertTeams(data.filter((t) => t.enabled === 1));
+        }
       })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, []);
-  const filteredSkills = (() => {
-    const q = skillSearch.trim().toLowerCase();
-    if (!q) return availableSkills;
-    return availableSkills.filter((skill) =>
-      [skill.name, skill.description, skill.id, skill.slug, skill.category]
-        .some((field) => typeof field === "string" && field.toLowerCase().includes(q)),
-    );
-  })();
+  }, [projectId]);
+
   if (!node) {
     return (
       <div className="flex h-full w-[300px] flex-col border-l border-border/50 bg-card">
@@ -184,111 +155,94 @@ export function PropertyPanel({
           </FormGroup>
 
           {t === "agent" && (() => {
-            const currentAgentId = String(data.agent_id ?? data.agentId ?? "codex");
-            const isRemote = isRemoteAgentId(currentAgentId);
-            const selectedRemote = isRemote
-              ? remoteAgents.find((a) => a.id === currentAgentId)
+            const selectedExpertTeamId: string | undefined = data.expert_team_id;
+            const selectedExpertTeam = selectedExpertTeamId
+              ? expertTeams.find((et) => et.id === selectedExpertTeamId)
               : undefined;
+
             return (
               <>
-                {!isRemote && (
-                  <FormGroup label="模型">
-                    <Input
-                      value={String(data.model ?? "")}
-                      disabled={readOnly}
-                      onChange={(e) => update({ model: e.target.value })}
-                      placeholder="留空使用默认模型"
-                      className="rounded-lg"
-                    />
-                  </FormGroup>
-                )}
-                <FormGroup label="Agent">
-                  <AgentSelect
-                    value={currentAgentId}
+                {/* 专家团选择器 */}
+                <FormGroup label="专家团">
+                  <select
+                    value={selectedExpertTeamId ?? ""}
                     disabled={readOnly}
-                    remoteAgents={remoteAgents}
-                    onChange={(next) =>
-                      update({
-                        agent_id: next,
-                        // 同步写入 camelCase 别名，保证与后端/其他调用点兼容
-                        agentId: next,
-                      })
-                    }
-                  />
+                    onChange={(e) => {
+                      const teamId = e.target.value;
+                      if (!teamId) {
+                        // 清除专家团：仅保留 prompt 和非 agent 字段
+                        const { expert_team_id: _a, agent_id: _b, agentId: _c, skills: _d, model: _e, ...rest } = data;
+                        onUpdate(node.id, rest);
+                        return;
+                      }
+                      // 选择专家团：设置 expert_team_id，运行时由后端展开
+                      update({ expert_team_id: teamId });
+                    }}
+                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <option value="">— 请选择专家团 —</option>
+                    {expertTeams.map((et) => (
+                      <option key={et.id} value={et.id}>
+                        {et.name} ({et.agent_id} · {et.skill_slugs.length} 技能)
+                      </option>
+                    ))}
+                  </select>
+                  {!selectedExpertTeamId && (
+                    <div className="mt-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[10px] text-amber-700 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-400">
+                      请选择一个专家团，Agent 节点的模型、技能和角色提示词由专家团统一配置
+                    </div>
+                  )}
                 </FormGroup>
-                {isRemote && (
-                  <FormGroup label="Skills">
-                    <RemoteAgentSkills agent={selectedRemote} />
-                  </FormGroup>
-                )}
-                {!isRemote && availableSkills.length > 0 && (
-                  <FormGroup label="技能注入">
-                    <div className="relative mb-1.5">
-                      <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[11px] text-muted-foreground/70">⌕</span>
-                      <input
-                        type="text"
-                        value={skillSearch}
-                        onChange={(e) => setSkillSearch(e.target.value)}
-                        disabled={readOnly}
-                        placeholder="搜索 Skill（名称 / 描述 / 分类）"
-                        className="flex h-7 w-full rounded-md border border-input bg-background pl-7 pr-7 text-[12px] text-foreground placeholder:text-muted-foreground/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
-                      />
-                      {skillSearch && (
-                        <button
-                          type="button"
-                          onClick={() => setSkillSearch("")}
-                          disabled={readOnly}
-                          aria-label="清除搜索"
-                          className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-[11px] leading-none text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                        >
-                          ✕
-                        </button>
+
+                {/* 专家团详情预览（只读） */}
+                {selectedExpertTeam && (
+                  <FormGroup label="专家团配置（只读）">
+                    <div className="space-y-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-medium text-muted-foreground">名称</span>
+                        <span className="text-[11px] font-medium text-foreground">{selectedExpertTeam.name}</span>
+                      </div>
+                      {selectedExpertTeam.description && (
+                        <div className="text-[10px] leading-relaxed text-muted-foreground">
+                          {selectedExpertTeam.description}
+                        </div>
                       )}
-                    </div>
-                    <div className="max-h-[160px] overflow-y-auto rounded-lg border border-input bg-background p-2 space-y-1">
-                      {filteredSkills.map((skill) => {
-                        const currentSkills: string[] = Array.isArray(data.skills) ? data.skills : [];
-                        const checked = currentSkills.includes(skill.slug);
-                        return (
-                          <label
-                            key={skill.id}
-                            className={`flex items-center gap-2 rounded px-2 py-1.5 text-[12px] transition-colors ${
-                              readOnly ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:bg-muted/40"
-                            }`}
-                          >
-                            <input
-                              type="checkbox"
-                              className="h-3.5 w-3.5 accent-primary"
-                              checked={checked}
-                              disabled={readOnly}
-                              onChange={() => {
-                                const next = checked
-                                  ? currentSkills.filter((s) => s !== skill.slug)
-                                  : [...currentSkills, skill.slug];
-                                update({ skills: next });
-                              }}
-                            />
-                            <span className="font-medium text-foreground">{skill.name}</span>
-                            {skill.category && (
-                              <span className="ml-auto text-[10px] text-muted-foreground">{skill.category}</span>
-                            )}
-                          </label>
-                        );
-                      })}
-                      {filteredSkills.length === 0 && (
-                        <p className="py-3 text-center text-[11px] text-muted-foreground">
-                          {skillSearch ? "无匹配的 Skill" : "暂无可用 Skill"}
-                        </p>
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-medium text-muted-foreground">Agent</span>
+                        <span className="rounded bg-background px-1.5 py-0.5 font-mono text-[10px] text-foreground">
+                          {selectedExpertTeam.agent_id}
+                        </span>
+                      </div>
+                      {selectedExpertTeam.skill_slugs.length > 0 && (
+                        <div>
+                          <span className="text-[10px] font-medium text-muted-foreground">技能</span>
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {selectedExpertTeam.skill_slugs.map((slug) => (
+                              <span
+                                key={slug}
+                                className="rounded border border-border/50 bg-background px-1.5 py-0.5 text-[10px] text-foreground"
+                              >
+                                {slug}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
                       )}
-                    </div>
-                    <div className="mt-1 flex items-center justify-between text-[10px] text-muted-foreground">
-                      <span>选中的技能内容将作为 Agent Prompt 前缀注入</span>
-                      {skillSearch && (
-                        <span className="font-mono tabular-nums">{filteredSkills.length}/{availableSkills.length}</span>
+                      {selectedExpertTeam.role_prompt && (
+                        <div>
+                          <span className="text-[10px] font-medium text-muted-foreground">角色提示词</span>
+                          <pre className="mt-1 max-h-[80px] overflow-y-auto whitespace-pre-wrap rounded bg-background/60 px-2 py-1.5 font-mono text-[10px] leading-relaxed text-foreground/80">
+                            {selectedExpertTeam.role_prompt}
+                          </pre>
+                        </div>
                       )}
+                      <div className="border-t border-primary/10 pt-1.5 text-[9px] text-muted-foreground">
+                        运行时由后端自动展开为完整配置
+                      </div>
                     </div>
                   </FormGroup>
                 )}
+
                 <FormGroup label="Prompt">
                   <textarea
                     disabled={readOnly}
@@ -301,17 +255,15 @@ export function PropertyPanel({
                     可用变量：<span className="text-emerald-600">{"{prev_output}"}</span> 上一节点输出 · <span className="text-emerald-600">{"{item.title}"}</span> 工作项标题 · <span className="text-emerald-600">{"{item.description}"}</span> 描述
                   </div>
                 </FormGroup>
-                {!isRemote && (
-                  <FormGroup label="工作目录 (cwd)">
-                    <Input
-                      value={String(data.cwd ?? "")}
-                      disabled={readOnly}
-                      onChange={(e) => update({ cwd: e.target.value })}
-                      placeholder="留空则使用项目根路径"
-                      className="rounded-lg font-mono text-xs"
-                    />
-                  </FormGroup>
-                )}
+                <FormGroup label="工作目录 (cwd)">
+                  <Input
+                    value={String(data.cwd ?? "")}
+                    disabled={readOnly}
+                    onChange={(e) => update({ cwd: e.target.value })}
+                    placeholder="留空则使用项目根路径"
+                    className="rounded-lg font-mono text-xs"
+                  />
+                </FormGroup>
                 <FormGroup label="高级选项">
                   <label
                     className={`flex items-start gap-2.5 rounded-lg border border-input bg-background px-3 py-2.5 transition-colors ${
@@ -640,127 +592,6 @@ interface ApproverPickerProps {
   value: string[];
   disabled?: boolean;
   onChange: (next: string[]) => void;
-}
-
-interface AgentSelectProps {
-  value: string;
-  disabled?: boolean;
-  remoteAgents: AgentInfo[];
-  onChange: (next: string) => void;
-}
-
-/** Agent 选择器：分组展示本地 / 远程 Agent，远程项携带状态色点。 */
-function AgentSelect({
-  value,
-  disabled,
-  remoteAgents,
-  onChange,
-}: AgentSelectProps) {
-  // 如果当前 value 是 a2a:* 但在远程列表中未找到（列表未加载完成或该 Agent 已下架），
-  // 依然作为占位项加入，避免 native select 选中项丢失。
-  const knownRemoteIds = new Set(remoteAgents.map((a) => a.id));
-  const ghostRemote =
-    isRemoteAgentId(value) && !knownRemoteIds.has(value) ? value : null;
-
-  return (
-    <select
-      value={value}
-      disabled={disabled}
-      onChange={(e) => onChange(e.target.value)}
-      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-    >
-      <optgroup label="本地 Agent">
-        {LOCAL_AGENT_OPTIONS.map((opt) => (
-          <option key={opt.value} value={opt.value}>
-            {opt.label}
-          </option>
-        ))}
-      </optgroup>
-      {(remoteAgents.length > 0 || ghostRemote) && (
-        <optgroup label="远程 Agent">
-          {remoteAgents.map((agent) => {
-            const active = (agent.status ?? "").toLowerCase() === "active";
-            // native <option> 不能渲染颜色节点，使用 ● 字符作为状态前缀
-            const dot = active ? "\u{1F7E2}" : "\u26AA";
-            const label = `${dot} ${agent.name || agent.id}`;
-            return (
-              <option key={agent.id} value={agent.id}>
-                {label}
-              </option>
-            );
-          })}
-          {ghostRemote && (
-            <option key={ghostRemote} value={ghostRemote}>
-              {`\u26AA ${ghostRemote}`}
-            </option>
-          )}
-        </optgroup>
-      )}
-    </select>
-  );
-}
-
-/** 远程 Agent skills 只读展示区：帮助用户了解该 Agent 可以完成什么并编写 prompt。 */
-function RemoteAgentSkills({ agent }: { agent: AgentInfo | undefined }) {
-  if (!agent) {
-    return (
-      <div className="rounded-lg border border-border/50 bg-muted/30 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
-        未找到该远程 Agent。请确认其是否仍在注册表中且状态为 active。
-      </div>
-    );
-  }
-  const skills: AgentSkill[] = Array.isArray(agent.skills) ? agent.skills : [];
-  if (skills.length === 0) {
-    return (
-      <div className="rounded-lg border border-border/50 bg-muted/30 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
-        该 Agent 未声明 skills。可直接在 Prompt 中描述任务。
-      </div>
-    );
-  }
-  return (
-    <div className="space-y-1.5 rounded-lg border border-border/50 bg-muted/20 px-3 py-2.5">
-      {agent.description && (
-        <div className="text-[10px] leading-relaxed text-muted-foreground">
-          {agent.description}
-        </div>
-      )}
-      <ul className="space-y-1.5">
-        {skills.map((skill, idx) => {
-          const name = skill.name || skill.id || `skill-${idx + 1}`;
-          return (
-            <li
-              key={skill.id ?? `${name}-${idx}`}
-              className="rounded-md bg-background/60 px-2 py-1.5"
-            >
-              <div className="text-[11px] font-medium text-foreground">
-                {name}
-              </div>
-              {skill.description && (
-                <div className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
-                  {skill.description}
-                </div>
-              )}
-              {Array.isArray(skill.tags) && skill.tags.length > 0 && (
-                <div className="mt-1 flex flex-wrap gap-1">
-                  {skill.tags.map((tag) => (
-                    <span
-                      key={tag}
-                      className="rounded border border-border/50 bg-background px-1 py-[1px] text-[9px] text-muted-foreground"
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </li>
-          );
-        })}
-      </ul>
-      <div className="pt-1 text-[10px] leading-relaxed text-muted-foreground">
-        提示：在 Prompt 中明确描述需要调用的能力，可提高远程 Agent 完成任务的准确率。
-      </div>
-    </div>
-  );
 }
 
 function ApproverPicker({

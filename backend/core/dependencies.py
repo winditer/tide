@@ -101,6 +101,48 @@ async def check_cwd_write_permission(
     await check_project_write_permission(project_id or None, current_user)
 
 
+async def get_project_role(project_id: str, user_id: str) -> Optional[str]:
+    """查询用户在指定项目中的角色。
+
+    返回值：
+    - 角色字符串（如 'admin', 'owner', 'member', 'viewer'）
+    - 若无记录返回 None
+    """
+    async with async_session_factory() as session:
+        result = await session.execute(
+            text(
+                "SELECT role FROM project_members"
+                " WHERE project_id = :pid AND user_id = :uid LIMIT 1"
+            ),
+            {"pid": project_id, "uid": user_id},
+        )
+        row = result.fetchone()
+    return row[0] if row else None
+
+
+async def check_project_config_permission(
+    project_id: Optional[str],
+    current_user: Optional[dict],
+) -> None:
+    """检查用户是否有权管理指定项目的配置。
+
+    规则：
+    - project_id 为 None（全局配置）：仅全局 admin 可管理
+    - project_id 非空：全局 admin 或项目 admin/owner 可管理
+    - current_user 为 None（TIDE_REQUIRE_AUTH=0 时）：放行
+    """
+    if not current_user:
+        return  # TIDE_REQUIRE_AUTH=0 时放行
+    if current_user.get("role") == "admin":
+        return  # 全局 admin 始终放行
+    if project_id is None:
+        raise HTTPException(status_code=403, detail="仅管理员可管理全局配置")
+    # 检查项目角色
+    project_role = await get_project_role(project_id, current_user["id"])
+    if project_role not in ("admin", "owner"):
+        raise HTTPException(status_code=403, detail="仅项目管理员可管理项目配置")
+
+
 def _extract_bearer(authorization: Optional[str]) -> Optional[str]:
     """从 Authorization Header 提取 Bearer token。"""
     if not authorization:
