@@ -39,6 +39,7 @@ RUN pip install --no-cache-dir -r backend/requirements.txt
 
 # 复制后端源码（前端、node_modules 等不需要）
 COPY backend/ ./backend/
+COPY scripts/ ./scripts/
 
 # 持久化目录：SQLite 数据库 + .tide 运行时 + Agent 工作目录
 RUN mkdir -p /app/data /app/.tide /app/.agent/codex /app/.agent/claude /app/.agent/qoder
