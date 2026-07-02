@@ -437,6 +437,9 @@ async def get_artifact_content(
     project_id = item.get("project_id") or ""
     project_path = await work_item_service._get_project_path(project_id)
 
+    # 保留原始项目根路径，用于 file_path 已包含 worktree 前缀的情况
+    original_project_path = project_path
+
     # 项目组场景：产物可能来自不同子项目，优先从关联 task 的 cwd 定位 project root
     task_id = target.get("task_id") or ""
     if task_id:
@@ -459,6 +462,13 @@ async def get_artifact_content(
         # 判断 file_path 是绝对路径还是相对路径
         if Path(file_path).is_absolute():
             target_path = Path(file_path).resolve()
+        elif ".tide/worktrees/" in file_path:
+            # file_path 已包含 worktree 路径前缀，说明它是从项目根开始的相对路径
+            # 应使用原始项目根路径拼接，避免与 task_cwd 重复嵌套
+            effective_project_root = Path(original_project_path).resolve() if original_project_path else project_root
+            target_path = (effective_project_root / file_path.lstrip("/")).resolve()
+            # 同步更新 project_root 供后续安全校验和 git fallback 使用
+            project_root = effective_project_root
         else:
             target_path = (project_root / file_path.lstrip("/")).resolve()
     except Exception:

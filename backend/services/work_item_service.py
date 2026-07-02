@@ -1086,6 +1086,28 @@ class WorkItemService:
             agent_id = data.get("agentId") or data.get("agent_id") or "codex"
             model = data.get("model") or ""
             prompt_template = data.get("promptTemplate") or data.get("prompt") or ""
+
+            # 专家团解析：若节点配置了 expert_team_id，覆盖 agent_id、合并 skills、注入角色提示词
+            expert_role_prompt = ""
+            if data.get("expert_team_id"):
+                try:
+                    from backend.services.expert_team_service import ExpertTeamService
+                    expert_team_svc = ExpertTeamService()
+                    expert_team = await expert_team_svc.resolve_expert_team(
+                        data["expert_team_id"], "default"
+                    )
+                    if expert_team:
+                        agent_id = expert_team["agent_id"]
+                        if expert_team.get("model"):
+                            model = expert_team["model"]
+                        existing_skills = data.get("skills", []) or []
+                        combined_skills = expert_team.get("skill_slugs", []) + existing_skills
+                        data["skills"] = list(dict.fromkeys(combined_skills))
+                        if expert_team.get("role_prompt"):
+                            expert_role_prompt = expert_team["role_prompt"]
+                except Exception as e:
+                    logger.warning("Expert team resolution failed in _trigger_agent_node: %s", e)
+
             node_cwd = data.get("cwd") or ""
             project_cwd = await self._get_project_path(item["project_id"])
             if not project_cwd:
@@ -1145,6 +1167,10 @@ class WorkItemService:
                 prompt = f"处理工作项: {item['title']}"
                 if item.get("description"):
                     prompt += f"\n\n{item['description']}"
+
+            # 注入专家团角色提示词
+            if expert_role_prompt:
+                prompt = f"# 你的角色\n\n{expert_role_prompt}\n\n---\n\n{prompt}"
 
             # 添加自动执行系统指令前缀 + 文档命名规范
             prompt = AUTO_EXEC_PREFIX + prompt + _doc_naming_instruction(item["id"], title=item.get("title", ""))
@@ -1255,6 +1281,27 @@ class WorkItemService:
             model = data.get("model") or ""
             prompt_template = data.get("promptTemplate") or data.get("prompt") or ""
 
+            # 专家团解析：若节点配置了 expert_team_id，覆盖 agent_id、合并 skills、注入角色提示词
+            expert_role_prompt = ""
+            if data.get("expert_team_id"):
+                try:
+                    from backend.services.expert_team_service import ExpertTeamService
+                    expert_team_svc = ExpertTeamService()
+                    expert_team = await expert_team_svc.resolve_expert_team(
+                        data["expert_team_id"], "default"
+                    )
+                    if expert_team:
+                        agent_id = expert_team["agent_id"]
+                        if expert_team.get("model"):
+                            model = expert_team["model"]
+                        existing_skills = data.get("skills", []) or []
+                        combined_skills = expert_team.get("skill_slugs", []) + existing_skills
+                        data["skills"] = list(dict.fromkeys(combined_skills))
+                        if expert_team.get("role_prompt"):
+                            expert_role_prompt = expert_team["role_prompt"]
+                except Exception as e:
+                    logger.warning("Expert team resolution failed in _trigger_group_agent_node: %s", e)
+
             # 1. 获取项目组上下文
             group_context = await project_group_service.get_group_context_prompt(group_id)
             group_projects = await project_group_service.get_group_projects(group_id)
@@ -1289,6 +1336,10 @@ class WorkItemService:
                 base_prompt = f"处理工作项: {item['title']}"
                 if item.get("description"):
                     base_prompt += f"\n\n{item['description']}"
+
+            # 注入专家团角色提示词
+            if expert_role_prompt:
+                base_prompt = f"# 你的角色\n\n{expert_role_prompt}\n\n---\n\n{base_prompt}"
 
             # ─── 检查路由配置 ─────────────────────────────────────────────
             routing_trigger = data.get("routingTrigger")  # None=未配置, True=启用, False=禁用

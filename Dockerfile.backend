@@ -33,6 +33,10 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends git curl ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
+# 配置 Git 用户信息，避免容器内自动提交时报 "Author identity unknown"
+RUN git config --global user.name "Tide Agent" && \
+    git config --global user.email "agent@tide.local"
+
 # 先复制依赖清单以利用层缓存
 COPY backend/requirements.txt ./backend/requirements.txt
 RUN pip install --no-cache-dir -r backend/requirements.txt

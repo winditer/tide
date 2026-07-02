@@ -1,0 +1,142 @@
+================================================================================
+                    数据库链接前缀修复 - 快速参考
+================================================================================
+
+问题描述：
+  缺少 /tide 前缀的链接存储在数据库中，导致前端访问时路径错误
+
+================================================================================
+受影响数据
+================================================================================
+
+表名              字段名          受影响记录数    存储格式
+─────────────────────────────────────────────────────────────────────────────
+tasks             result          110 条          嵌入式 markdown 链接
+work_items        metadata        14 条           JSON 格式的 artifacts 数组
+─────────────────────────────────────────────────────────────────────────────
+总计：124 条记录
+
+缺失的链接示例：
+  - /docs/view?url=%2Fapi%2Fwork-items%2F...
+  - /tasks/{task_id}
+
+正确的链接格式：
+  - /tide/docs/view?url=%2Fapi%2Fwork-items%2F...
+  - /tide/tasks/{task_id}
+
+================================================================================
+链接生成源代码位置
+================================================================================
+
+文件：/Users/haifeng/Documents/tide/backend/services/work_item_service.py
+行号：2899
+代码：
+  art["url"] = (
+      f"/docs/view?url={quote(content_path, safe='')}"  # 缺少 /tide 前缀
+      f"&title={quote(str(label), safe='')}"
+  )
+
+应改为：
+  art["url"] = (
+      f"/tide/docs/view?url={quote(content_path, safe='')}"
+      f"&title={quote(str(label), safe='')}"
+  )
+
+================================================================================
+数据库架构信息
+================================================================================
+
+数据库位置：
+  - 本地：/Users/haifeng/Documents/tide/tide.db
+  - 容器：/app/data/tide.db (tide-backend)
+
+tasks 表结构：
+  CREATE TABLE tasks (
+      id TEXT PRIMARY KEY,
+      ...
+      result TEXT,              # 包含任务执行结果和产物链接
+      ...
+  );
+
+work_items 表结构：
+  CREATE TABLE work_items (
+      id TEXT PRIMARY KEY,
+      ...
+      metadata TEXT,            # JSON 格式：{"artifacts": [{url: "..."}, ...]}
+      ...
+  );
+
+================================================================================
+修复方法
+================================================================================
+
+方法 1：使用 Python 脚本（推荐）
+  1. 备份数据库：
+     cp tide.db tide.db.backup
+
+  2. 运行修复脚本：
+     python3 /tmp/repair_links.py /Users/haifeng/Documents/tide/tide.db
+
+  3. 脚本会自动：
+     - 修复 work_items 中的 JSON artifacts
+     - 修复 tasks 中的嵌入式链接
+     - 验证修复结果
+
+方法 2：使用 SQL 语句
+  A. 修复 tasks.result（110 条记录）：
+     UPDATE tasks 
+     SET result = REPLACE(
+         REPLACE(result, '/docs/view', '/tide/docs/view'),
+         '/tasks/',
+         '/tide/tasks/'
+     )
+     WHERE (result LIKE '%/docs/view%' OR result LIKE '%/tasks/%')
+     AND result NOT LIKE '%/tide/docs%' 
+     AND result NOT LIKE '%/tide/tasks%';
+
+  B. 修复 work_items.metadata（14 条记录）：
+     需要逐条用 Python 或其他工具处理 JSON 数据
+
+================================================================================
+验证修复
+================================================================================
+
+执行后检查是否还有缺失前缀的链接：
+
+  sqlite3 tide.db "SELECT COUNT(*) FROM tasks WHERE result LIKE '%/docs/view%' AND result NOT LIKE '%/tide%';"
+  # 应返回：0
+
+  sqlite3 tide.db "SELECT COUNT(*) FROM work_items WHERE metadata LIKE '%/docs/view%' AND metadata NOT LIKE '%/tide%';"
+  # 应返回：0
+
+================================================================================
+文件清单
+================================================================================
+
+修复脚本：
+  /tmp/repair_links.py
+
+本报告：
+  /tmp/DATABASE_LINK_REPAIR_REPORT.md
+
+源代码文件：
+  /Users/haifeng/Documents/tide/backend/services/work_item_service.py
+  /Users/haifeng/Documents/tide/backend/db/init.sql
+  /Users/haifeng/Documents/tide/backend/api/sessions.py
+
+数据库文件：
+  /Users/haifeng/Documents/tide/tide.db
+
+================================================================================
+后续预防
+================================================================================
+
+1. 修改源代码，在生成链接时直接添加 /tide 前缀
+
+2. 使用 appPath() 工具函数统一生成前端路径
+
+3. 配置 NEXT_PUBLIC_BASE_PATH=/tide 环境变量
+
+4. 添加单元测试确保所有链接都包含正确前缀
+
+================================================================================
