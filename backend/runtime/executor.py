@@ -211,6 +211,7 @@ class AgentExecutor:
             buffered_events: list[TaskEvent] = []
 
             assert proc.stdout is not None
+            line_count = 0
             while True:
                 line_bytes = await proc.stdout.readline()
                 if not line_bytes:
@@ -218,6 +219,10 @@ class AgentExecutor:
                 line = line_bytes.decode("utf-8", errors="replace").rstrip("\n")
                 if not line:
                     continue
+
+                line_count += 1
+                if line_count % 50 == 0:
+                    await asyncio.sleep(0)  # 显式让出事件循环，避免饿死其他协程
 
                 # 尝试从 JSON 行中提取 token 使用量（失败返回 0,0，不影响主流程）
                 try:
@@ -363,6 +368,7 @@ class AgentExecutor:
                 claude_token_output = 0
 
                 assert proc.stdout is not None
+                line_count = 0
                 while True:
                     line_bytes = await proc.stdout.readline()
                     if not line_bytes:
@@ -370,6 +376,10 @@ class AgentExecutor:
                     line = line_bytes.decode("utf-8", errors="replace").rstrip("\n")
                     if not line:
                         continue
+
+                    line_count += 1
+                    if line_count % 50 == 0:
+                        await asyncio.sleep(0)  # 显式让出事件循环，避免饿死其他协程
 
                     try:
                         ti, to = try_parse_token_usage(line)

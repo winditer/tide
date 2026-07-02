@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -913,6 +914,9 @@ async def sync_session_token_usage() -> dict:
     使用 _estimate_session_file_tokens 专用函数，计入所有内容类型
     （tool_use / tool_result / thinking 等），解决之前仅覆盖 ~14% 实际用量的问题。
 
+    注意：所有同步阻塞操作（文件扫描、token 估算）通过 asyncio.to_thread()
+    在线程池中执行，避免阻塞事件循环。单次执行设置 30 秒超时保护。
+
     Returns:
         统计信息 dict: synced / skipped / created / errors
     """
@@ -922,8 +926,33 @@ async def sync_session_token_usage() -> dict:
 
     stats = {"synced": 0, "skipped": 0, "created": 0, "errors": 0}
 
+    try:
+        # 整体超时保护：最多执行 30 秒，防止长时间阻塞
+        stats = await asyncio.wait_for(
+            _sync_session_token_usage_inner(sa_text, async_session_factory, cost_service),
+            timeout=30.0,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "sync_session_token_usage timed out after 30s, aborting. partial stats: %s",
+            stats,
+        )
+        stats["errors"] += 1
+
+    logger.info(
+        "sync_session_token_usage completed: synced=%d skipped=%d created=%d errors=%d",
+        stats["synced"], stats["skipped"], stats["created"], stats["errors"],
+    )
+    return stats
+
+
+async def _sync_session_token_usage_inner(sa_text, async_session_factory, cost_service) -> dict:
+    """sync_session_token_usage 的核心逻辑，被超时保护包裹。"""
+    stats = {"synced": 0, "skipped": 0, "created": 0, "errors": 0}
+
     # 获取所有已发现的 Qoder/Codex/Claude IDE 会话
-    all_sessions = _load(force=False)
+    # _load() 包含文件扫描，放到线程池执行
+    all_sessions = await asyncio.to_thread(_load, False)
     target_sessions = [
         s for s in all_sessions
         if s.get("agent_id") in ("qoder", "codex", "claude") and s.get("file")
@@ -956,8 +985,9 @@ async def sync_session_token_usage() -> dict:
 
             # 使用专用函数估算 token（计入 tool_use/tool_result 等全部内容）
             # synced_count 语义为已处理的文件行数
-            input_tokens, output_tokens, total_lines = _estimate_session_file_tokens(
-                file_path, start_line=synced_count
+            # 通过 asyncio.to_thread 在线程池中执行，避免阻塞事件循环
+            input_tokens, output_tokens, total_lines = await asyncio.to_thread(
+                _estimate_session_file_tokens, file_path, synced_count
             )
 
             # 增量检查：文件行数未变则跳过
@@ -1018,8 +1048,4 @@ async def sync_session_token_usage() -> dict:
             )
             stats["errors"] += 1
 
-    logger.info(
-        "sync_session_token_usage completed: synced=%d skipped=%d created=%d errors=%d",
-        stats["synced"], stats["skipped"], stats["created"], stats["errors"],
-    )
     return stats
