@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState, Suspense } from "react";
+import { useEffect, useState, useRef, useCallback, Suspense } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { Button, toast } from "@tide/ui";
+import { Button, Input, toast } from "@tide/ui";
 import {
   useWorkflow,
   useUpdateWorkflow,
@@ -11,6 +11,7 @@ import {
 } from "@tide/core";
 import type { WorkflowDefinition } from "@tide/core";
 import { WorkflowCanvas, WorkflowRunHistory } from "@tide/views";
+import { Pencil } from "lucide-react";
 
 export default function WorkflowEditorPage() {
   return (
@@ -34,6 +35,46 @@ function WorkflowEditorPageInner() {
 
   const [draft, setDraft] = useState<WorkflowDefinition | null>(null);
   const [dirty, setDirty] = useState(false);
+
+  // ─── Inline editing for name & description ─────────────
+  const [editingName, setEditingName] = useState(false);
+  const [editingDesc, setEditingDesc] = useState(false);
+  const [nameValue, setNameValue] = useState("");
+  const [descValue, setDescValue] = useState("");
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const descInputRef = useRef<HTMLInputElement>(null);
+
+  const startEditName = useCallback(() => {
+    setNameValue(workflow?.name ?? "");
+    setEditingName(true);
+    setTimeout(() => nameInputRef.current?.focus(), 0);
+  }, [workflow?.name]);
+
+  const saveName = useCallback(() => {
+    setEditingName(false);
+    const trimmed = nameValue.trim();
+    if (!trimmed || trimmed === workflow?.name) return;
+    update.mutate(
+      { id, params: { name: trimmed } },
+      { onError: (err) => toast({ title: "保存名称失败", description: String(err instanceof Error ? err.message : err), variant: "destructive" }) },
+    );
+  }, [nameValue, workflow?.name, id, update]);
+
+  const startEditDesc = useCallback(() => {
+    setDescValue(workflow?.description ?? "");
+    setEditingDesc(true);
+    setTimeout(() => descInputRef.current?.focus(), 0);
+  }, [workflow?.description]);
+
+  const saveDesc = useCallback(() => {
+    setEditingDesc(false);
+    const trimmed = descValue.trim();
+    if (trimmed === (workflow?.description ?? "")) return;
+    update.mutate(
+      { id, params: { description: trimmed } },
+      { onError: (err) => toast({ title: "保存描述失败", description: String(err instanceof Error ? err.message : err), variant: "destructive" }) },
+    );
+  }, [descValue, workflow?.description, id, update]);
 
   useEffect(() => {
     if (workflow?.definition && !dirty) {
@@ -105,9 +146,28 @@ function WorkflowEditorPageInner() {
             ← 返回工作流列表
           </button>
           <div className="mt-2 flex items-center gap-2">
-            <h1 className="truncate text-2xl font-semibold tracking-tight">
-              {workflow.name}
-            </h1>
+            {editingName ? (
+              <Input
+                ref={nameInputRef}
+                value={nameValue}
+                onChange={(e) => setNameValue(e.target.value)}
+                onBlur={saveName}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") saveName();
+                  if (e.key === "Escape") setEditingName(false);
+                }}
+                className="text-2xl font-semibold h-auto py-0 px-1 max-w-md"
+              />
+            ) : (
+              <h1
+                className="group truncate text-2xl font-semibold tracking-tight cursor-pointer hover:text-primary/80 transition-colors"
+                onClick={startEditName}
+                title="点击编辑名称"
+              >
+                {workflow.name}
+                <Pencil className="inline-block ml-1.5 h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+              </h1>
+            )}
             <span className="rounded-md border border-border bg-muted px-1.5 py-[1px] font-mono text-[10px] tracking-widest text-muted-foreground">
               v{workflow.version}
             </span>
@@ -117,9 +177,27 @@ function WorkflowEditorPageInner() {
               </span>
             )}
           </div>
-          {workflow.description && (
-            <p className="mt-1 max-w-2xl truncate text-sm text-muted-foreground">
-              {workflow.description}
+          {editingDesc ? (
+            <Input
+              ref={descInputRef}
+              value={descValue}
+              onChange={(e) => setDescValue(e.target.value)}
+              onBlur={saveDesc}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") saveDesc();
+                if (e.key === "Escape") setEditingDesc(false);
+              }}
+              placeholder="添加描述..."
+              className="mt-1 max-w-2xl text-sm h-auto py-0.5 px-1"
+            />
+          ) : (
+            <p
+              className="group mt-1 max-w-2xl truncate text-sm text-muted-foreground cursor-pointer hover:text-foreground/70 transition-colors"
+              onClick={startEditDesc}
+              title="点击编辑描述"
+            >
+              {workflow.description || "添加描述..."}
+              <Pencil className="inline-block ml-1 h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity" />
             </p>
           )}
         </div>

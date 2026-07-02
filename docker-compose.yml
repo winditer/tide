@@ -51,6 +51,7 @@ services:
       - tide-agent-home:/app/.agent
       - tide-qoder-home:/root/.qoder
       - tide-claude-home:/root/.claude
+      - /root/.ssh:/root/.ssh:ro
     ports:
       - "8000:8000"
     depends_on:

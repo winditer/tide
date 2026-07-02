@@ -72,7 +72,7 @@ async def list_skills(
     category: Optional[str] = Query(None),
     enabled: Optional[int] = Query(None),
     project_id: Optional[str] = Query(None),
-    limit: int = Query(200, ge=1, le=500),
+    limit: int = Query(500, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     current_user=Depends(get_optional_user),
 ):
