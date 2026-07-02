@@ -595,7 +595,7 @@ async def create_project(
     if body.mode == "clone":
         git_config = {
             "repo_url": body.repo_url,
-            "default_branch": body.branch or "main",
+            "default_branch": body.branch or "",
             "credential_type": body.credential_type or "ssh_agent",
             "auto_push": True,
         }
@@ -928,6 +928,17 @@ async def trigger_clone(
             status_code=409,
             detail="项目目录已存在且包含 Git 仓库，无需重新克隆",
         )
+
+    # 如果目录存在但为空或 clone 失败残留，先清理
+    if target_dir.exists():
+        import shutil
+        try:
+            shutil.rmtree(target_dir)
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"清理失败目录时出错: {exc}",
+            ) from exc
 
     # 确保父目录存在
     target_dir.parent.mkdir(parents=True, exist_ok=True)

@@ -54,6 +54,11 @@ async def _build_git_env(git_config: dict | None) -> dict:
             "-o IdentitiesOnly=yes"
         )
 
+    elif cred_type == "ssh_agent":
+        # 容器内首次连接远端 host 时 known_hosts 可能为空，
+        # 需跳过 host key 验证避免交互式确认导致 clone 挂住。
+        env["GIT_SSH_COMMAND"] = "ssh -o StrictHostKeyChecking=no"
+
     elif cred_type == "token":
         token = (git_config.get("access_token") or "").strip()
         if token:
