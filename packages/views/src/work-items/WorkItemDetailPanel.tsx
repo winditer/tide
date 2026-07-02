@@ -18,6 +18,7 @@ import {
   parseApprovalDetail,
   useAddArtifact,
   useAuth,
+  appPath,
   type WorkItem,
   type WorkItemUpdate,
   type WorkItemTransition,
@@ -401,7 +402,7 @@ export function WorkItemDetailPanel({
                         {t.task_id && !t.plan_tasks?.length && (
                           t.task_info ? (
                             <a
-                              href={`/tasks/${t.task_info.id}`}
+                              href={appPath(`/tasks/${t.task_info.id}`)}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 transition-smooth hover:bg-muted/50"
@@ -420,7 +421,7 @@ export function WorkItemDetailPanel({
                             </a>
                           ) : (
                             <a
-                              href={`/tasks/${t.task_id}`}
+                              href={appPath(`/tasks/${t.task_id}`)}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="text-primary text-xs hover:underline transition-smooth"
@@ -431,7 +432,7 @@ export function WorkItemDetailPanel({
                         )}
                         {sessionId && (
                           <a
-                            href={`/sessions/${sessionId}`}
+                            href={appPath(`/sessions/${sessionId}`)}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="text-primary text-xs hover:underline transition-smooth"
@@ -451,7 +452,7 @@ export function WorkItemDetailPanel({
                           {t.plan_tasks.map((pt: WorkItemPlanTask) => (
                             <a
                               key={pt.id}
-                              href={`/tasks/${pt.id}`}
+                              href={appPath(`/tasks/${pt.id}`)}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="flex items-center gap-2 rounded-md px-2 py-1.5 transition-smooth hover:bg-muted/50"
@@ -605,7 +606,7 @@ function WorkItemArtifactsSection({ item }: WorkItemArtifactsSectionProps) {
                   >
                     <span className="text-xs text-muted-foreground">•</span>
                     <a
-                      href={artifact.url}
+                      href={appPath(artifact.url)}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="flex-1 truncate text-sm text-primary hover:underline"

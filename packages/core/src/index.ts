@@ -1,3 +1,5 @@
+export { appPath } from "./lib/paths";
+
 export type { Task, TaskStatus, TaskEvent } from "./types/task";
 export { TaskStatusEnum } from "./types/task";
 

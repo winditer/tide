@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChatArtifact, ChatMessage } from "@tide/core";
-import { extractArtifactsFromContent } from "@tide/core";
+import { extractArtifactsFromContent, appPath } from "@tide/core";
 import { ExternalLink, FileText } from "lucide-react";
 import { SimpleMarkdown } from "../shared/SimpleMarkdown";
 
@@ -285,7 +285,7 @@ export function ArtifactCard({ artifact }: { artifact: ChatArtifact }) {
       : artifact.url;
   const href = isExternal
     ? artifact.url
-    : `/docs/view?url=${encodeURIComponent(resolvedUrl)}&title=${encodeURIComponent(artifact.label)}`;
+    : appPath(`/docs/view?url=${encodeURIComponent(resolvedUrl)}&title=${encodeURIComponent(artifact.label)}`);
 
   return (
     <a

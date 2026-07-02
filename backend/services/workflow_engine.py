@@ -519,7 +519,7 @@ class WorkflowEngine:
         node_id = node["id"]
         data = node.get("data", {})
         agent_id = data.get("agentId") or data.get("agent_id") or "codex"
-        model = data.get("model") or ""
+        model = data.get("model") or None
         prompt_template = data.get("promptTemplate") or data.get("prompt") or ""
         prompt = self._render_template(prompt_template, context)
         cwd = data.get("cwd") or str(Path.cwd())

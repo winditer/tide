@@ -1027,12 +1027,10 @@ class QoderAdapter(AgentAdapter):
 
     def build_command(self, task: CodexTaskRuntime, last_message_file: Optional[Path] = None) -> list[str]:
         argv = [QODER_BIN, "--print", "--output-format", "stream-json", "--cwd", str(task.cwd)]
-        if task.model is None:
-            pass  # 不传 --model，让 CLI 自行决定模型
+        if not task.model:
+            pass  # model 为 None 或空字符串时不传 --model，让 CLI 使用自身配置
         else:
-            model = task.model or QODER_MODEL
-            if model:
-                argv.extend(["--model", model])
+            argv.extend(["--model", task.model])
         permission_mode = normalize_qoder_permission_mode(task.permission_mode or QODER_PERMISSION_MODE, "QODER_PERMISSION_MODE")
         if permission_mode:
             argv.extend(["--permission-mode", permission_mode])

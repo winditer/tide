@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { ChatArtifact } from "@tide/core";
+import { appPath } from "@tide/core";
 import { ChevronDown, ChevronRight, ExternalLink, FileText, Paperclip } from "lucide-react";
 import { formatRelativeTime } from "./format-time";
 
@@ -70,7 +71,7 @@ function ArtifactRow({ artifact }: { artifact: ChatArtifact }) {
       : artifact.url;
   const href = isExternal
     ? artifact.url
-    : `/docs/view?url=${encodeURIComponent(resolvedUrl)}&title=${encodeURIComponent(artifact.label)}`;
+    : appPath(`/docs/view?url=${encodeURIComponent(resolvedUrl)}&title=${encodeURIComponent(artifact.label)}`);
 
   return (
     <a

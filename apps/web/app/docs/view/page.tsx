@@ -4,7 +4,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { apiClient, ApiError } from "@tide/core";
+import { apiClient, ApiError, appPath } from "@tide/core";
 
 // ── State machine ────────────────────────────────────────────────────────
 type LoadState =
@@ -197,7 +197,7 @@ function MarkdownViewer() {
 
   const handleOpenNewTab = () => {
     if (!url) return;
-    window.open(url, "_blank", "noopener,noreferrer");
+    window.open(appPath(url), "_blank", "noopener,noreferrer");
   };
 
   const handleBack = () => {
