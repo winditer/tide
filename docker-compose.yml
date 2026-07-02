@@ -43,6 +43,8 @@ services:
       CODEX_SESSIONS_DIR: /app/.agent/codex/sessions
       CLAUDE_PROJECTS_DIR: /app/.agent/claude/projects
       QODER_PROJECTS_DIR: /app/.agent/qoder/projects
+      # 项目仓库数据目录，挂载在 tide-data volume 上保证持久化
+      TIDE_DATA_DIR: /app/data
       # Qoder CLI PAT 认证（从 .env 中读取）
       QODER_PERSONAL_ACCESS_TOKEN: ${QODER_PERSONAL_ACCESS_TOKEN:-}
     volumes:
