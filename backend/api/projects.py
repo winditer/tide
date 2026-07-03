@@ -391,6 +391,7 @@ async def list_projects(
     show_archived: Optional[bool] = Query(
         None, description="是否包含已归档项目；缺省读取 TIDE_SHOW_ARCHIVED"
     ),
+    search: Optional[str] = Query(None, description="按项目名称或标签模糊搜索"),
     current_user=Depends(get_optional_user),
 ):
     """项目列表 — 文件发现 + DB 聚合 + 已注册项目合并。
@@ -461,6 +462,16 @@ async def list_projects(
                 archived=is_archived,
             )
         )
+    # 模糊搜索过滤
+    if search:
+        search_lower = search.lower().strip()
+        projects = [
+            p for p in projects
+            if search_lower in (p.get("name", "") or "").lower()
+            or search_lower in (p.get("cwd", "") or "").lower()
+            or any(search_lower in (tag or "").lower() for tag in (p.get("tags") or []))
+        ]
+
     projects.sort(key=lambda p: (p.get("last_active") or ""), reverse=True)
     return {"projects": projects}
 

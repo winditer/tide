@@ -117,11 +117,13 @@ export function getAgents(): Promise<AgentsResponse> {
   return apiClient.get<AgentsResponse>("/api/agents");
 }
 
-export function getProjects(params?: { show_archived?: boolean }): Promise<ProjectsResponse> {
-  const search = new URLSearchParams();
+export function getProjects(params?: { show_archived?: boolean; search?: string }): Promise<ProjectsResponse> {
+  const sp = new URLSearchParams();
   if (params?.show_archived !== undefined)
-    search.set("show_archived", params.show_archived ? "true" : "false");
-  const q = search.toString();
+    sp.set("show_archived", params.show_archived ? "true" : "false");
+  if (params?.search)
+    sp.set("search", params.search);
+  const q = sp.toString();
   return apiClient.get<ProjectsResponse>(`/api/projects${q ? `?${q}` : ""}`);
 }
 

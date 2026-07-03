@@ -479,18 +479,25 @@ export {
   addProjectMember,
   updateProjectMemberRole,
   removeProjectMember,
+  listAvailableUsers,
+  batchAddProjectMembers,
 } from "./api/project-members";
 export type {
   ProjectMember,
   ListProjectMembersResponse,
   AddMemberInput,
   UpdateMemberInput,
+  AvailableUser,
+  ListAvailableUsersResponse,
+  BatchAddMembersResponse,
 } from "./api/project-members";
 export {
   useProjectMembers,
   useAddProjectMember,
   useUpdateProjectMember,
   useRemoveProjectMember,
+  useAvailableUsers,
+  useBatchAddProjectMembers,
 } from "./hooks/use-project-members";
 
 // Project groups (cross-repo project grouping)
@@ -620,6 +627,7 @@ export {
   createMergeRequest,
   getRemoteBranches,
   localMergeBranches,
+  fetchRemoteBranches,
 } from "./api/git-audit";
 export type {
   GitCommit,
@@ -647,6 +655,7 @@ export {
   useCreateMergeRequest,
   useRemoteBranches,
   useLocalMerge,
+  useFetchRemote,
 } from "./hooks/use-git-audit";
 
 // Files (code editor)

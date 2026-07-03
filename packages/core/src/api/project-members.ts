@@ -71,3 +71,47 @@ export function removeProjectMember(
     )}`,
   );
 }
+
+// ── Available users (for add-member dialog) ─────────────────────
+
+export interface AvailableUser {
+  id: string;
+  username: string;
+  email: string | null;
+  display_name: string | null;
+  role: string;
+}
+
+export interface ListAvailableUsersResponse {
+  items: AvailableUser[];
+  total: number;
+}
+
+export function listAvailableUsers(
+  projectId: string,
+  params?: { q?: string; page?: number; page_size?: number },
+): Promise<ListAvailableUsersResponse> {
+  const sp = new URLSearchParams();
+  if (params?.q) sp.set("q", params.q);
+  if (params?.page) sp.set("page", String(params.page));
+  if (params?.page_size) sp.set("page_size", String(params.page_size));
+  const qs = sp.toString();
+  return apiClient.get<ListAvailableUsersResponse>(
+    `/api/projects/${encodeURIComponent(projectId)}/members/available${qs ? `?${qs}` : ""}`,
+  );
+}
+
+export interface BatchAddMembersResponse {
+  added: string[];
+  skipped: Array<{ user_id: string; reason: string }>;
+}
+
+export function batchAddProjectMembers(
+  projectId: string,
+  body: { user_ids: string[]; role?: string },
+): Promise<BatchAddMembersResponse> {
+  return apiClient.post<BatchAddMembersResponse>(
+    `/api/projects/${encodeURIComponent(projectId)}/members/batch`,
+    body,
+  );
+}

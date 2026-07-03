@@ -30,6 +30,7 @@ import {
   Hash,
   Pencil,
   Plus,
+  RefreshCw,
   Search,
   ShieldCheck,
   Star,
@@ -68,6 +69,7 @@ import {
   useDeleteBranch,
   useDeleteGroupWorkflow,
   useDeleteProjectGroup,
+  useFetchRemote,
   useGroupBranches,
   useGroupChanges,
   useGroupCommits,
@@ -869,12 +871,18 @@ function ProjectBranchCard({
   const createBranch = useCreateBranch(project.project_id);
   const deleteBranch = useDeleteBranch(project.project_id);
   const cleanupBranches = useCleanupBranches(project.project_id);
+  const fetchRemote = useFetchRemote(project.project_id);
   const pushBranch = usePushBranch(project.project_id);
   const pullBranch = usePullBranch(project.project_id);
   const { data: remoteBranchesData } = useRemoteBranches(project.project_id);
   const remoteBranchSet = new Set(remoteBranchesData?.branches ?? []);
   const localMerge = useLocalMerge(project.project_id);
   const qc = useQueryClient();
+
+  // 合并本地和远端分支，去重，用于本地合并弹窗
+  const remoteBranches = remoteBranchesData?.branches ?? [];
+  const remoteOnlyBranches = remoteBranches.filter(b => !(project.branches || []).includes(b));
+  const allMergeBranches = [...(project.branches || []), ...remoteOnlyBranches];
 
   const [expanded, setExpanded] = useState(true);
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -936,6 +944,23 @@ function ProjectBranchCard({
           <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{project.branches.length}</Badge>
         </button>
         <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 text-xs"
+            disabled={fetchRemote.isPending}
+            onClick={() => {
+              fetchRemote.mutateAsync(undefined)
+                .then(() => {
+                  qc.invalidateQueries({ queryKey: ["project-group", groupId, "branches"] });
+                  toast({ title: "Fetch 完成", description: `${project.name} 远端分支已同步` });
+                })
+                .catch((e) => toast({ title: "Fetch 失败", description: getApiErrorMessage(e), variant: "destructive" }));
+            }}
+          >
+            <RefreshCw className={`h-3 w-3 mr-1 ${fetchRemote.isPending ? "animate-spin" : ""}`} />
+            {fetchRemote.isPending ? "同步中" : "Fetch"}
+          </Button>
           {project.branches.some((b) => b.startsWith("tide/")) && (
             <Button
               variant="outline"
@@ -1021,7 +1046,7 @@ function ProjectBranchCard({
                     className="h-6 w-6 p-0"
                     title={remoteBranchSet.has(branch) ? "Merge Request" : "分支未推送到远端，请先 Push"}
                     disabled={!remoteBranchSet.has(branch)}
-                    onClick={() => onMrRequest(project.project_id, branch, project.branches)}
+                    onClick={() => onMrRequest(project.project_id, branch, remoteBranchesData?.branches ?? [])}
                   >
                     <GitPullRequest className="h-3 w-3" />
                   </Button>
@@ -1059,8 +1084,8 @@ function ProjectBranchCard({
                   onChange={(e) => setMergeSource(e.target.value)}
                 >
                   <option value="">选择源分支</option>
-                  {(project.branches || []).filter(b => b !== mergeTarget).map(b => (
-                    <option key={b} value={b}>{b}</option>
+                  {allMergeBranches.filter(b => b !== mergeTarget).map(b => (
+                    <option key={b} value={b}>{b}{remoteOnlyBranches.includes(b) ? ' (remote)' : ''}</option>
                   ))}
                 </select>
               </div>
@@ -1072,8 +1097,8 @@ function ProjectBranchCard({
                   onChange={(e) => setMergeTarget(e.target.value)}
                 >
                   <option value="">选择目标分支</option>
-                  {(project.branches || []).filter(b => b !== mergeSource).map(b => (
-                    <option key={b} value={b}>{b}</option>
+                  {allMergeBranches.filter(b => b !== mergeSource).map(b => (
+                    <option key={b} value={b}>{b}{remoteOnlyBranches.includes(b) ? ' (remote)' : ''}</option>
                   ))}
                 </select>
               </div>

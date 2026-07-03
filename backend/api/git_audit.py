@@ -257,6 +257,21 @@ async def cleanup_stale_branches(
 
     return {"cleaned": len(cleaned), "branches": cleaned}
 
+@router.post("/{project_id}/git/fetch")
+async def git_fetch_remote(project_id: str):
+    """执行 git fetch origin --prune，同步远端分支信息。"""
+    cwd = _decode_project_path(project_id)
+    repo_root = await git_repo_root(Path(cwd))
+    if not repo_root:
+        raise HTTPException(status_code=400, detail="Not a git repository")
+
+    code, output = await git_command(repo_root, ["fetch", "origin", "--prune"], timeout=60)
+    if code != 0:
+        raise HTTPException(status_code=500, detail=f"git fetch failed: {output[:500]}")
+
+    return {"ok": True, "output": output[:500]}
+
+
 @router.get("/{project_id}/git/branches")
 async def get_project_branches(
     project_id: str,

@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addProjectMember,
+  batchAddProjectMembers,
+  listAvailableUsers,
   listProjectMembers,
   removeProjectMember,
   updateProjectMemberRole,
@@ -47,6 +49,26 @@ export function useRemoveProjectMember(projectId: string) {
     mutationFn: (userId: string) => removeProjectMember(projectId, userId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: membersKey(projectId) });
+    },
+  });
+}
+
+export function useAvailableUsers(projectId: string | undefined, q?: string) {
+  return useQuery({
+    queryKey: ["available-project-members", projectId, q],
+    queryFn: () => listAvailableUsers(projectId!, { q }),
+    enabled: !!projectId,
+  });
+}
+
+export function useBatchAddProjectMembers(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { user_ids: string[]; role?: string }) =>
+      batchAddProjectMembers(projectId, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: membersKey(projectId) });
+      qc.invalidateQueries({ queryKey: ["available-project-members", projectId] });
     },
   });
 }

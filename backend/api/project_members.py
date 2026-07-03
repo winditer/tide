@@ -11,9 +11,9 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
@@ -37,6 +37,11 @@ _VALID_PROJECT_ROLES = {"admin", "member", "viewer"}
 class AddMemberRequest(BaseModel):
     user_id: str = Field(..., min_length=1)
     role: Optional[str] = Field(default="member")
+
+
+class BatchAddMembersRequest(BaseModel):
+    user_ids: List[str]
+    role: str = "member"
 
 
 class UpdateMemberRequest(BaseModel):
@@ -109,6 +114,128 @@ async def _ensure_can_manage(
 
 
 # ── 路由 ──────────────────────────────────────────────────
+
+
+@router.get("/available")
+async def list_available_users(
+    project_id: str,
+    q: Optional[str] = Query(None, description="搜索关键词(username/email/display_name)"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """列出可添加为项目成员的用户（未加入该项目的系统用户）。
+
+    权限：项目 admin 或全局 admin 可调用。
+    """
+    async with async_session_factory() as session:
+        await _ensure_can_manage(session, project_id, current_user)
+
+        # 获取已有成员的 user_id
+        existing = await session.execute(
+            text("SELECT user_id FROM project_members WHERE project_id = :pid"),
+            {"pid": project_id},
+        )
+        existing_ids = {row[0] for row in existing.fetchall()}
+
+        # 查询用户表，支持搜索
+        base_query = "SELECT id, username, email, display_name, role FROM users WHERE 1=1"
+        params: dict = {}
+
+        if q:
+            base_query += (
+                " AND (username LIKE :q OR email LIKE :q OR display_name LIKE :q)"
+            )
+            params["q"] = f"%{q}%"
+
+        base_query += " ORDER BY username ASC"
+        result = await session.execute(text(base_query), params)
+
+        # 在 Python 端排除已有成员并分页
+        all_users = []
+        for row in result.fetchall():
+            if row[0] not in existing_ids:
+                all_users.append(
+                    {
+                        "id": row[0],
+                        "username": row[1],
+                        "email": row[2],
+                        "display_name": row[3],
+                        "role": row[4],
+                    }
+                )
+
+        total = len(all_users)
+        offset = (page - 1) * page_size
+        items = all_users[offset : offset + page_size]
+
+    return {"items": items, "total": total}
+
+
+@router.post("/batch", status_code=status.HTTP_201_CREATED)
+async def batch_add_members(
+    project_id: str,
+    body: BatchAddMembersRequest,
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """批量添加项目成员。"""
+    role = _validate_role(body.role)
+
+    async with async_session_factory() as session:
+        await _ensure_can_manage(session, project_id, current_user)
+
+        added = []
+        skipped = []
+        for user_id in body.user_ids:
+            # 检查用户存在
+            user = await session.execute(
+                text("SELECT id, username FROM users WHERE id = :uid"),
+                {"uid": user_id},
+            )
+            row = user.fetchone()
+            if not row:
+                skipped.append({"user_id": user_id, "reason": "用户不存在"})
+                continue
+
+            # 检查是否已是成员
+            existing = await session.execute(
+                text(
+                    "SELECT 1 FROM project_members"
+                    " WHERE project_id = :pid AND user_id = :uid LIMIT 1"
+                ),
+                {"pid": project_id, "uid": user_id},
+            )
+            if existing.fetchone():
+                skipped.append({"user_id": user_id, "reason": "已是项目成员"})
+                continue
+
+            member_id = str(uuid.uuid4())
+            now = _now_iso()
+            await session.execute(
+                text(
+                    "INSERT INTO project_members (id, project_id, user_id, role, created_at)"
+                    " VALUES (:id, :pid, :uid, :role, :now)"
+                ),
+                {
+                    "id": member_id,
+                    "pid": project_id,
+                    "uid": user_id,
+                    "role": role,
+                    "now": now,
+                },
+            )
+            added.append(user_id)
+
+        await session.commit()
+
+    logger.info(
+        "user %s batch-added %d members to project %s (skipped %d)",
+        current_user.get("id") if current_user else None,
+        len(added),
+        project_id,
+        len(skipped),
+    )
+    return {"added": added, "skipped": skipped}
 
 
 @router.get("")

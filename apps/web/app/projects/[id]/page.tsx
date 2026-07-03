@@ -18,8 +18,8 @@ import {
 } from "@tide/ui";
 import {
   apiClient,
-  useAdminUsers,
-  useAddProjectMember,
+  useAvailableUsers,
+  useBatchAddProjectMembers,
   useAuth,
   useBindProjectWorkflow,
   useCleanupBranches,
@@ -29,6 +29,7 @@ import {
   useDeleteBranch,
   useDeleteProject,
   useDeleteVersion,
+  useFetchRemote,
   useGitBranches,
   useLocalMerge,
   useProject,
@@ -60,6 +61,7 @@ import {
   GitPullRequest,
   Pencil,
   Plus,
+  RefreshCw,
   Search,
   ShieldCheck,
   Tag,
@@ -790,7 +792,7 @@ function GitConfigCard({ projectId }: { projectId: string }) {
         if (cancelled) return;
         const merged: GitConfigForm = {
           repo_url: data?.repo_url ?? "",
-          default_branch: data?.default_branch ?? "main",
+          default_branch: data?.default_branch ?? "",
           credential_type: data?.credential_type ?? "ssh_agent",
           auto_push: data?.auto_push ?? true,
           ssh_key_path: data?.ssh_key_path ?? "",
@@ -826,7 +828,7 @@ function GitConfigCard({ projectId }: { projectId: string }) {
     try {
       const payload: Record<string, unknown> = {
         repo_url: form.repo_url.trim(),
-        default_branch: form.default_branch.trim() || "main",
+        default_branch: form.default_branch.trim(),
         credential_type: form.credential_type,
         auto_push: initial.auto_push,
       };
@@ -842,7 +844,7 @@ function GitConfigCard({ projectId }: { projectId: string }) {
       const next: GitConfigForm = {
         ...form,
         repo_url: (payload.repo_url as string) ?? "",
-        default_branch: (payload.default_branch as string) ?? "main",
+        default_branch: (payload.default_branch as string) ?? "",
         // 未选中的认证方式的敏感字段由后端清零，这里也同步置空以避免表单脏状态
         ssh_key_path:
           form.credential_type === "ssh_key" ? form.ssh_key_path.trim() : "",
@@ -918,7 +920,7 @@ function GitConfigCard({ projectId }: { projectId: string }) {
               onChange={(e) =>
                 setForm((f) => ({ ...f, default_branch: e.target.value }))
               }
-              placeholder="main"
+              placeholder="留空则使用仓库默认分支"
               className="rounded-lg border-border/50 font-mono text-xs"
             />
           </label>
@@ -944,6 +946,31 @@ function GitConfigCard({ projectId }: { projectId: string }) {
                 "使用 HTTPS Personal Access Token 鉴权（GitHub/GitLab/Gitea）。"}
             </span>
           </label>
+
+          {/* URL 与认证方式匹配校验提示 */}
+          {form.repo_url.trim() && form.credential_type && (() => {
+            const url = form.repo_url.trim();
+            const isSshUrl = url.startsWith("git@");
+            const isHttpUrl = url.startsWith("https://") || url.startsWith("http://");
+            const isSshAuth = form.credential_type === "ssh_agent" || form.credential_type === "ssh_key";
+            const isHttpAuth = form.credential_type === "token";
+
+            if (isSshAuth && isHttpUrl) {
+              return (
+                <p className="text-xs text-amber-500 -mt-2">
+                  ⚠️ 当前认证方式为 SSH，但仓库 URL 为 HTTPS 格式，clone 可能失败。建议使用 git@ 开头的 SSH URL。
+                </p>
+              );
+            }
+            if (isHttpAuth && isSshUrl) {
+              return (
+                <p className="text-xs text-amber-500 -mt-2">
+                  ⚠️ 当前认证方式为 HTTPS Token，但仓库 URL 为 SSH 格式，clone 可能失败。建议使用 https:// 开头的 URL。
+                </p>
+              );
+            }
+            return null;
+          })()}
 
           {form.credential_type === "ssh_key" && (
             <label className="block">
@@ -1019,6 +1046,7 @@ function BranchManagementCard({ projectId }: { projectId: string }) {
   const createBranch = useCreateBranch(projectId);
   const deleteBranch = useDeleteBranch(projectId);
   const cleanupBranches = useCleanupBranches(projectId);
+  const fetchRemote = useFetchRemote(projectId);
   const pushBranch = usePushBranch(projectId);
   const pullBranch = usePullBranch(projectId);
   const createMR = useCreateMergeRequest(projectId);
@@ -1026,6 +1054,11 @@ function BranchManagementCard({ projectId }: { projectId: string }) {
   const { data: remoteBranchesData } = useRemoteBranches(projectId);
   const remoteBranchSet = new Set(remoteBranchesData?.branches ?? []);
   const localMerge = useLocalMerge(projectId);
+
+  // 合并本地和远端分支，去重，用于本地合并弹窗
+  const remoteBranches = remoteBranchesData?.branches ?? [];
+  const remoteOnlyBranches = remoteBranches.filter(b => !branches.includes(b));
+  const allMergeBranches = [...branches, ...remoteOnlyBranches];
 
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newBranchName, setNewBranchName] = useState("");
@@ -1116,7 +1149,9 @@ function BranchManagementCard({ projectId }: { projectId: string }) {
 
   const openMrDialog = (branch: string) => {
     setMrDialogBranch(branch);
-    const defaultTarget = branches.includes("main") ? "main" : branches.includes("master") ? "master" : branches.filter((b) => b !== branch)[0] ?? "";
+    const remoteBranches = remoteBranchesData?.branches ?? [];
+    const otherRemote = remoteBranches.filter((b) => b !== branch);
+    const defaultTarget = otherRemote.includes("main") ? "main" : otherRemote.includes("master") ? "master" : otherRemote[0] ?? "";
     setMrTargetBranch(defaultTarget);
     setMrTitle(`Merge ${branch} into ${defaultTarget}`);
     setMrDescription("");
@@ -1131,6 +1166,20 @@ function BranchManagementCard({ projectId }: { projectId: string }) {
           <Badge variant="secondary" className="text-xs">{branches.length}</Badge>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={fetchRemote.isPending}
+            onClick={() => {
+              fetchRemote.mutate(undefined, {
+                onSuccess: () => toast({ title: "Fetch 完成", description: "远端分支信息已同步" }),
+                onError: (err) => toast({ title: "Fetch 失败", description: getApiErrorMessage(err), variant: "destructive" }),
+              });
+            }}
+          >
+            <RefreshCw className={`h-3.5 w-3.5 mr-1 ${fetchRemote.isPending ? "animate-spin" : ""}`} />
+            {fetchRemote.isPending ? "同步中…" : "Fetch"}
+          </Button>
           {branches.some((b) => b.startsWith("tide/")) && (
             <Button
               variant="outline"
@@ -1270,7 +1319,7 @@ function BranchManagementCard({ projectId }: { projectId: string }) {
                       setMrTargetBranch("");
                     }
                   }}
-                  options={branches.filter((b) => b !== mrTargetBranch).map((b) => ({ value: b, label: b }))}
+                  options={(remoteBranchesData?.branches ?? []).filter((b) => b !== mrTargetBranch).map((b) => ({ value: b, label: b }))}
                 />
               </label>
               <label className="block">
@@ -1285,7 +1334,7 @@ function BranchManagementCard({ projectId }: { projectId: string }) {
                       setMrDialogBranch("");
                     }
                   }}
-                  options={branches.filter((b) => b !== mrDialogBranch).map((b) => ({ value: b, label: b }))}
+                  options={(remoteBranchesData?.branches ?? []).filter((b) => b !== mrDialogBranch).map((b) => ({ value: b, label: b }))}
                 />
               </label>
               <label className="block">
@@ -1338,8 +1387,8 @@ function BranchManagementCard({ projectId }: { projectId: string }) {
                   onChange={(e) => setMergeSource(e.target.value)}
                 >
                   <option value="">选择源分支</option>
-                  {(branches || []).filter(b => b !== mergeTarget).map(b => (
-                    <option key={b} value={b}>{b}</option>
+                  {allMergeBranches.filter(b => b !== mergeTarget).map(b => (
+                    <option key={b} value={b}>{b}{remoteOnlyBranches.includes(b) ? ' (remote)' : ''}</option>
                   ))}
                 </select>
               </div>
@@ -1351,8 +1400,8 @@ function BranchManagementCard({ projectId }: { projectId: string }) {
                   onChange={(e) => setMergeTarget(e.target.value)}
                 >
                   <option value="">选择目标分支</option>
-                  {(branches || []).filter(b => b !== mergeSource).map(b => (
-                    <option key={b} value={b}>{b}</option>
+                  {allMergeBranches.filter(b => b !== mergeSource).map(b => (
+                    <option key={b} value={b}>{b}{remoteOnlyBranches.includes(b) ? ' (remote)' : ''}</option>
                   ))}
                 </select>
               </div>
@@ -1622,11 +1671,11 @@ function AddMemberDialog({
 }) {
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
-  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [selectedUserIds, setSelectedUserIds] = useState<Set<string>>(new Set());
   const [role, setRole] = useState("member");
   const [error, setError] = useState<string | null>(null);
 
-  const addMutation = useAddProjectMember(projectId);
+  const batchMutation = useBatchAddProjectMembers(projectId);
 
   // Debounced search
   useEffect(() => {
@@ -1639,46 +1688,51 @@ function AddMemberDialog({
     if (open) {
       setSearch("");
       setDebounced("");
-      setSelectedUserId(null);
+      setSelectedUserIds(new Set());
       setRole("member");
       setError(null);
     }
   }, [open]);
 
-  // Only admins can list /api/admin/users; for non-admins this query will 403,
-  // but project admins typically aren't given /admin/users access. We use the
-  // admin search for convenience when available.
-  const usersQuery = useAdminUsers({
-    q: debounced || undefined,
-    page: 1,
-    page_size: 20,
-  });
+  const usersQuery = useAvailableUsers(projectId, debounced || undefined);
 
   const candidates = useMemo(() => {
-    const list = usersQuery.data?.users ?? [];
+    const list = usersQuery.data?.items ?? [];
     return list.filter((u) => !excludeIds.has(u.id));
   }, [usersQuery.data, excludeIds]);
 
+  const toggleUser = (userId: string) => {
+    setSelectedUserIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(userId)) {
+        next.delete(userId);
+      } else {
+        next.add(userId);
+      }
+      return next;
+    });
+  };
+
   const submit = async () => {
     setError(null);
-    if (!selectedUserId) {
-      setError("请选择一名用户");
+    if (selectedUserIds.size === 0) {
+      setError("请至少选择一名用户");
       return;
     }
     try {
-      await addMutation.mutateAsync({ user_id: selectedUserId, role });
-      const picked = candidates.find((u) => u.id === selectedUserId);
+      const result = await batchMutation.mutateAsync({
+        user_ids: Array.from(selectedUserIds),
+        role,
+      });
       toast({
-        title: "已添加成员",
-        description: picked?.username ?? selectedUserId,
+        title: "添加成功",
+        description: `已添加 ${result.added.length} 名成员${result.skipped.length > 0 ? `，跳过 ${result.skipped.length} 名` : ""}`,
       });
       onClose();
     } catch (err) {
       setError(getApiErrorMessage(err));
     }
   };
-
-  const adminApiBlocked = usersQuery.isError;
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
@@ -1688,7 +1742,7 @@ function AddMemberDialog({
             <UserPlus className="h-4 w-4" /> 添加项目成员
           </DialogTitle>
           <DialogDescription>
-            选择一个已有用户加入到当前项目，并指定项目内的角色。
+            选择用户加入到当前项目，并指定项目内的角色。支持多选。
           </DialogDescription>
         </DialogHeader>
 
@@ -1709,15 +1763,13 @@ function AddMemberDialog({
           </label>
 
           <div className="max-h-64 overflow-y-auto rounded-lg border border-border/50 bg-background/60">
-            {adminApiBlocked ? (
-              <div className="px-4 py-8 text-center text-xs text-muted-foreground">
-                无法列出全部用户（需要管理员权限）。
-                <br />
-                你仍可以输入用户 ID 手动添加。
-              </div>
-            ) : usersQuery.isLoading ? (
+            {usersQuery.isLoading ? (
               <div className="px-4 py-8 text-center text-xs text-muted-foreground">
                 加载中…
+              </div>
+            ) : usersQuery.isError ? (
+              <div className="px-4 py-8 text-center text-xs text-muted-foreground">
+                加载用户列表失败
               </div>
             ) : candidates.length === 0 ? (
               <div className="px-4 py-8 text-center text-xs text-muted-foreground">
@@ -1726,43 +1778,51 @@ function AddMemberDialog({
             ) : (
               <ul className="divide-y divide-border/50">
                 {candidates.map((u) => {
-                  const active = selectedUserId === u.id;
+                  const checked = selectedUserIds.has(u.id);
                   return (
                     <li key={u.id}>
                       <button
                         type="button"
-                        onClick={() => setSelectedUserId(u.id)}
+                        onClick={() => toggleUser(u.id)}
                         className={[
-                          "flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left transition-smooth",
-                          active
+                          "flex w-full items-center gap-3 px-3 py-2.5 text-left transition-smooth",
+                          checked
                             ? "bg-indigo-500/10 text-foreground"
                             : "hover:bg-muted/60",
                         ].join(" ")}
                       >
-                        <div className="flex min-w-0 items-center gap-2">
-                          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500/20 to-indigo-500/5 text-[11px] font-semibold uppercase text-indigo-500">
-                            {(u.username || "?").slice(0, 2)}
-                          </div>
-                          <div className="min-w-0">
-                            <div className="truncate text-sm font-medium">
-                              {u.username}
-                              {u.display_name && (
-                                <span className="ml-1.5 text-xs font-normal text-muted-foreground">
-                                  · {u.display_name}
-                                </span>
-                              )}
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          readOnly
+                          className="h-4 w-4 rounded border-border accent-indigo-500"
+                        />
+                        <div className="flex min-w-0 flex-1 items-center justify-between gap-2">
+                          <div className="flex min-w-0 items-center gap-2">
+                            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500/20 to-indigo-500/5 text-[11px] font-semibold uppercase text-indigo-500">
+                              {(u.username || "?").slice(0, 2)}
                             </div>
-                            <div className="truncate font-mono text-[11px] text-muted-foreground">
-                              {u.email || "—"}
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-medium">
+                                {u.username}
+                                {u.display_name && (
+                                  <span className="ml-1.5 text-xs font-normal text-muted-foreground">
+                                    · {u.display_name}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="truncate font-mono text-[11px] text-muted-foreground">
+                                {u.email || "—"}
+                              </div>
                             </div>
                           </div>
+                          <Badge
+                            variant={u.role === "admin" ? "default" : "outline"}
+                            className="shrink-0"
+                          >
+                            {u.role}
+                          </Badge>
                         </div>
-                        <Badge
-                          variant={u.role === "admin" ? "default" : "outline"}
-                          className="shrink-0"
-                        >
-                          {u.role}
-                        </Badge>
                       </button>
                     </li>
                   );
@@ -1771,18 +1831,10 @@ function AddMemberDialog({
             )}
           </div>
 
-          {adminApiBlocked && (
-            <label className="block">
-              <span className="mb-1.5 block text-sm font-medium text-foreground">
-                用户 ID（手动）
-              </span>
-              <Input
-                value={selectedUserId ?? ""}
-                onChange={(e) => setSelectedUserId(e.target.value || null)}
-                placeholder="粘贴目标用户的 UUID"
-                className="rounded-lg border-border/50 font-mono text-xs"
-              />
-            </label>
+          {selectedUserIds.size > 0 && (
+            <div className="text-xs text-muted-foreground">
+              已选 {selectedUserIds.size} 名用户
+            </div>
           )}
 
           <label className="block">
@@ -1809,10 +1861,14 @@ function AddMemberDialog({
             取消
           </Button>
           <Button
-            disabled={!selectedUserId || addMutation.isPending}
+            disabled={selectedUserIds.size === 0 || batchMutation.isPending}
             onClick={submit}
           >
-            {addMutation.isPending ? "添加中…" : "添加成员"}
+            {batchMutation.isPending
+              ? "添加中…"
+              : selectedUserIds.size > 0
+                ? `添加 ${selectedUserIds.size} 名成员`
+                : "添加成员"}
           </Button>
         </DialogFooter>
       </DialogContent>

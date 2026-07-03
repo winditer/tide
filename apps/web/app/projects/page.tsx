@@ -16,6 +16,7 @@ import {
 } from "@tide/core";
 import { ProjectGroupList, ProjectGroupCreateDialog } from "@tide/views";
 import { useQueryClient } from "@tanstack/react-query";
+import { Search } from "lucide-react";
 
 type DialogMode = "new" | "clone";
 type ViewTab = "projects" | "groups";
@@ -63,11 +64,23 @@ function ProjectsPageContent() {
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const [showArchived, setShowArchived] = useState(false);
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [tab, setTab] = useState<ViewTab>(() => {
     const v = searchParams.get("tab");
     return v === "groups" ? "groups" : "projects";
   });
-  const { data, isLoading, isError } = useProjects({ show_archived: showArchived });
+
+  // debounce 搜索
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  const { data, isLoading, isError } = useProjects({
+    show_archived: showArchived,
+    search: debouncedSearch || undefined,
+  });
   const { data: groupsData } = useProjectGroups();
   const groupsTotal = groupsData?.groups?.length ?? 0;
   const createMutation = useCreateProject();
@@ -140,6 +153,15 @@ function ProjectsPageContent() {
           <div className="flex shrink-0 flex-wrap items-center gap-2">
             {tab === "projects" ? (
               <>
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    placeholder="搜索项目名称或标签…"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    className="pl-9 w-48 rounded-lg border-border/50"
+                  />
+                </div>
                 <Button
                   variant="outline"
                   onClick={() => setShowArchived((v) => !v)}
@@ -574,6 +596,31 @@ function ProjectDialog({
                   {credentialType === "token" && "使用 Git 平台的 Personal Access Token（HTTPS）"}
                 </p>
               </Field>
+
+              {/* URL 与认证方式匹配校验提示 */}
+              {repoUrl.trim() && credentialType && (() => {
+                const url = repoUrl.trim();
+                const isSshUrl = url.startsWith("git@");
+                const isHttpUrl = url.startsWith("https://") || url.startsWith("http://");
+                const isSshAuth = credentialType === "ssh_agent" || credentialType === "ssh_key";
+                const isHttpAuth = credentialType === "token";
+
+                if (isSshAuth && isHttpUrl) {
+                  return (
+                    <p className="text-xs text-amber-500 -mt-2">
+                      ⚠️ 当前认证方式为 SSH，但仓库 URL 为 HTTPS 格式，clone 可能失败。建议使用 git@ 开头的 SSH URL。
+                    </p>
+                  );
+                }
+                if (isHttpAuth && isSshUrl) {
+                  return (
+                    <p className="text-xs text-amber-500 -mt-2">
+                      ⚠️ 当前认证方式为 HTTPS Token，但仓库 URL 为 SSH 格式，clone 可能失败。建议使用 https:// 开头的 URL。
+                    </p>
+                  );
+                }
+                return null;
+              })()}
 
               {credentialType === "ssh_key" && (
                 <Field label="私钥路径">

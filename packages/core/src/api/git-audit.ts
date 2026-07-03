@@ -289,6 +289,17 @@ export async function getRemoteBranches(
 }
 
 /**
+ * 执行 git fetch origin --prune，同步远端分支信息。
+ */
+export function fetchRemoteBranches(
+  projectId: string,
+): Promise<{ ok: boolean; output: string }> {
+  return apiClient.post<{ ok: boolean; output: string }>(
+    `/api/projects/${encodeURIComponent(projectId)}/git/fetch`,
+  );
+}
+
+/**
  * 本地分支合并。
  */
 export async function localMergeBranches(

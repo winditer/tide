@@ -37,7 +37,7 @@ export function useAgents() {
   });
 }
 
-export function useProjects(params?: { show_archived?: boolean }) {
+export function useProjects(params?: { show_archived?: boolean; search?: string }) {
   return useQuery({
     queryKey: ["projects", params],
     queryFn: () => getProjects(params),

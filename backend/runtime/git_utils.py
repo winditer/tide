@@ -631,21 +631,50 @@ async def git_merge_branch(
                 await git_command(repo_root, ["merge", "--abort"], timeout=30)
         return conflicts
 
+    async def _ensure_branch_local(branch: str) -> tuple[int, str]:
+        """确保分支在本地存在，若不存在则尝试从远端检出。
+
+        Returns:
+            (return_code, output) — 0 表示成功 checkout 到该分支。
+        """
+        code, output = await git_command(repo_root, ["checkout", branch], timeout=60)
+        if code == 0:
+            return 0, output
+
+        # 检查远端是否有该分支
+        chk_code, chk_output = await git_command(
+            repo_root, ["branch", "-r", "--list", f"origin/{branch}"], timeout=10
+        )
+        if chk_code == 0 and chk_output.strip():
+            # 远端存在，从远端创建本地追踪分支
+            logger.info(
+                "[git_utils] branch '%s' not local, checking out from origin/%s",
+                branch, branch,
+            )
+            code2, output2 = await git_command(
+                repo_root, ["checkout", "-b", branch, f"origin/{branch}"], timeout=60
+            )
+            return code2, output2
+
+        # 远端也不存在
+        return code, output
+
     async def _checkout_or_create_branch(branch: str) -> tuple[int, list[str]]:
-        """checkout 目标分支，若不存在则自动从 main/master 创建。
+        """checkout 目标分支，若不存在则先尝试从远端检出，再 fallback 到从 main/master 创建。
 
         Returns:
             (return_code, output_lines) — 0 表示成功。
         """
         lines: list[str] = []
-        code, output = await git_command(repo_root, ["checkout", branch], timeout=60)
+        # 先尝试直接 checkout 或从远端检出
+        code, output = await _ensure_branch_local(branch)
         lines.append(output)
         if code == 0:
             return 0, lines
 
-        # 分支不存在，尝试从 main 或 master 自动创建
+        # 分支本地和远端都不存在，尝试从 main 或 master 自动创建
         logger.info(
-            "[git_utils] branch '%s' does not exist, attempting auto-create from main/master",
+            "[git_utils] branch '%s' does not exist locally or remotely, attempting auto-create from main/master",
             branch,
         )
         base_branch: str | None = None
@@ -677,10 +706,8 @@ async def git_merge_branch(
         return 0, lines
 
     if strategy == "rebase":
-        # 1. checkout source
-        code, output = await git_command(
-            repo_root, ["checkout", source_branch], timeout=60
-        )
+        # 1. checkout source (auto-fetch from remote if needed)
+        code, output = await _ensure_branch_local(source_branch)
         outputs.append(output)
         if code != 0:
             return False, "\n".join(outputs), []
@@ -722,6 +749,13 @@ async def git_merge_branch(
             return False, "\n".join(outputs), []
 
         if strategy == "squash":
+            # 先确保 source 分支在本地存在
+            src_code, src_output = await _ensure_branch_local(source_branch)
+            if src_code != 0:
+                outputs.append(src_output)
+                return False, "\n".join(outputs), []
+            # checkout 回 target
+            await git_command(repo_root, ["checkout", target_branch], timeout=60)
             code, output = await git_command(
                 repo_root, ["merge", "--squash", source_branch], timeout=300
             )
@@ -753,6 +787,13 @@ async def git_merge_branch(
                 else:
                     return False, "\n".join(outputs), []
         else:  # merge
+            # 先确保 source 分支在本地存在
+            src_code, src_output = await _ensure_branch_local(source_branch)
+            if src_code != 0:
+                outputs.append(src_output)
+                return False, "\n".join(outputs), []
+            # checkout 回 target
+            await git_command(repo_root, ["checkout", target_branch], timeout=60)
             code, output = await git_command(
                 repo_root, ["merge", "--no-ff", source_branch], timeout=300
             )

@@ -16,6 +16,7 @@ import {
   createMergeRequest,
   getRemoteBranches,
   localMergeBranches,
+  fetchRemoteBranches,
   type GitCommitsParams,
   type GitChangesParams,
   type GitUncommittedResponse,
@@ -227,6 +228,21 @@ export function useLocalMerge(projectId: string | undefined) {
       delete_source?: boolean;
     }) => localMergeBranches(projectId!, params),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["git-audit", "branches", projectId] });
+      queryClient.invalidateQueries({ queryKey: ["git-audit", "remote-branches", projectId] });
+    },
+  });
+}
+
+/**
+ * Fetch 远端分支 (git fetch origin --prune) mutation。
+ */
+export function useFetchRemote(projectId: string | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => fetchRemoteBranches(projectId!),
+    onSuccess: () => {
+      // fetch 后刷新本地分支和远端分支列表
       queryClient.invalidateQueries({ queryKey: ["git-audit", "branches", projectId] });
       queryClient.invalidateQueries({ queryKey: ["git-audit", "remote-branches", projectId] });
     },
