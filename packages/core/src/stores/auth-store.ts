@@ -101,3 +101,32 @@ export function setAuthTokens(data: {
 export function clearAuthTokens(): void {
   useAuthStore.getState().clearAuth();
 }
+
+// 跨标签页同步：监听其他 tab 对 localStorage 的修改
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (event) => {
+    if (event.key === TIDE_AUTH_STORAGE_KEY && event.newValue) {
+      try {
+        const parsed = JSON.parse(event.newValue);
+        const state = parsed?.state;
+        if (state) {
+          useAuthStore.setState({
+            accessToken: state.accessToken ?? null,
+            refreshToken: state.refreshToken ?? null,
+            user: state.user ?? null,
+          });
+        }
+      } catch {
+        // 忽略解析错误
+      }
+    }
+    // 如果 key 被删除（其他标签页退出登录）
+    if (event.key === TIDE_AUTH_STORAGE_KEY && event.newValue === null) {
+      useAuthStore.setState({
+        accessToken: null,
+        refreshToken: null,
+        user: null,
+      });
+    }
+  });
+}

@@ -127,7 +127,7 @@ LOG_MESSAGE_CONTENT = os.getenv("LOG_MESSAGE_CONTENT", "0") == "1"
 # 认证配置
 TIDE_JWT_SECRET = os.environ.get("TIDE_JWT_SECRET", "tide-dev-secret-change-in-production")
 TIDE_JWT_ALGORITHM = os.environ.get("TIDE_JWT_ALGORITHM", "HS256")
-TIDE_JWT_EXPIRE_MINUTES = int(os.environ.get("TIDE_JWT_EXPIRE_MINUTES", "15"))
+TIDE_JWT_EXPIRE_MINUTES = int(os.environ.get("TIDE_JWT_EXPIRE_MINUTES", "60"))
 TIDE_REFRESH_TOKEN_EXPIRE_DAYS = int(os.environ.get("TIDE_REFRESH_TOKEN_EXPIRE_DAYS", "30"))
 TIDE_REQUIRE_AUTH = os.environ.get("TIDE_REQUIRE_AUTH", "0") == "1"
 TIDE_ADMIN_USERNAME = os.environ.get("TIDE_ADMIN_USERNAME", "admin")

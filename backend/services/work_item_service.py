@@ -1543,8 +1543,11 @@ class WorkItemService:
                 )
                 if prev_output and "参考技术方案" in base_prompt:
                     task_prompt += (
-                        "\n请注意：上方「参考技术方案」已包含完整的实施方案，"
-                        "请直接按方案执行开发并自测，不要重新分析或生成新的技术方案文档。\n"
+                        "\n请注意：上方「参考技术方案」已包含完整的实施方案，请严格遵循以下要求：\n"
+                        "1. 直接按方案中涉及当前仓库的部分修改代码并自测\n"
+                        "2. 不要生成任何规划类文档（包括但不限于：技术方案、修改点、实施计划、变更清单等 .md 文件）\n"
+                        "3. 所有改动以代码提交（git diff）体现，无需额外的文档产物\n"
+                        "4. 如方案中未涉及当前仓库的改动，直接输出「无需修改」并结束\n"
                     )
                 if project_knowledge:
                     task_prompt += f"\n## 项目模块结构\n{project_knowledge}\n"
@@ -2039,7 +2042,7 @@ class WorkItemService:
             else:
                 target_branch = work_item_branch_name(item["id"])
         strategy = data.get("mergeStrategy", "merge")
-        delete_source = data.get("deleteSource", True)  # 工作项场景默认删除源分支
+        delete_source = data.get("deleteSource", False)  # 工作项场景默认不删除源分支
         on_conflict = data.get("onConflict", "fail")
 
         # 1. 收集工作项下所有相关分支（工作项分支 + Plan 子任务分支），含 cwd 信息
@@ -2094,7 +2097,7 @@ class WorkItemService:
                     branch_records.append({"branch": branch, "worktree_path": wt, "type": "plan_task", "cwd": cwd})
 
         # 2. 获取主项目路径（用于 fallback）
-        from backend.runtime.git_utils import git_repo_root, git_merge_branch, cleanup_work_item_worktree, cleanup_plan_worktree, find_worktree_for_branch
+        from backend.runtime.git_utils import git_repo_root, git_merge_branch, cleanup_work_item_worktree, cleanup_plan_worktree, find_worktree_for_branch, git_command
 
         primary_cwd = await self._get_project_path(item["project_id"])
         if not primary_cwd:
@@ -2185,6 +2188,32 @@ class WorkItemService:
                     continue
 
                 source_branch = record["branch"]
+
+                # 检查分支是否有实际改动，跳过无变更的分支
+                try:
+                    diff_code, diff_output = await git_command(
+                        Path(merge_root),
+                        ["diff", "--stat", f"{target_branch}..{source_branch}"],
+                        timeout=10,
+                    )
+                    if diff_code == 0 and not diff_output.strip():
+                        logger.info(
+                            "[git_merge] branch %s has no changes vs %s, skipping",
+                            source_branch, target_branch,
+                        )
+                        merged_results.append({
+                            "branch": source_branch,
+                            "type": record.get("type", ""),
+                            "success": True,
+                            "skipped": True,
+                            "reason": "no_changes",
+                            "output": "分支无实际改动，已跳过",
+                        })
+                        continue
+                except Exception as exc:
+                    logger.debug("[git_merge] diff check failed for %s: %s", source_branch, exc)
+                    # diff 检查失败时仍然尝试合并（保守策略）
+
                 success, output, conflicts = await git_merge_branch(
                     repo_root=merge_root,
                     source_branch=source_branch,
@@ -2221,7 +2250,7 @@ class WorkItemService:
                     wt = record.get("worktree_path", "")
                     if not wt:
                         continue
-                    branch_to_clean = "" if delete_source else record["branch"]
+                    branch_to_clean = record["branch"] if delete_source else ""
                     if record["type"] == "plan_task":
                         await cleanup_plan_worktree(
                             worktree_path=wt,
@@ -3257,61 +3286,12 @@ class WorkItemService:
             if title_row:
                 wi_title = dict(title_row._mapping).get("title", "")
 
-        # 生成汇总测试报告 Markdown
-        project_list = ", ".join(
-            sorted(set(
-                [p for p, _ in report_sections] +
-                list(project_changed_files.keys())
-            ))
-        )
-        report_lines = ["# 测试报告（汇总）\n"]
-        report_lines.append("## 概述\n")
-        report_lines.append(f"- 工作项：{wi_title or work_item_id[:8]}")
-        report_lines.append(f"- 涉及项目：{project_list}\n")
-
-        # 代码改动摘要
-        if project_changed_files:
-            report_lines.append("## 代码改动摘要\n")
-            for proj_name in sorted(project_changed_files.keys()):
-                files = project_changed_files[proj_name]
-                report_lines.append(f"### {proj_name}\n")
-                # 去重并排序
-                unique_files = sorted(set(files))
-                for f in unique_files:
-                    report_lines.append(f"- `{f}`")
-                report_lines.append("")
-
-        # 各项目测试报告
-        if report_sections:
-            report_lines.append("## 各项目测试报告\n")
-            for project_name, section in report_sections:
-                report_lines.append(f"### {project_name}\n")
-                report_lines.append(section.strip())
-                report_lines.append("")
-
-        # 测试要点与注意事项（从各子报告中提取关键内容）
-        notes_items = self._extract_test_notes_from_sections(report_sections)
-        report_lines.append("## 测试要点与注意事项\n")
-        if notes_items:
-            for note in notes_items:
-                report_lines.append(f"- {note}")
-        else:
-            # 根据改动范围生成基本建议
-            if project_changed_files:
-                report_lines.append("- 基于改动范围，建议对涉及的功能模块进行回归测试")
-                if len(project_changed_files) > 1:
-                    report_lines.append("- 涉及多个项目改动，请关注跨项目联调的兼容性")
-                report_lines.append("- 建议在集成环境中验证各项目间的接口交互")
-        report_lines.append("")
-
-        report_content = "\n".join(report_lines)
-
-        # 写入工作项 worktree
-        # 优先使用工作项级 worktree，否则使用主 task 的 worktree
+        # 尝试从 worktree 读取技术方案文档作为 AI 汇总的额外输入
+        proposal_docs = ""
+        # 先确定 worktree（提前查找，供读取技术方案和后续写入使用）
         item = await self.get_work_item(work_item_id)
         wi_worktree = ""
         if item:
-            # 查找工作项级 worktree
             async with async_session_factory() as session:
                 wt_row = (await session.execute(
                     text("""
@@ -3331,13 +3311,77 @@ class WorkItemService:
         if not wi_worktree:
             wi_worktree = task_data.get("worktree_path") or ""
         if not wi_worktree or not os.path.isdir(wi_worktree):
-            # fallback：用第一个子任务的 worktree
             for sub in subtask_rows:
                 sub_wt = sub.get("worktree_path") or ""
                 if sub_wt and os.path.isdir(sub_wt):
                     wi_worktree = sub_wt
                     break
 
+        try:
+            if wi_worktree and os.path.isdir(wi_worktree):
+                proposal_docs = await _read_worktree_proposal_docs(wi_worktree, max_total_chars=4000)
+        except Exception:
+            pass
+
+        # 汇总的项目列表
+        projects = sorted(set(
+            [p for p, _ in report_sections] + list(project_changed_files.keys())
+        ))
+
+        # 尝试 AI 生成汇总报告
+        report_content = ""
+        try:
+            from backend.runtime.executor import AgentExecutor
+            from backend.runtime.config import DEFAULT_AGENT_ID, DEFAULT_CWD
+
+            summary_prompt = self._build_test_summary_prompt(
+                wi_title=wi_title or work_item_id[:8],
+                projects=projects,
+                changed_files_by_project=project_changed_files,
+                test_reports=report_sections,
+                proposal_docs=proposal_docs,
+            )
+
+            executor = AgentExecutor()
+            ai_task_id = f"test-summary-{work_item_id[:8]}"
+            ai_parts: list = []
+
+            async with asyncio.timeout(90):  # 90 秒超时
+                async for event in executor.run_task(
+                    task_id=ai_task_id,
+                    agent_id=DEFAULT_AGENT_ID,
+                    prompt=summary_prompt,
+                    cwd=str(DEFAULT_CWD),
+                    model=None,
+                    full_auto=True,
+                ):
+                    if event.type == "output":
+                        ai_parts.append(event.content)
+                    elif event.type == "completed":
+                        if event.content:
+                            ai_parts.append(event.content)
+                    elif event.type == "failed":
+                        raise RuntimeError(f"AI summary failed: {event.content}")
+
+            ai_output = "\n".join(str(p) for p in ai_parts if p)
+            if ai_output and len(ai_output.strip()) > 200:
+                report_content = ai_output.strip()
+                logger.info("[work_item] AI-generated summary report (len=%d) for item=%s",
+                           len(report_content), work_item_id[:8])
+        except Exception as exc:
+            logger.warning("[work_item] AI summary failed, fallback to static: %s", exc)
+
+        # Fallback 到静态生成
+        if not report_content:
+            report_content = self._generate_static_summary_report(
+                wi_title or work_item_id[:8],
+                work_item_id,
+                report_sections,
+                project_changed_files,
+            )
+            logger.info("[work_item] using static summary report for item=%s", work_item_id[:8])
+
+        # 写入工作项 worktree（wi_worktree 已在上方确定）
         if not wi_worktree:
             logger.warning("[work_item] no valid worktree to write test report for item=%s", work_item_id[:8])
             return
@@ -3449,6 +3493,123 @@ class WorkItemService:
             return after.strip().lstrip("：: \n")
 
         return ""
+
+    def _generate_static_summary_report(
+        self,
+        wi_title: str,
+        work_item_id: str,
+        report_sections: list,
+        project_changed_files: dict,
+    ) -> str:
+        """纯 Python 静态生成汇总报告（作为 AI 生成失败时的 fallback）。"""
+        project_list = ", ".join(
+            sorted(set(
+                [p for p, _ in report_sections] +
+                list(project_changed_files.keys())
+            ))
+        )
+        report_lines = ["# 测试报告（汇总）\n"]
+        report_lines.append("## 概述\n")
+        report_lines.append(f"- 工作项：{wi_title or work_item_id[:8]}")
+        report_lines.append(f"- 涉及项目：{project_list}\n")
+
+        # 代码改动摘要
+        if project_changed_files:
+            report_lines.append("## 代码改动摘要\n")
+            for proj_name in sorted(project_changed_files.keys()):
+                files = project_changed_files[proj_name]
+                report_lines.append(f"### {proj_name}\n")
+                unique_files = sorted(set(files))
+                for f in unique_files:
+                    report_lines.append(f"- `{f}`")
+                report_lines.append("")
+
+        # 各项目测试报告
+        if report_sections:
+            report_lines.append("## 各项目测试报告\n")
+            for project_name, section in report_sections:
+                report_lines.append(f"### {project_name}\n")
+                report_lines.append(section.strip())
+                report_lines.append("")
+
+        # 测试要点与注意事项
+        notes_items = self._extract_test_notes_from_sections(report_sections)
+        report_lines.append("## 测试要点与注意事项\n")
+        if notes_items:
+            for note in notes_items:
+                report_lines.append(f"- {note}")
+        else:
+            if project_changed_files:
+                report_lines.append("- 基于改动范围，建议对涉及的功能模块进行回归测试")
+                if len(project_changed_files) > 1:
+                    report_lines.append("- 涉及多个项目改动，请关注跨项目联调的兼容性")
+                report_lines.append("- 建议在集成环境中验证各项目间的接口交互")
+        report_lines.append("")
+
+        return "\n".join(report_lines)
+
+    def _build_test_summary_prompt(
+        self,
+        wi_title: str,
+        projects: list,
+        changed_files_by_project: dict,
+        test_reports: list,
+        proposal_docs: str = "",
+    ) -> str:
+        """构建 AI 汇总分析 prompt。
+
+        Args:
+            wi_title: 工作项标题
+            projects: 涉及的项目名列表
+            changed_files_by_project: 各项目变更文件 {project_name: [file_paths]}
+            test_reports: 各项目测试报告 [(project_name, report_text)]
+            proposal_docs: 技术方案文档内容（可选）
+        """
+        parts = []
+
+        parts.append(
+            "你是资深 QA 工程师。请基于以下多个子项目的测试报告、代码改动及技术方案，"
+            "生成一份专业的汇总测试验收报告。\n\n"
+            "报告要求：\n"
+            "1. 能让测试/产品团队快速总览全局改动范围和影响面\n"
+            "2. 明确指出需要重点验证的功能点和场景\n"
+            "3. 评估各改动的风险等级（高/中/低）\n"
+            "4. 给出具体的验收测试建议和步骤\n"
+            "5. 列出跨项目集成需要特别注意的点\n\n"
+            "输出格式：Markdown，结构化清晰，可直接作为测试验收依据。\n"
+        )
+
+        # 工作项概述
+        parts.append(f"\n---\n\n## 工作项信息\n\n- 标题：{wi_title}\n- 涉及项目：{', '.join(projects)}\n")
+
+        # 技术方案（如有）
+        if proposal_docs:
+            parts.append(f"\n## 技术方案\n\n{proposal_docs[:4000]}\n")
+
+        # 代码改动
+        if changed_files_by_project:
+            parts.append("\n## 代码改动详情\n\n")
+            for proj in sorted(changed_files_by_project.keys()):
+                files = sorted(set(changed_files_by_project[proj]))
+                parts.append(f"### {proj}（{len(files)} 个文件）\n\n")
+                for f in files[:30]:  # 限制数量
+                    parts.append(f"- `{f}`\n")
+                if len(files) > 30:
+                    parts.append(f"- ... 等共 {len(files)} 个文件\n")
+                parts.append("\n")
+
+        # 各项目测试报告
+        if test_reports:
+            parts.append("\n## 各项目独立测试报告\n\n")
+            for proj_name, section in test_reports:
+                parts.append(f"### {proj_name}\n\n{section.strip()}\n\n")
+
+        parts.append(
+            "\n---\n\n请基于以上信息输出完整的汇总测试验收报告。"
+            "报告标题用「# 测试报告（汇总）」。\n"
+        )
+
+        return "".join(parts)
 
     @staticmethod
     def _extract_test_notes_from_sections(report_sections: list) -> list:
