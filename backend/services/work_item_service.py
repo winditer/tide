@@ -98,6 +98,67 @@ def _smart_truncate(text: str, max_chars: int) -> str:
     # 最后直接截断
     return truncated + "\n\n...(方案已截断)"
 
+async def _read_worktree_proposal_docs(worktree_path: str, max_total_chars: int = 8000) -> str:
+    """从 worktree 的 docs/ 目录中读取技术方案相关文档。
+
+    查找含有"技术方案"、"design"、"changes"、"修改点"等关键词的 .md 文件，
+    读取其内容作为完整的技术方案注入到下游 prompt。
+
+    Args:
+        worktree_path: worktree 目录路径
+        max_total_chars: 所有文档内容的总字符上限
+
+    Returns:
+        拼接后的文档内容，为空字符串表示未找到文档
+    """
+    docs_dir = Path(worktree_path) / "docs"
+    if not docs_dir.is_dir():
+        return ""
+
+    # 匹配技术方案相关文档的关键词
+    proposal_keywords = ["技术方案", "technical-design", "design", "修改点", "changes", "implementation"]
+
+    proposal_files = []
+    try:
+        for f in docs_dir.iterdir():
+            if not f.suffix == ".md":
+                continue
+            fname_lower = f.name.lower()
+            if any(kw in fname_lower for kw in proposal_keywords):
+                proposal_files.append(f)
+    except OSError:
+        return ""
+
+    if not proposal_files:
+        return ""
+
+    # 按文件名排序，优先读取"技术方案/design"类文档
+    proposal_files.sort(key=lambda p: (
+        0 if "技术方案" in p.name or "design" in p.name.lower() else 1,
+        p.name
+    ))
+
+    # 读取文件内容
+    contents = []
+    total_chars = 0
+    for f in proposal_files:
+        try:
+            content = f.read_text(encoding="utf-8")
+            if total_chars + len(content) > max_total_chars:
+                # 截断当前文件到剩余空间
+                remaining = max_total_chars - total_chars
+                if remaining > 500:  # 至少保留 500 字符才值得加入
+                    content = content[:remaining] + "\n\n...(文档已截断)"
+                    contents.append(f"### 文件: {f.name}\n\n{content}")
+                break
+            contents.append(f"### 文件: {f.name}\n\n{content}")
+            total_chars += len(content)
+        except (OSError, UnicodeDecodeError):
+            continue
+
+    return "\n\n---\n\n".join(contents)
+
+
 from backend.db.engine import async_session_factory
 from backend.services.ws_hub import ws_hub
 
@@ -1373,11 +1434,30 @@ class WorkItemService:
             if routing_trigger is not False and wf_context and definition:
                 prev_output = self._extract_prev_agent_output(wf_context, definition, node["id"])
 
+            # ===== 尝试从工作项 worktree 中读取完整技术方案文档 =====
+            worktree_proposal = ""
+            try:
+                from backend.runtime.git_utils import safe_git_ref_part
+                wi_worktree = Path(primary_cwd) / ".tide" / "worktrees" / f"wi-{safe_git_ref_part(item['id'])}"
+                if wi_worktree.is_dir():
+                    worktree_proposal = await _read_worktree_proposal_docs(str(wi_worktree))
+            except Exception:
+                pass
+
+            # 如果 worktree 中有完整方案文档，优先使用；否则 fallback 到 agent_final_output
+            if worktree_proposal:
+                prev_output = worktree_proposal
+            # ===== worktree 文档读取结束 =====
+
             # 注入前序节点的技术方案到 base_prompt（如果模板已引用则不重复追加）
             if prev_output:
                 if prev_output[:50] not in base_prompt:
                     truncated_proposal = _smart_truncate(prev_output, ROUTING_PROPOSAL_MAX_CHARS)
-                    base_prompt += f"\n\n## 参考技术方案\n\n{truncated_proposal}"
+                    base_prompt += (
+                        f"\n\n## 参考技术方案（请严格遵循，不要重新生成方案）\n\n"
+                        f"以下是前置分析产出的技术方案，请直接按照方案中涉及当前仓库的部分进行开发实施：\n\n"
+                        f"{truncated_proposal}"
+                    )
 
             # ─── 智能路由决策 ─────────────────────────────────────────────
 
@@ -1461,6 +1541,11 @@ class WorkItemService:
                     f"## 当前目标仓库\n"
                     f"你现在在 `{project_name}` 仓库（{project_cwd}）中工作。\n"
                 )
+                if prev_output and "参考技术方案" in base_prompt:
+                    task_prompt += (
+                        "\n请注意：上方「参考技术方案」已包含完整的实施方案，"
+                        "请直接按方案执行开发并自测，不要重新分析或生成新的技术方案文档。\n"
+                    )
                 if project_knowledge:
                     task_prompt += f"\n## 项目模块结构\n{project_knowledge}\n"
                 task_prompt += "\n请只修改本仓库相关的代码。如果此需求不涉及本仓库，请输出'无需修改'并结束。"

@@ -404,6 +404,12 @@ class TaskService:
         adapter = AGENT_ADAPTERS[agent_id]
         model = adapter.normalize_model(model)
 
+        # 推断 DB 中记录的实际模型名：当 normalize 后为空或等于 agent_id 时，
+        # 使用对应 Agent CLI 的环境变量默认模型，准确反映 CLI 实际运行的模型
+        db_model = model
+        if not db_model or db_model == agent_id:
+            db_model = adapter.default_model or agent_id
+
         # fallback cwd
         if not cwd:
             cwd = str(Path.cwd())
@@ -425,7 +431,7 @@ class TaskService:
                     "session_id": session_id or None,
                     "prompt": prompt,
                     "agent_id": agent_id,
-                    "model": model or None,
+                    "model": db_model or None,
                     "cwd": cwd,
                     "group_id": group_id or None,
                     "attachments": attachments_json,
