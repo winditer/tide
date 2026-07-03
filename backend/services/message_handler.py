@@ -23,7 +23,14 @@ from backend.db.engine import async_session_factory
 from backend.services.lark_listener import LarkEvent
 from backend.services.lark_bridge import lark_bridge
 from backend.services.conversation_service import conversation_service
-from backend.core.dependencies import check_lark_permission, LarkPermissionDenied
+from backend.core.dependencies import (
+    check_lark_permission,
+    LarkPermissionDenied,
+    get_accessible_project_ids,
+    check_cwd_write_permission,
+    check_project_write_permission,
+    encode_project_id,
+)
 from backend.runtime.config import TIDE_REQUIRE_AUTH, LARK_ALLOWED_OPEN_IDS
 
 logger = logging.getLogger("tide.message_handler")
@@ -191,11 +198,6 @@ class MessageHandler:
             await self._cmd_help(chat_id)
             return
 
-        # /cd — 切换工作目录
-        if content.lower().startswith("/cd "):
-            await self._cmd_cd(chat_id, content[4:].strip())
-            return
-
         # /mark-project — 标记项目路径
         if content.startswith("/mark-project"):
             path_arg = content[len("/mark-project"):].strip()
@@ -220,25 +222,25 @@ class MessageHandler:
 
         # /plan — 创建 Plan（预留）
         if content.lower().startswith("/plan"):
-            await self._cmd_plan(chat_id, content)
+            await self._cmd_plan(chat_id, content, current_user=current_user)
             return
 
         # /projects, /项目 — 项目面板
         if content in ("/projects", "/项目", "/projects 展开", "/项目 展开"):
             expanded = "展开" in content
-            await self._cmd_projects(chat_id, expanded=expanded)
+            await self._cmd_projects(chat_id, expanded=expanded, current_user=current_user)
             return
 
         # /chats, /普通对话 — 对话列表
         if content in ("/chats", "/普通对话", "/chats 收起", "/普通对话 收起"):
             expanded = "收起" not in content
-            await self._cmd_chats(chat_id, expanded=expanded)
+            await self._cmd_chats(chat_id, expanded=expanded, current_user=current_user)
             return
 
         # /convos, /对话 — 当前项目会话
         if content in ("/convos", "/对话", "/convos 展开", "/对话 展开"):
             expanded = "展开" in content
-            await self._cmd_convos(chat_id, expanded=expanded)
+            await self._cmd_convos(chat_id, expanded=expanded, current_user=current_user)
             return
 
         # /conv <id> — 选择会话
@@ -261,7 +263,7 @@ class MessageHandler:
             from backend.services.chat_state import get_chat_state
             state = await get_chat_state(chat_id)
             if state.plan_input_mode:
-                await self._plan_create(chat_id, content)
+                await self._plan_create(chat_id, content, current_user=current_user)
                 return
 
         # /agent=xxx — 切换 Agent
@@ -288,7 +290,12 @@ class MessageHandler:
 
         # /daily — 每日进度报告
         if content.lower().startswith("/daily"):
-            await self._cmd_daily(chat_id, content)
+            await self._cmd_daily(chat_id, content, current_user=current_user)
+            return
+
+        # /agents — 查看可用 Agent 列表
+        if content.lower().startswith("/agents"):
+            await self._cmd_agents(chat_id)
             return
 
         # /approve <id> — 批准审批
@@ -365,7 +372,6 @@ class MessageHandler:
         if TIDE_REQUIRE_AUTH and current_user:
             project_id = await self._resolve_active_project_id(chat_id)
             if project_id:
-                from backend.core.dependencies import check_project_write_permission
                 from fastapi import HTTPException
                 try:
                     await check_project_write_permission(project_id, current_user)
@@ -425,22 +431,9 @@ class MessageHandler:
                 task_id[:8],
                 agent_id,
             )
-            # 1) 广播到前端 WebSocket
+            # 广播到前端 WebSocket
+            # 注意：Lark 卡片由事件系统统一发送（task_status_changed → lark_bridge.on_task_status_changed）
             await lark_bridge.on_lark_task_created(task)
-            # 2) 在 Lark 群里回复任务卡片（失败不影响主流程）
-            try:
-                payload = dict(task)
-                payload.setdefault("chat_id", chat_id)
-                payload.setdefault("agent_id", agent_id)
-                payload.setdefault("prompt", prompt)
-                message_id = await lark_bridge.send_task_card(payload)
-                if message_id:
-                    logger.info(
-                        "Lark task card sent task=%s message=%s",
-                        task_id[:8], message_id,
-                    )
-            except Exception:
-                logger.exception("Failed to send Lark task card")
         except Exception:
             logger.exception("Failed to create task from Lark message")
             await lark_bridge.send_text(chat_id, "❌ 任务创建失败，请稍后重试")
@@ -459,7 +452,6 @@ class MessageHandler:
             "• /latest <n> — 查看第 n 个项目的最新对话\n"
             "\n"
             "📂 导航类\n"
-            "• /cd <path> — 切换工作目录\n"
             "• /mark-project <path> — 标记为项目目录\n"
             "• /mark-chat <id> — 标记为普通对话\n"
             "\n"
@@ -484,6 +476,7 @@ class MessageHandler:
             "• /plan stop — 停止当前计划\n"
             "\n"
             "⚙️ 配置类\n"
+            "• /agents — 查看可用 Agent 列表\n"
             "• /agent=<名称> — 切换 Agent（codex/claude/qoder）\n"
             "• /model=<模型> — 指定模型\n"
             "• /status — 查看运行状态\n"
@@ -545,7 +538,7 @@ class MessageHandler:
             logger.exception("Failed to get status")
             await lark_bridge.send_text(chat_id, "❌ 查询状态失败")
 
-    async def _cmd_plan(self, chat_id: str, content: str):
+    async def _cmd_plan(self, chat_id: str, content: str, current_user: Optional[dict] = None):
         """Plan 命令集"""
         from backend.services.chat_state import get_chat_state, save_chat_state
 
@@ -570,16 +563,16 @@ class MessageHandler:
 
         # /plan status | /plan 状态
         if sub in ("status", "refresh", "状态", "刷新"):
-            await self._plan_status(chat_id)
+            await self._plan_status(chat_id, current_user=current_user)
             return
 
         # /plan stop | /plan 停止
         if sub in ("stop", "停止"):
-            await self._plan_stop(chat_id)
+            await self._plan_stop(chat_id, current_user=current_user)
             return
 
         # /plan <tasks> — 创建新 Plan
-        await self._plan_create(chat_id, plan_content)
+        await self._plan_create(chat_id, plan_content, current_user=current_user)
 
     @staticmethod
     def _parse_plan_definition(plan: dict) -> dict:
@@ -595,15 +588,27 @@ class MessageHandler:
         except (TypeError, ValueError):
             return {}
 
-    async def _plan_status(self, chat_id: str):
+    async def _plan_status(self, chat_id: str, current_user: Optional[dict] = None):
         """查询最新 Plan 状态"""
         try:
             from backend.services.plan_service import plan_service
 
-            plans = await plan_service.list_plans(workspace_id="default", limit=1)
+            plans = await plan_service.list_plans(workspace_id="default", limit=10)
             items = plans if isinstance(plans, list) else (
                 plans.get("items", []) if isinstance(plans, dict) else []
             )
+
+            # 项目级权限过滤：非 admin 用户只能看到可访问项目的 Plan
+            if items and current_user:
+                accessible_ids = await get_accessible_project_ids(current_user)
+                if accessible_ids is not None:
+                    filtered = []
+                    for p in items:
+                        pid = encode_project_id(p.get("cwd", "") or "")
+                        if not pid or pid in accessible_ids:
+                            filtered.append(p)
+                    items = filtered
+
             if not items:
                 await lark_bridge.send_text(chat_id, "📋 当前没有 Plan")
                 return
@@ -645,7 +650,7 @@ class MessageHandler:
             logger.exception("Failed to get plan status")
             await lark_bridge.send_text(chat_id, "❌ 查询 Plan 状态失败")
 
-    async def _plan_stop(self, chat_id: str):
+    async def _plan_stop(self, chat_id: str, current_user: Optional[dict] = None):
         """停止当前 Plan"""
         try:
             from backend.services.plan_service import plan_service
@@ -659,6 +664,18 @@ class MessageHandler:
                 return
             plan = items[0]
             plan_id = plan.get("id", "") or ""
+
+            # 权限检查：确认用户对该 plan 所属项目有写权限
+            if current_user:
+                plan_cwd = plan.get("cwd") or ""
+                if plan_cwd:
+                    from fastapi import HTTPException
+                    try:
+                        await check_cwd_write_permission(plan_cwd, current_user)
+                    except HTTPException:
+                        await lark_bridge.send_text(chat_id, "⚠️ 您没有该 Plan 所属项目的操作权限。")
+                        return
+
             if plan.get("status") not in ("active",):
                 await lark_bridge.send_text(chat_id, f"Plan `{plan_id[:8]}` 已经结束")
                 return
@@ -668,13 +685,27 @@ class MessageHandler:
             logger.exception("Failed to stop plan")
             await lark_bridge.send_text(chat_id, "❌ 停止 Plan 失败")
 
-    async def _plan_create(self, chat_id: str, plan_content: str):
+    async def _plan_create(self, chat_id: str, plan_content: str, current_user: Optional[dict] = None):
         """从文本创建新 Plan"""
         from backend.services.chat_state import get_chat_state, save_chat_state
+
+        # viewer 角色检查
+        if current_user and current_user.get("role") == "viewer":
+            await lark_bridge.send_text(chat_id, "⚠️ Viewer 角色无权创建 Plan。")
+            return
 
         state = await get_chat_state(chat_id)
         state.plan_input_mode = False
         await save_chat_state(state)
+
+        # 项目写权限检查
+        if current_user and state.cwd:
+            from fastapi import HTTPException
+            try:
+                await check_cwd_write_permission(state.cwd, current_user)
+            except HTTPException:
+                await lark_bridge.send_text(chat_id, "⚠️ 您没有当前项目的写入权限，无法创建 Plan。")
+                return
 
         # 解析任务列表（支持 - 或数字列表）
         lines = plan_content.strip().splitlines()
@@ -756,30 +787,32 @@ class MessageHandler:
                     chat_id, "用法：/workflow run <workflow_id>"
                 )
                 return
-            # 项目级写权限检查
+            # 权限检查：与 Web 端 _check_workflow_write_permission 一致
             if TIDE_REQUIRE_AUTH and current_user:
-                try:
-                    from backend.db.engine import async_session_factory as _sf
-                    from sqlalchemy import text as _text
-                    async with _sf() as _sess:
-                        _r = await _sess.execute(
-                            _text("SELECT project_id FROM workflows WHERE id = :wid OR id LIKE :prefix LIMIT 1"),
-                            {"wid": workflow_id, "prefix": f"{workflow_id}%"},
-                        )
-                        _row = _r.fetchone()
-                    if _row and _row[0]:
-                        from backend.core.dependencies import check_project_write_permission
-                        from fastapi import HTTPException
-                        try:
-                            await check_project_write_permission(_row[0], current_user)
-                        except HTTPException:
-                            await lark_bridge.send_text(chat_id, "⚠️ 您没有该工作流所属项目的操作权限。")
-                            return
-                except LarkPermissionDenied:
-                    await lark_bridge.send_text(chat_id, "⚠️ 您没有该工作流所属项目的操作权限。")
+                role = current_user.get("role", "member")
+                if role == "viewer":
+                    await lark_bridge.send_text(chat_id, "⚠️ Viewer 角色无权运行工作流。")
                     return
-                except Exception:
-                    pass  # 查询失败时不阻止操作
+                if role != "admin":
+                    # member 角色：仅允许运行自己创建的 workflow 或 created_by 为空的公共 workflow
+                    try:
+                        from sqlalchemy import text as _text
+                        async with async_session_factory() as _sess:
+                            _r = await _sess.execute(
+                                _text("SELECT created_by FROM workflows WHERE id = :wid OR id LIKE :prefix LIMIT 1"),
+                                {"wid": workflow_id, "prefix": f"{workflow_id}%"},
+                            )
+                            _row = _r.fetchone()
+                        if _row:
+                            created_by = _row[0]
+                            if created_by is not None and created_by != current_user.get("id"):
+                                await lark_bridge.send_text(chat_id, "⚠️ 您只能运行自己创建的工作流。")
+                                return
+                        else:
+                            await lark_bridge.send_text(chat_id, f"❌ 找不到工作流：`{workflow_id}`")
+                            return
+                    except Exception:
+                        pass  # 查询失败时不阻止操作
             try:
                 from backend.services.workflow_service import workflow_service
                 from backend.services.workflow_engine import workflow_engine
@@ -867,15 +900,18 @@ class MessageHandler:
             if not title:
                 await lark_bridge.send_text(chat_id, "用法：/wi create <标题>")
                 return
+            # viewer 角色检查
+            if current_user and current_user.get("role") == "viewer":
+                await lark_bridge.send_text(chat_id, "⚠️ Viewer 角色无权创建工作项。")
+                return
             project_id = await self._resolve_active_project_id(chat_id)
             if not project_id:
                 await lark_bridge.send_text(
-                    chat_id, "❌ 请先使用 /cd 切换到项目目录"
+                    chat_id, "❌ 请先使用 /mark-project 标记项目目录"
                 )
                 return
             # 项目级写权限检查
             if TIDE_REQUIRE_AUTH and current_user and project_id:
-                from backend.core.dependencies import check_project_write_permission
                 from fastapi import HTTPException
                 try:
                     await check_project_write_permission(project_id, current_user)
@@ -911,9 +947,15 @@ class MessageHandler:
             project_id = await self._resolve_active_project_id(chat_id)
             if not project_id:
                 await lark_bridge.send_text(
-                    chat_id, "❌ 请先使用 /cd 切换到项目目录"
+                    chat_id, "❌ 请先使用 /mark-project 标记项目目录"
                 )
                 return
+            # 项目级权限过滤：检查用户是否有权访问该项目
+            if current_user:
+                accessible_ids = await get_accessible_project_ids(current_user)
+                if accessible_ids is not None and project_id not in accessible_ids:
+                    await lark_bridge.send_text(chat_id, "⚠️ 您没有该项目的访问权限。")
+                    return
             try:
                 from backend.services.work_item_service import work_item_service
 
@@ -958,14 +1000,17 @@ class MessageHandler:
                     )
                     return
 
-                # 项目级写权限检查
+                # 项目级权限检查：用 get_accessible_project_ids 过滤
                 if TIDE_REQUIRE_AUTH and current_user:
                     item_project_id = target_item.get("project_id")
                     if item_project_id:
-                        from backend.core.dependencies import check_project_write_permission as _check_pw
+                        accessible_ids = await get_accessible_project_ids(current_user)
+                        if accessible_ids is not None and item_project_id not in accessible_ids:
+                            await lark_bridge.send_text(chat_id, "⚠️ 您没有该工作项所属项目的访问权限。")
+                            return
                         from fastapi import HTTPException as _HTTPExc
                         try:
-                            await _check_pw(item_project_id, current_user)
+                            await check_project_write_permission(item_project_id, current_user)
                         except _HTTPExc:
                             await lark_bridge.send_text(chat_id, "⚠️ 您没有该项目的写入权限。")
                             return
@@ -1011,6 +1056,45 @@ class MessageHandler:
             f"❓ 未知子命令：/wi {sub}\n可用：create / list / move",
         )
 
+    async def _cmd_agents(self, chat_id: str):
+        """查看可用 Agent 列表"""
+        import shutil
+        from backend.runtime.adapters import AGENT_ADAPTERS
+        from backend.services.chat_state import get_chat_state
+
+        state = await get_chat_state(chat_id)
+        current_agent = state.agent_id or "codex"
+
+        lines = ["🤖 **可用 Agent 列表**\n"]
+
+        # 本地 Agent
+        lines.append("**本地 Agent：**")
+        for agent_id, adapter in AGENT_ADAPTERS.items():
+            available = bool(adapter.bin_name and shutil.which(adapter.bin_name))
+            status_icon = "✅" if available else "❌"
+            active_mark = " 👈 当前" if agent_id == current_agent else ""
+            lines.append(f"  • {status_icon} {agent_id} ({adapter.label}){active_mark}")
+
+        # 远程 A2A Agent
+        try:
+            async with async_session_factory() as session:
+                result = await session.execute(sa_text(
+                    "SELECT id, name, description FROM remote_agents WHERE status = 'active'"
+                ))
+                remote_rows = result.fetchall()
+            if remote_rows:
+                lines.append("\n**远程 A2A Agent：**")
+                for row in remote_rows:
+                    agent_id_r, name, description = row
+                    desc_text = f" — {description}" if description else ""
+                    active_mark = " 👈 当前" if f"a2a:{agent_id_r}" == current_agent else ""
+                    lines.append(f"  • 🌐 {name}{desc_text}{active_mark}")
+        except Exception:
+            logger.debug("Failed to list remote agents", exc_info=True)
+
+        lines.append(f"\n💡 使用 `/agent=<名称>` 切换 Agent")
+        await lark_bridge.send_text(chat_id, "\n".join(lines))
+
     async def _cmd_set_agent(self, chat_id: str, agent_id: str):
         """切换 Agent"""
         from backend.runtime.adapters import AGENT_ADAPTERS
@@ -1046,45 +1130,6 @@ class MessageHandler:
             chat_id[:8] if chat_id else "-",
         )
         await lark_bridge.send_text(chat_id, f"✅ 已设置模型: {model}")
-
-    async def _cmd_cd(self, chat_id: str, path_text: str):
-        """切换工作目录"""
-        from pathlib import Path
-        from backend.services.chat_state import get_chat_state, save_chat_state
-        from backend.services.project_discovery import find_project_root
-
-        if not path_text:
-            await lark_bridge.send_text(chat_id, "用法：/cd <目录>")
-            return
-
-        state = await get_chat_state(chat_id)
-        path = Path(path_text).expanduser()
-        if not path.is_absolute():
-            path = Path(state.cwd) / path
-        try:
-            path = path.resolve()
-        except OSError as e:
-            await lark_bridge.send_text(chat_id, f"目录解析失败：{e}")
-            return
-
-        if not path.exists():
-            await lark_bridge.send_text(chat_id, f"目录不存在：{path}")
-            return
-        if not path.is_dir():
-            await lark_bridge.send_text(chat_id, f"不是目录：{path}")
-            return
-
-        state.cwd = str(path)
-        root = find_project_root(path)
-        state.active_project_key = str(root) if root else str(path)
-        state.active_session_id = ""
-        await save_chat_state(state)
-
-        project_text = f"\n项目：`{root}`" if root and root != path else ""
-        await lark_bridge.send_text(
-            chat_id,
-            f"✅ 已切换目录：`{path}`{project_text}\n后续新指令会在该目录启动新的会话。"
-        )
 
     async def _cmd_mark_project(self, chat_id: str, path_text: str):
         """标记为项目目录"""
@@ -1123,7 +1168,7 @@ class MessageHandler:
         # 标记为普通对话（信息回复即可，分类存储在下个迭代完善）
         await lark_bridge.send_text(chat_id, f"✅ 已标记为普通对话：`{session_id}`")
 
-    async def _cmd_daily(self, chat_id: str, content: str):
+    async def _cmd_daily(self, chat_id: str, content: str, current_user: Optional[dict] = None):
         """每日进度报告"""
         import subprocess
         from datetime import date, datetime
@@ -1141,6 +1186,12 @@ class MessageHandler:
                 return
 
         state = await get_chat_state(chat_id)
+        today_str = report_date.isoformat()
+
+        # 判断是否为 admin
+        is_admin = current_user and current_user.get("role") == "admin"
+        user_id = current_user.get("id") if current_user else None
+        username = current_user.get("username", "") if current_user else ""
 
         # 获取当日会话
         try:
@@ -1148,18 +1199,52 @@ class MessageHandler:
         except Exception:
             logger.exception("discover_sessions failed")
             sessions = []
-        today_str = report_date.isoformat()
         today_sessions = [
             s for s in sessions
             if s.get("last_active", "").startswith(today_str)
             or s.get("created_at", "").startswith(today_str)
         ]
 
+        # 获取当日任务（从数据库按用户过滤）
+        task_total = 0
+        task_completed = 0
+        task_running = 0
+        try:
+            async with async_session_factory() as session:
+                if is_admin:
+                    # admin 看全部
+                    result = await session.execute(sa_text(
+                        "SELECT status, COUNT(*) FROM tasks "
+                        "WHERE created_at >= :start AND created_at < :end "
+                        "GROUP BY status"
+                    ), {"start": today_str, "end": f"{today_str}T23:59:59"})
+                else:
+                    # 普通用户：只看自己创建的或分配给自己的
+                    result = await session.execute(sa_text(
+                        "SELECT status, COUNT(*) FROM tasks "
+                        "WHERE created_at >= :start AND created_at < :end "
+                        "AND (creator_id = :uid OR assigned_to = :uid OR creator_id = :uname OR assigned_to = :uname) "
+                        "GROUP BY status"
+                    ), {"start": today_str, "end": f"{today_str}T23:59:59", "uid": user_id or "", "uname": username})
+                for row in result.fetchall():
+                    status, count = row
+                    task_total += count
+                    if status == "completed":
+                        task_completed += count
+                    elif status == "running":
+                        task_running += count
+        except Exception:
+            logger.debug("Failed to query daily tasks", exc_info=True)
+
         # Git 摘要
         git_summary = ""
         try:
+            git_args = ["git", "log", f"--since={today_str}", "--oneline", "--no-merges", "-20"]
+            # 非 admin 按用户过滤 git 日志
+            if not is_admin and username:
+                git_args.extend([f"--author={username}"])
             result = subprocess.run(
-                ["git", "log", f"--since={today_str}", "--oneline", "--no-merges", "-20"],
+                git_args,
                 capture_output=True, text=True, timeout=5,
                 cwd=state.cwd,
             )
@@ -1169,8 +1254,10 @@ class MessageHandler:
             pass
 
         # 构建报告
-        lines = [f"📊 **{report_date} 进度报告**\n"]
+        user_label = f"（{username}）" if username and not is_admin else "（全局）" if is_admin else ""
+        lines = [f"📊 **{report_date} 进度报告**{user_label}\n"]
         lines.append(f"项目目录：`{state.cwd}`")
+        lines.append(f"当日任务：{task_total} 总计 / {task_completed} 完成 / {task_running} 运行中")
         lines.append(f"当日会话数：{len(today_sessions)}")
 
         if today_sessions:
@@ -1353,22 +1440,77 @@ class MessageHandler:
         # 3. 回退
         return state.active_project_key
 
-    async def _cmd_projects(self, chat_id: str, expanded: bool = False):
-        """项目面板"""
+    async def _cmd_projects(self, chat_id: str, expanded: bool = False, current_user: Optional[dict] = None):
+        """项目面板 — 合并文件扫描 + DB统计 + 注册项目（与 Web API 一致）"""
         from backend.services.card_builder import build_dashboard_card
         from backend.services.chat_state import get_chat_state
-        from backend.services.project_discovery import discover_projects, find_project_root
+        from backend.services.project_discovery import discover_projects, is_worktree_path, _is_excluded_path
         from backend.services.session_discovery import discover_sessions
-        from pathlib import Path
+        from backend.services.archive_service import archive_store
+        from backend.api.projects import _aggregate_db_stats, _registry_index, _project_payload, _encode_id
 
         state = await get_chat_state(chat_id)
-        projects = discover_projects()
+
+        # 1. 合并三个数据源（与 list_projects API 一致）
+        discovered_list = discover_projects()
+        discovered_map = {item["cwd"]: item for item in discovered_list}
+        db_map = await _aggregate_db_stats("default")
+        registry = _registry_index()
+
+        cwds: set = set()
+        cwds.update(discovered_map.keys())
+        cwds.update(db_map.keys())
+        cwds.update(registry.keys())
+
+        # 排除 worktree 临时路径和客户端排除路径
+        cwds = {
+            c for c in cwds
+            if not is_worktree_path(c)
+            and not _is_excluded_path(c)
+        }
+
+        # 2. 归档过滤
+        archived_ids = set(archive_store.list_archived_projects())
+
+        # 3. 权限过滤：非 admin 用户只能看到其可访问的项目
+        accessible_pids: Optional[set] = None
+        if current_user and current_user.get("role") != "admin":
+            from backend.services.auth_service import auth_service
+            accessible = await auth_service.get_user_accessible_projects(current_user["id"])
+            if "*" not in accessible:
+                accessible_pids = set(accessible)
+
+        # 4. 构建项目列表
+        sessions_by_cwd: dict = {}
+        for cwd in cwds:
+            sessions_by_cwd[cwd] = discover_sessions(project_cwd=cwd)
+
+        projects: list = []
+        for cwd in cwds:
+            pid = _encode_id(cwd)
+            is_archived = pid in archived_ids
+            if is_archived:
+                continue
+            if accessible_pids is not None and pid not in accessible_pids:
+                continue
+            projects.append(
+                _project_payload(
+                    cwd=cwd,
+                    discovered=discovered_map.get(cwd),
+                    db_stat=db_map.get(cwd),
+                    registered=registry.get(cwd),
+                    sessions=sessions_by_cwd.get(cwd, []),
+                    chat_count=None,
+                    archived=is_archived,
+                )
+            )
+        projects.sort(key=lambda p: (p.get("last_active") or ""), reverse=True)
+
+        # 5. 获取全部会话用于 dashboard 卡片（普通对话展示）
         sessions = discover_sessions()
+        _, sessions = self._filter_archived([], sessions)
 
-        # Task #89: 过滤已归档项目和会话
-        projects, sessions = self._filter_archived(projects, sessions)
-
-        # Task #88: 基于当前 session cwd 推导当前项目
+        # 6. 基于当前 session cwd 推导当前项目
         effective_project_key = self._derive_project_key(
             state, sessions, projects
         )
@@ -1384,17 +1526,102 @@ class MessageHandler:
         )
         await lark_bridge.send_card(chat_id, card)
 
-    async def _cmd_chats(self, chat_id: str, expanded: bool = True):
-        """普通对话列表"""
+    async def _cmd_chats(self, chat_id: str, expanded: bool = True, current_user: Optional[dict] = None):
+        """普通对话列表 — DB优先 + 文件扫描补充，含权限过滤（与 Web API 一致）"""
         from backend.services.card_builder import build_chats_card
         from backend.services.chat_state import get_chat_state
-        from backend.services.session_discovery import discover_sessions
+        from backend.services.session_discovery import discover_sessions, discover_chats
+        from backend.core.dependencies import get_accessible_project_ids, encode_project_id
 
         state = await get_chat_state(chat_id)
-        sessions = discover_sessions()
-        # Task #89: 过滤已归档会话
-        _, sessions = self._filter_archived([], sessions)
-        non_project_sessions = [s for s in sessions if not s.get("project_root")]
+
+        # 权限信息
+        accessible_pids = await get_accessible_project_ids(current_user)
+
+        # DB 查询：获取无 cwd 的 chat 类型会话 + 带 cwd 的会话（需权限过滤）
+        db_sessions: list[dict] = []
+        async with async_session_factory() as session:
+            r = await session.execute(
+                sa_text(
+                    """
+                    SELECT session_id,
+                           MAX(agent_id) as agent_id,
+                           MAX(cwd) as cwd,
+                           COUNT(*) as task_count,
+                           MAX(status) as last_status,
+                           MAX(created_at) as last_active
+                    FROM tasks
+                    WHERE workspace_id = 'default'
+                      AND session_id IS NOT NULL
+                      AND session_id != ''
+                      AND id NOT IN (SELECT task_id FROM plan_tasks)
+                    GROUP BY session_id
+                    ORDER BY last_active DESC
+                    """
+                ),
+            )
+            for row in r.fetchall():
+                db_sessions.append({
+                    "session_id": row[0],
+                    "agent_id": row[1],
+                    "cwd": row[2],
+                    "task_count": row[3],
+                    "last_status": row[4],
+                    "last_active": row[5],
+                    "source": "db",
+                })
+
+        # 文件扫描补充（普通对话）
+        file_chats = discover_chats()
+        file_meta_map: dict[str, dict] = {}
+        for s in file_chats:
+            sid = s.get("session_id") or s.get("id")
+            if sid:
+                file_meta_map[sid] = s
+
+        # 合并：DB 优先，文件补充
+        db_sids = {s["session_id"] for s in db_sessions}
+        for db_s in db_sessions:
+            sid = db_s.get("session_id") or ""
+            file_s = file_meta_map.get(sid)
+            if file_s:
+                if not db_s.get("title"):
+                    db_s["title"] = file_s.get("title")
+                if not db_s.get("project_root"):
+                    db_s["project_root"] = file_s.get("project_root")
+
+        # 仅文件中存在的会话
+        for sid, s in file_meta_map.items():
+            if sid in db_sids:
+                continue
+            db_sessions.append({
+                "session_id": sid,
+                "agent_id": s.get("agent_id"),
+                "cwd": s.get("cwd"),
+                "project_root": s.get("project_root"),
+                "title": s.get("title"),
+                "task_count": 1,
+                "last_status": s.get("status") or "completed",
+                "last_active": s.get("last_active"),
+                "source": "file",
+            })
+
+        # 权限过滤：无 cwd 的会话(chat)对所有认证用户可见；有 cwd 的按项目权限过滤
+        if accessible_pids is not None:
+            db_sessions = [
+                it for it in db_sessions
+                if not (it.get("cwd") or "")
+                or encode_project_id(it.get("cwd") or "") in accessible_pids
+            ]
+
+        # 过滤：仅保留无 project_root 的会话（纯 chat）
+        non_project_sessions = [s for s in db_sessions if not s.get("project_root") and not s.get("cwd")]
+
+        # 归档过滤
+        _, non_project_sessions = self._filter_archived([], non_project_sessions)
+
+        non_project_sessions.sort(key=lambda x: str(x.get("last_active") or ""), reverse=True)
+
         card = build_chats_card(
             chat_id=chat_id,
             sessions=non_project_sessions,
@@ -1403,19 +1630,32 @@ class MessageHandler:
         )
         await lark_bridge.send_card(chat_id, card)
 
-    async def _cmd_convos(self, chat_id: str, expanded: bool = False):
-        """当前项目对话"""
+    async def _cmd_convos(self, chat_id: str, expanded: bool = False, current_user: Optional[dict] = None):
+        """当前项目对话 — DB优先 + 文件扫描补充，含权限过滤（与 Web API 一致）"""
         from backend.services.card_builder import build_project_card
         from backend.services.chat_state import get_chat_state, save_chat_state
-        from backend.services.project_discovery import discover_projects
+        from backend.services.project_discovery import discover_projects, find_project_root
         from backend.services.session_discovery import discover_sessions
+        from backend.core.dependencies import get_accessible_project_ids, encode_project_id
+        from pathlib import Path
 
         state = await get_chat_state(chat_id)
+
+        # 权限信息
+        accessible_pids = await get_accessible_project_ids(current_user)
+
         projects = discover_projects()
-        # Task #89: 过滤已归档项目
+        # 过滤已归档项目
         projects, _ = self._filter_archived(projects, [])
 
-        # Task #88: 基于 cwd 推导当前项目
+        # 权限过滤项目列表
+        if accessible_pids is not None:
+            projects = [
+                p for p in projects
+                if encode_project_id(p.get("cwd") or "") in accessible_pids
+            ]
+
+        # 基于 cwd 推导当前项目
         effective_key = self._derive_project_key(state, [], projects)
 
         project = None
@@ -1438,13 +1678,107 @@ class MessageHandler:
         state.active_project_key = project.get("id") or project.get("cwd", "")
         await save_chat_state(state)
 
-        sessions = discover_sessions(project_cwd=project.get("cwd"))
-        # Task #89: 过滤已归档会话
-        _, sessions = self._filter_archived([], sessions)
+        project_cwd = project.get("cwd") or ""
+
+        # DB 查询：获取该项目下的会话
+        db_sessions: list[dict] = []
+        if project_cwd:
+            async with async_session_factory() as session:
+                r = await session.execute(
+                    sa_text(
+                        """
+                        SELECT session_id,
+                               MAX(agent_id) as agent_id,
+                               MAX(cwd) as cwd,
+                               COUNT(*) as task_count,
+                               MAX(status) as last_status,
+                               MAX(created_at) as last_active
+                        FROM tasks
+                        WHERE workspace_id = 'default'
+                          AND session_id IS NOT NULL
+                          AND session_id != ''
+                          AND (cwd = :project OR cwd LIKE :project_prefix)
+                          AND id NOT IN (SELECT task_id FROM plan_tasks)
+                        GROUP BY session_id
+                        ORDER BY last_active DESC
+                        """
+                    ),
+                    {"project": project_cwd, "project_prefix": project_cwd.rstrip("/") + "/%"},
+                )
+                for row in r.fetchall():
+                    db_sessions.append({
+                        "session_id": row[0],
+                        "agent_id": row[1],
+                        "cwd": row[2],
+                        "task_count": row[3],
+                        "last_status": row[4],
+                        "last_active": row[5],
+                        "source": "db",
+                    })
+
+        # 文件扫描补充
+        file_sessions_list = discover_sessions(project_cwd=project_cwd)
+        file_meta_map: dict[str, dict] = {}
+        for s in file_sessions_list:
+            sid = s.get("session_id")
+            if sid:
+                file_meta_map[sid] = s
+
+        # 合并：DB 优先，用文件元数据丰富
+        db_sids = {s["session_id"] for s in db_sessions}
+        for db_s in db_sessions:
+            sid = db_s.get("session_id") or ""
+            file_s = file_meta_map.get(sid)
+            if file_s:
+                if not db_s.get("project_root"):
+                    db_s["project_root"] = file_s.get("project_root")
+                if not db_s.get("project_name"):
+                    db_s["project_name"] = file_s.get("project_name")
+                if not db_s.get("title"):
+                    db_s["title"] = file_s.get("title")
+            else:
+                # 无对应文件时，从 cwd 计算 project_root
+                cwd_val = db_s.get("cwd") or ""
+                if cwd_val and not db_s.get("project_root"):
+                    pr = find_project_root(Path(cwd_val))
+                    if pr:
+                        db_s["project_root"] = str(pr)
+                        db_s["project_name"] = pr.name
+
+        # 仅文件中存在的会话（DB 中无记录）
+        for sid, s in file_meta_map.items():
+            if sid in db_sids:
+                continue
+            db_sessions.append({
+                "session_id": sid,
+                "agent_id": s.get("agent_id"),
+                "cwd": s.get("cwd"),
+                "project_root": s.get("project_root"),
+                "project_name": s.get("project_name"),
+                "title": s.get("title"),
+                "task_count": 1,
+                "last_status": s.get("status") or "completed",
+                "last_active": s.get("last_active"),
+                "source": "file",
+            })
+
+        # 权限过滤（额外保护：确认用户有该项目访问权限）
+        if accessible_pids is not None:
+            db_sessions = [
+                it for it in db_sessions
+                if not (it.get("cwd") or "")
+                or encode_project_id(it.get("cwd") or "") in accessible_pids
+            ]
+
+        # 归档过滤
+        _, db_sessions = self._filter_archived([], db_sessions)
+
+        db_sessions.sort(key=lambda x: str(x.get("last_active") or ""), reverse=True)
+
         card = build_project_card(
             chat_id=chat_id,
             project=project,
-            sessions=sessions,
+            sessions=db_sessions,
             active_session_id=state.active_session_id,
             expanded=expanded,
         )

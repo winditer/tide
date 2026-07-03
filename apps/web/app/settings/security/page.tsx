@@ -15,7 +15,7 @@ import {
   Select,
   toast,
 } from "@tide/ui";
-import { apiClient, useWs } from "@tide/core";
+import { apiClient, useAuth, useWs } from "@tide/core";
 import { ProjectScopeSelector } from "@tide/views/components/project-scope-selector";
 import {
   ArrowLeft,
@@ -205,6 +205,7 @@ export default function SecurityPage() {
 // ── Rules Tab ────────────────────────────────────────────────────────────────
 
 function RulesTab({ projectId }: { projectId: string | null }) {
+  const { user } = useAuth();
   const [rules, setRules] = useState<SecurityRule[]>([]);
   const [projects, setProjects] = useState<ProjectItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -371,20 +372,22 @@ function RulesTab({ projectId }: { projectId: string | null }) {
                       <div className="flex items-center justify-end gap-1">
                         <button
                           type="button"
+                          disabled={!rule.project_id && user?.role !== "admin"}
+                          title={!rule.project_id && user?.role !== "admin" ? "仅管理员可操作全局配置" : "编辑"}
                           onClick={() => {
                             setEditing(rule);
                             setDialogOpen(true);
                           }}
-                          title="编辑"
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground disabled:opacity-40 disabled:pointer-events-none"
                         >
                           <PenLine className="h-3.5 w-3.5" />
                         </button>
                         <button
                           type="button"
+                          disabled={!rule.project_id && user?.role !== "admin"}
+                          title={!rule.project_id && user?.role !== "admin" ? "仅管理员可操作全局配置" : "删除"}
                           onClick={() => handleDelete(rule.id)}
-                          title="删除"
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-smooth hover:bg-destructive/10 hover:text-destructive"
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-smooth hover:bg-destructive/10 hover:text-destructive disabled:opacity-40 disabled:pointer-events-none"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>

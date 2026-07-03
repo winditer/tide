@@ -15,7 +15,7 @@ import {
   Select,
   toast,
 } from "@tide/ui";
-import { apiClient } from "@tide/core";
+import { apiClient, useAuth } from "@tide/core";
 import { ProjectScopeSelector } from "@tide/views/components/project-scope-selector";
 import {
   ArrowLeft,
@@ -82,6 +82,7 @@ function eventBadgeClass(event: string): string {
 
 export default function HooksPage() {
   const router = useRouter();
+  const { user } = useAuth();
   const [hooks, setHooks] = useState<Hook[]>([]);
   const [loading, setLoading] = useState(true);
   const [eventFilter, setEventFilter] = useState("");
@@ -256,20 +257,22 @@ export default function HooksPage() {
                       <div className="flex items-center justify-end gap-1">
                         <button
                           type="button"
+                          disabled={!(hook as any).project_id && user?.role !== "admin"}
+                          title={!(hook as any).project_id && user?.role !== "admin" ? "仅管理员可操作全局配置" : "编辑"}
                           onClick={() => {
                             setEditing(hook);
                             setDialogOpen(true);
                           }}
-                          title="编辑"
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground disabled:opacity-40 disabled:pointer-events-none"
                         >
                           <PenLine className="h-3.5 w-3.5" />
                         </button>
                         <button
                           type="button"
+                          disabled={!(hook as any).project_id && user?.role !== "admin"}
+                          title={!(hook as any).project_id && user?.role !== "admin" ? "仅管理员可操作全局配置" : "删除"}
                           onClick={() => handleDelete(hook.id)}
-                          title="删除"
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-smooth hover:bg-destructive/10 hover:text-destructive"
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-smooth hover:bg-destructive/10 hover:text-destructive disabled:opacity-40 disabled:pointer-events-none"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>

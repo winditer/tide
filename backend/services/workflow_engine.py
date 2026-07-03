@@ -893,8 +893,8 @@ class WorkflowEngine:
 
         # 存储到 context：output 为完整日志（调试用），agent_final_output 为精炼摘要（供下游引用）
         ctx_data: dict = {"output": result}
-        if agent_final_output:
-            ctx_data["agent_final_output"] = agent_final_output
+        # 始终保存 agent_final_output，确保下游节点能正确获取
+        ctx_data["agent_final_output"] = agent_final_output or ""
         context = await self._update_run_context(run_id, node_id, ctx_data)
         await self._execute_next_nodes(run_id, node_id, context)
 

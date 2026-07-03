@@ -140,7 +140,7 @@ TIDE_DATA_DIR: str = os.getenv("TIDE_DATA_DIR", str(Path.home() / ".tide" / "dat
 WORKITEM_SMART_ROUTING = os.getenv("WORKITEM_SMART_ROUTING", "false").lower() == "true"
 WORKITEM_SMART_ROUTING_TIMEOUT = int(os.getenv("WORKITEM_SMART_ROUTING_TIMEOUT", "30"))
 WORKITEM_SMART_ROUTING_CONFIDENCE = float(os.getenv("WORKITEM_SMART_ROUTING_CONFIDENCE", "0.6"))
-ROUTING_PROPOSAL_MAX_CHARS = int(os.getenv("ROUTING_PROPOSAL_MAX_CHARS", "3000"))
+ROUTING_PROPOSAL_MAX_CHARS = int(os.getenv("ROUTING_PROPOSAL_MAX_CHARS", "5000"))
 # =================================================
 
 

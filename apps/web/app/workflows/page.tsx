@@ -3,13 +3,14 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@tide/ui";
-import { useWorkflows } from "@tide/core";
+import { useWorkflows, useAuth } from "@tide/core";
 import { WorkflowList, WorkflowCreateForm, WorkflowGuide } from "@tide/views";
 
 export default function WorkflowsPage() {
   const router = useRouter();
   const { data, isLoading, isError, error } = useWorkflows();
   const [showCreate, setShowCreate] = useState(false);
+  const { user } = useAuth();
 
   return (
     <div className="space-y-8">
@@ -23,7 +24,13 @@ export default function WorkflowsPage() {
         </div>
         <div className="flex items-center gap-2">
           <WorkflowGuide />
-          <Button onClick={() => setShowCreate(true)}>+ 创建工作流</Button>
+          <Button
+            onClick={() => setShowCreate(true)}
+            disabled={user?.role === "viewer"}
+            title={user?.role === "viewer" ? "查看权限无法创建工作流" : undefined}
+          >
+            + 创建工作流
+          </Button>
         </div>
       </header>
 

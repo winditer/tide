@@ -53,6 +53,7 @@ export interface Workflow {
   enabled: boolean;
   created_at: string;
   updated_at: string;
+  created_by?: string | null;
 }
 
 export type WorkflowRunStatus =

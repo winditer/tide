@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button, Input } from "@tide/ui";
-import { useDeleteWorkflow, useToggleWorkflow } from "@tide/core";
+import { useDeleteWorkflow, useToggleWorkflow, useAuth } from "@tide/core";
 import type { Workflow } from "@tide/core";
 
 function formatTime(iso: string | null) {
@@ -27,14 +27,27 @@ interface WorkflowListProps {
 export function WorkflowList({ items }: WorkflowListProps) {
   const router = useRouter();
   const [search, setSearch] = useState("");
+  const [showMineOnly, setShowMineOnly] = useState(false);
   const del = useDeleteWorkflow();
   const toggle = useToggleWorkflow();
+  const { user } = useAuth();
 
-  const filtered = items.filter(
-    (w) =>
+  const canManageWorkflow = (workflow: Workflow) => {
+    if (!user) return true; // 未登录不限制
+    if (user.role === "admin") return true;
+    if (user.role === "viewer") return false;
+    // member 只能管理自己创建的
+    return workflow.created_by != null && workflow.created_by === user.id;
+  };
+
+  const filtered = items
+    .filter((w) =>
       w.name.toLowerCase().includes(search.toLowerCase()) ||
       (w.description ?? "").toLowerCase().includes(search.toLowerCase())
-  );
+    )
+    .filter((w) =>
+      showMineOnly && user ? w.created_by === user.id : true
+    );
 
   if (items.length === 0) {
     return (
@@ -51,14 +64,25 @@ export function WorkflowList({ items }: WorkflowListProps) {
 
   return (
     <div className="overflow-hidden">
-      {/* Search */}
-      <div className="border-b border-border/50 px-4 py-3">
+      {/* Search & Filter */}
+      <div className="border-b border-border/50 px-4 py-3 flex items-center gap-4">
         <Input
           placeholder="搜索工作流名称或描述..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="max-w-sm rounded-lg"
         />
+        {user && (
+          <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer select-none whitespace-nowrap">
+            <input
+              type="checkbox"
+              checked={showMineOnly}
+              onChange={(e) => setShowMineOnly(e.target.checked)}
+              className="rounded border-input"
+            />
+            查看我的
+          </label>
+        )}
       </div>
 
       <div className="overflow-x-auto">
@@ -118,9 +142,9 @@ export function WorkflowList({ items }: WorkflowListProps) {
                   >
                     <button
                       type="button"
-                      disabled={toggle.isPending}
+                      disabled={toggle.isPending || !canManageWorkflow(w)}
                       onClick={() => toggle.mutate(w.id)}
-                      title={w.enabled ? "点击禁用" : "点击启用"}
+                      title={!canManageWorkflow(w) ? (user?.role === "viewer" ? "查看权限无法操作" : "只能管理自己创建的工作流") : w.enabled ? "点击禁用" : "点击启用"}
                       className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-[10px] font-medium transition-smooth disabled:opacity-50 ${
                         w.enabled
                           ? "border-emerald-200 bg-emerald-50 text-emerald-700"
@@ -141,7 +165,7 @@ export function WorkflowList({ items }: WorkflowListProps) {
                         size="sm"
                         onClick={() => router.push(`/workflows/${w.id}`)}
                       >
-                        编辑
+                        {canManageWorkflow(w) ? "编辑" : "查看"}
                       </Button>
                       <Button
                         variant="ghost"
@@ -152,7 +176,8 @@ export function WorkflowList({ items }: WorkflowListProps) {
                             del.mutate(w.id);
                           }
                         }}
-                        disabled={del.isPending}
+                        disabled={del.isPending || !canManageWorkflow(w)}
+                        title={!canManageWorkflow(w) ? (user?.role === "viewer" ? "查看权限无法操作" : "只能管理自己创建的工作流") : undefined}
                       >
                         删除
                       </Button>

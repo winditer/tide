@@ -520,6 +520,12 @@ function WorkItemArtifactsSection({ item }: WorkItemArtifactsSectionProps) {
   })();
 
   // 按 stage 分组
+  const STAGE_LABELS: Record<string, string> = {
+    test: "测试报告",
+    doc: "文档",
+    code: "代码",
+    output: "输出",
+  };
   const grouped = artifacts.reduce<Record<string, WorkItemArtifact[]>>(
     (acc, a) => {
       const key = a.stage || "";
@@ -595,7 +601,7 @@ function WorkItemArtifactsSection({ item }: WorkItemArtifactsSectionProps) {
             <div key={stageKey}>
               {stageKey && (
                 <p className="mb-1 text-[11px] font-medium text-muted-foreground">
-                  {stageKey}
+                  {STAGE_LABELS[stageKey] || stageKey}
                 </p>
               )}
               <div className="space-y-1">

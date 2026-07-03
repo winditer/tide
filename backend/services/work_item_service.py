@@ -78,6 +78,26 @@ def _doc_naming_instruction(item_id: str, title: str = "", project_name: str = "
         f"例如：`{prefix}-技术方案.md`、`{prefix}-测试报告.md`、`{prefix}-修改点.md`。\n"
     )
 
+
+def _smart_truncate(text: str, max_chars: int) -> str:
+    """智能截断：优先在段落或句子边界截断，保持内容完整性。"""
+    if len(text) <= max_chars:
+        return text
+
+    truncated = text[:max_chars]
+    # 优先在段落边界截断（\n\n）
+    last_para = truncated.rfind("\n\n")
+    if last_para > max_chars * 0.7:
+        return truncated[:last_para] + "\n\n...(方案已截断)"
+
+    # 其次在换行处截断
+    last_newline = truncated.rfind("\n")
+    if last_newline > max_chars * 0.8:
+        return truncated[:last_newline] + "\n\n...(方案已截断)"
+
+    # 最后直接截断
+    return truncated + "\n\n...(方案已截断)"
+
 from backend.db.engine import async_session_factory
 from backend.services.ws_hub import ws_hub
 
@@ -1349,13 +1369,14 @@ class WorkItemService:
 
             # 获取前序节点输出（技术方案）作为路由辅助信息
             prev_output = ""
-            if routing_trigger is True and wf_context and definition:
+            # 只要不是显式禁用路由（routing_trigger=False），就提取前序方案
+            if routing_trigger is not False and wf_context and definition:
                 prev_output = self._extract_prev_agent_output(wf_context, definition, node["id"])
 
             # 注入前序节点的技术方案到 base_prompt（如果模板已引用则不重复追加）
             if prev_output:
                 if prev_output[:50] not in base_prompt:
-                    truncated_proposal = prev_output[:ROUTING_PROPOSAL_MAX_CHARS]
+                    truncated_proposal = _smart_truncate(prev_output, ROUTING_PROPOSAL_MAX_CHARS)
                     base_prompt += f"\n\n## 参考技术方案\n\n{truncated_proposal}"
 
             # ─── 智能路由决策 ─────────────────────────────────────────────
@@ -1374,7 +1395,7 @@ class WorkItemService:
                     # 构建路由输入：标题 + 描述 + 前序技术方案（截断）
                     routing_description = item.get("description", "")
                     if prev_output:
-                        truncated_proposal = prev_output[:ROUTING_PROPOSAL_MAX_CHARS]
+                        truncated_proposal = _smart_truncate(prev_output, ROUTING_PROPOSAL_MAX_CHARS)
                         routing_description = f"{routing_description}\n\n## 技术方案\n{truncated_proposal}"
 
                     routing_result = await group_route_service.analyze_routing(
@@ -1425,13 +1446,24 @@ class WorkItemService:
                 )
                 phase = 1 if is_frontend and backend_indices else 0
 
+                # 获取项目知识图谱摘要（静默降级）
+                project_knowledge = ""
+                try:
+                    project_knowledge = await knowledge_service.get_project_modules_summary(project_cwd)
+                    if project_knowledge and len(project_knowledge) > 2000:
+                        project_knowledge = project_knowledge[:2000] + "\n...(已截断)"
+                except Exception:
+                    pass
+
                 task_prompt = (
                     f"{group_context}\n\n"
                     f"## 需求\n{base_prompt}\n\n"
                     f"## 当前目标仓库\n"
                     f"你现在在 `{project_name}` 仓库（{project_cwd}）中工作。\n"
-                    f"请只修改本仓库相关的代码。如果此需求不涉及本仓库，请输出'无需修改'并结束。"
                 )
+                if project_knowledge:
+                    task_prompt += f"\n## 项目模块结构\n{project_knowledge}\n"
+                task_prompt += "\n请只修改本仓库相关的代码。如果此需求不涉及本仓库，请输出'无需修改'并结束。"
                 # 添加自动执行系统指令前缀 + 文档命名规范
                 task_prompt = AUTO_EXEC_PREFIX + task_prompt + _doc_naming_instruction(item["id"], title=item.get("title", ""), project_name=project_name)
 
@@ -1682,7 +1714,13 @@ class WorkItemService:
                     node_ctx = context.get(uid)
                     if isinstance(node_ctx, dict):
                         # 优先使用 agent_final_output（精炼摘要），降级使用 output
-                        final_out = node_ctx.get("agent_final_output") or node_ctx.get("output")
+                        final_out = node_ctx.get("agent_final_output")
+                        if not final_out:
+                            # output 是完整日志（含大量工具调用），尝试提取最终结论部分
+                            full_output = node_ctx.get("output", "")
+                            if full_output:
+                                # 取最后 3000 字符作为降级方案（通常结论在末尾）
+                                final_out = full_output[-3000:] if len(full_output) > 3000 else full_output
                         if final_out:
                             return final_out
 
@@ -2626,6 +2664,7 @@ class WorkItemService:
         project_id: Optional[str] = None,
         changed_files: Optional[List[str]] = None,
         worktree_path: Optional[str] = None,
+        source_project: Optional[str] = None,
     ) -> None:
         """从任务完成信息中提取产物并追加到 work_item.metadata.artifacts。
 
@@ -2642,11 +2681,23 @@ class WorkItemService:
         """
         artifacts: list = []
 
-        def _infer_file_stage(filename: str) -> str:
-            """根据文件名推断产物分类：测试报告归 test，其余归 code。"""
+        def _infer_file_stage(filename: str, file_path: str = "") -> str:
+            """根据文件名/路径推断产物分类：测试报告→test，工作流文档→doc，其余→code。"""
             lower = filename.lower()
+            path_lower = file_path.lower() if file_path else ""
+            # 测试报告
             if "测试报告" in lower or "test-report" in lower or "test_report" in lower:
                 return "test"
+            # 工作流文档：docs/ 目录下的 .md 或含特定关键词的 .md
+            if lower.endswith(".md"):
+                # docs/ 目录下的 .md 文件
+                if path_lower.startswith("docs/") or "/docs/" in path_lower:
+                    return "doc"
+                # 文件名含工作流文档关键词
+                doc_keywords = ("技术方案", "修改点", "测试用例", "tech-solution", "design-doc", "modification")
+                for kw in doc_keywords:
+                    if kw in lower:
+                        return "doc"
             return "code"
 
         # 提前获取 repo_url 与 project_path，供文件链接与 commit 链接复用
@@ -2697,17 +2748,20 @@ class WorkItemService:
                 if not file_url:
                     file_url = _build_local_file_url(file_path)
                 file_name = file_path.rsplit("/", 1)[-1] or file_path
-                artifacts.append({
+                art_entry = {
                     "id": str(uuid.uuid4()),
                     "type": "file",
                     "label": file_name,
-                    "stage": _infer_file_stage(file_name),
+                    "stage": _infer_file_stage(file_name, file_path),
                     "url": file_url,
                     "file_path": file_path,
                     "commit_hash": commit_hash,
                     "created_at": _now_iso(),
                     "task_id": task_id,
-                })
+                }
+                if source_project:
+                    art_entry["source_project"] = source_project
+                artifacts.append(art_entry)
 
         # 2. 从 Agent 文本输出中提取生成的文件路径（兜底）
         if output and isinstance(output, str):
@@ -2746,7 +2800,7 @@ class WorkItemService:
                         "id": str(uuid.uuid4()),
                         "type": "file",
                         "label": file_name,
-                        "stage": _infer_file_stage(file_name),
+                        "stage": _infer_file_stage(file_name, relative_path),
                         "url": file_url,
                         "file_path": relative_path,
                         "commit_hash": commit_hash or "",
@@ -2865,14 +2919,17 @@ class WorkItemService:
                     existing = []
 
                 # 全局去重：
-                # 1) 幂等性保护：若同一 task_id 的产物已存在，整批跳过
+                # 1) 幂等性保护：若同一 task_id 已有 file 类型产物，整批跳过（避免重复收集）
+                #    注意：仅当该 task_id 已有 file 产物时才跳过，因为上层可能只保存了 url/output
+                #    产物而未收集到 commit 文件（Agent 自行提交时 commit_hash 可能为空），
+                #    此时 plan 子任务收集流程应能补充收集文件产物。
                 # 2) 否则按 type 分别比对：file 用 file_path/label、commit 用 commit_hash、url 用 url
-                existing_task_ids = {
+                existing_task_ids_with_files = {
                     e.get("task_id")
                     for e in existing
-                    if isinstance(e, dict) and e.get("task_id")
+                    if isinstance(e, dict) and e.get("task_id") and e.get("type") == "file"
                 }
-                if task_id and task_id in existing_task_ids:
+                if task_id and task_id in existing_task_ids_with_files:
                     return
 
                 existing_file_keys: set = set()
@@ -2885,10 +2942,12 @@ class WorkItemService:
                     if e_type == "file":
                         fp = e.get("file_path") or ""
                         lb = e.get("label") or ""
+                        e_src = e.get("source_project") or ""
+                        # 使用 source_project 作为命名空间，避免多项目同名文件互相去重
                         if fp:
-                            existing_file_keys.add(f"path:{fp}")
+                            existing_file_keys.add(f"path:{e_src}:{fp}")
                         if lb:
-                            existing_file_keys.add(f"name:{lb}")
+                            existing_file_keys.add(f"name:{e_src}:{lb}")
                     elif e_type == "commit":
                         ch = e.get("commit_hash") or ""
                         if ch:
@@ -2904,14 +2963,15 @@ class WorkItemService:
                     if a_type == "file":
                         fp = art.get("file_path") or ""
                         lb = art.get("label") or ""
-                        if (fp and f"path:{fp}" in existing_file_keys) or (
-                            lb and f"name:{lb}" in existing_file_keys
+                        a_src = art.get("source_project") or ""
+                        if (fp and f"path:{a_src}:{fp}" in existing_file_keys) or (
+                            lb and f"name:{a_src}:{lb}" in existing_file_keys
                         ):
                             continue
                         if fp:
-                            existing_file_keys.add(f"path:{fp}")
+                            existing_file_keys.add(f"path:{a_src}:{fp}")
                         if lb:
-                            existing_file_keys.add(f"name:{lb}")
+                            existing_file_keys.add(f"name:{a_src}:{lb}")
                     elif a_type == "commit":
                         ch = art.get("commit_hash") or ""
                         if ch and ch in existing_commit_keys:
@@ -2976,9 +3036,10 @@ class WorkItemService:
         """收集 Plan 所有子任务的产物文件并生成汇总测试报告。
 
         当 task 关联了 plan_id 时，遍历该 Plan 的所有子任务：
-        1. 收集每个子任务 worktree 中的变更文件作为产物
+        1. 收集每个子任务 worktree 中的变更文件作为产物（各子任务独立测试报告保留为 stage="test"）
         2. 从每个子任务的 agent_final_output 中提取测试报告段落
-        3. 合并为一份统一测试报告写入工作项 worktree 并作为产物记录
+        3. 生成一份汇总测试报告（包含概述、代码改动摘要、各项目测试报告、测试要点）
+        4. 汇总报告写入工作项 worktree 的 docs/ 目录并作为 stage="test" 产物记录
 
         容错：任何单个子任务的失败不影响其他子任务的产物收集。
         """
@@ -3020,9 +3081,10 @@ class WorkItemService:
         # 收集每个子任务的变更文件产物（排除已由主 task 收集过的）
         for sub in subtask_rows:
             sub_id = sub.get("id", "")
-            if sub_id == task_id:
-                continue  # 主 task 已在上层收集过
-            sub_wt = sub.get("worktree_path") or ""
+            # 不再硬性跳过主 task —— 交由 _extract_and_save_artifacts 内的
+            # task_id 级去重保证幂等；这样即使主 task 在上层因 commit_hash 为空
+            # 而未成功收集产物，此处仍可补充收集。
+            sub_wt = sub.get("worktree_path") or sub.get("cwd") or ""
             sub_branch = sub.get("branch_name") or ""
             if not sub_wt or not os.path.isdir(sub_wt):
                 continue
@@ -3040,8 +3102,9 @@ class WorkItemService:
                     continue
                 changed = await self._get_commit_changed_files(sub_wt, sub_commit)
                 if changed:
-                    # 确定 project_path（用子任务的 cwd）
+                    # 确定来源项目名称（用子任务的 cwd 目录名）
                     sub_cwd = sub.get("cwd") or ""
+                    source_project = Path(sub_cwd).name if sub_cwd else ""
                     await self._extract_and_save_artifacts(
                         work_item_id,
                         sub_id,
@@ -3051,6 +3114,7 @@ class WorkItemService:
                         project_id=None,
                         changed_files=changed,
                         worktree_path=sub_wt,
+                        source_project=source_project,
                     )
             except Exception as exc:
                 logger.warning(
@@ -3058,7 +3122,29 @@ class WorkItemService:
                     sub_id[:8], exc,
                 )
 
-        # 从各子任务 agent_final_output 中提取测试报告并汇总
+        # 收集各子任务的变更文件列表（用于汇总报告的代码改动摘要）
+        project_changed_files: dict = {}  # project_name -> list of files
+        for sub in subtask_rows:
+            sub_wt = sub.get("worktree_path") or sub.get("cwd") or ""
+            if not sub_wt or not os.path.isdir(sub_wt):
+                continue
+            sub_cwd = sub.get("cwd") or ""
+            project_name = Path(sub_cwd).name if sub_cwd else f"task-{sub.get('id', '?')[:8]}"
+            try:
+                from backend.runtime.git_utils import git_command
+                code, log_output = await git_command(
+                    Path(sub_wt), ["log", "-1", "--format=%H"], timeout=5
+                )
+                if code == 0 and log_output.strip():
+                    changed = await self._get_commit_changed_files(sub_wt, log_output.strip())
+                    if changed:
+                        existing = project_changed_files.get(project_name, [])
+                        existing.extend(changed)
+                        project_changed_files[project_name] = existing
+            except Exception:
+                pass
+
+        # 从各子任务 agent_final_output 中提取测试报告
         report_sections: list = []
         for sub in subtask_rows:
             agent_output = sub.get("agent_final_output") or ""
@@ -3073,15 +3159,66 @@ class WorkItemService:
             if test_section:
                 report_sections.append((project_name, test_section))
 
-        if not report_sections:
+        if not report_sections and not project_changed_files:
             return
 
-        # 生成统一测试报告 Markdown
-        report_lines = ["# 测试报告\n"]
-        for project_name, section in report_sections:
-            report_lines.append(f"## {project_name}\n")
-            report_lines.append(section.strip())
-            report_lines.append("")
+        # 获取工作项标题用于汇总报告
+        wi_title = ""
+        async with async_session_factory() as session:
+            title_row = (await session.execute(
+                text("SELECT title FROM work_items WHERE id = :id"),
+                {"id": work_item_id},
+            )).fetchone()
+            if title_row:
+                wi_title = dict(title_row._mapping).get("title", "")
+
+        # 生成汇总测试报告 Markdown
+        project_list = ", ".join(
+            sorted(set(
+                [p for p, _ in report_sections] +
+                list(project_changed_files.keys())
+            ))
+        )
+        report_lines = ["# 测试报告（汇总）\n"]
+        report_lines.append("## 概述\n")
+        report_lines.append(f"- 工作项：{wi_title or work_item_id[:8]}")
+        report_lines.append(f"- 涉及项目：{project_list}\n")
+
+        # 代码改动摘要
+        if project_changed_files:
+            report_lines.append("## 代码改动摘要\n")
+            for proj_name in sorted(project_changed_files.keys()):
+                files = project_changed_files[proj_name]
+                report_lines.append(f"### {proj_name}\n")
+                # 去重并排序
+                unique_files = sorted(set(files))
+                for f in unique_files:
+                    report_lines.append(f"- `{f}`")
+                report_lines.append("")
+
+        # 各项目测试报告
+        if report_sections:
+            report_lines.append("## 各项目测试报告\n")
+            for project_name, section in report_sections:
+                report_lines.append(f"### {project_name}\n")
+                report_lines.append(section.strip())
+                report_lines.append("")
+
+        # 测试要点与注意事项（从各子报告中提取关键内容）
+        notes_items = self._extract_test_notes_from_sections(report_sections)
+        report_lines.append("## 测试要点与注意事项\n")
+        if notes_items:
+            for note in notes_items:
+                report_lines.append(f"- {note}")
+        else:
+            # 根据改动范围生成基本建议
+            if project_changed_files:
+                report_lines.append("- 基于改动范围，建议对涉及的功能模块进行回归测试")
+                if len(project_changed_files) > 1:
+                    report_lines.append("- 涉及多个项目改动，请关注跨项目联调的兼容性")
+                report_lines.append("- 建议在集成环境中验证各项目间的接口交互")
+        report_lines.append("")
+
         report_content = "\n".join(report_lines)
 
         # 写入工作项 worktree
@@ -3124,24 +3261,15 @@ class WorkItemService:
         report_dir = Path(wi_worktree) / "docs"
         report_dir.mkdir(parents=True, exist_ok=True)
         wi_prefix = f"wi-{work_item_id[:8]}"
-        # 获取工作项标题用于文件命名
-        wi_title = ""
-        async with async_session_factory() as session:
-            title_row = (await session.execute(
-                text("SELECT title FROM work_items WHERE id = :id"),
-                {"id": work_item_id},
-            )).fetchone()
-            if title_row:
-                wi_title = dict(title_row._mapping).get("title", "")
         slug = _title_slug(wi_title) if wi_title else ""
         if slug:
-            report_filename = f"{wi_prefix}-{slug}-测试报告.md"
+            report_filename = f"{wi_prefix}-{slug}-测试报告(汇总).md"
         else:
-            report_filename = f"{wi_prefix}-测试报告.md"
+            report_filename = f"{wi_prefix}-测试报告(汇总).md"
         report_path = report_dir / report_filename
         report_path.write_text(report_content, encoding="utf-8")
         logger.info(
-            "[work_item] wrote unified test report: %s for item=%s",
+            "[work_item] wrote summary test report: %s for item=%s",
             str(report_path), work_item_id[:8],
         )
 
@@ -3152,7 +3280,7 @@ class WorkItemService:
         )
         commit_code, commit_output = await git_command(
             Path(wi_worktree),
-            ["commit", "-m", f"docs: 添加统一测试报告 {report_filename}", "--no-verify"],
+            ["commit", "-m", f"docs: 添加汇总测试报告 {report_filename}", "--no-verify"],
             timeout=15,
         )
         report_commit_hash = ""
@@ -3236,6 +3364,39 @@ class WorkItemService:
             return after.strip().lstrip("：: \n")
 
         return ""
+
+    @staticmethod
+    def _extract_test_notes_from_sections(report_sections: list) -> list:
+        """从各子任务测试报告段落中提取注意事项和建议。
+
+        扫描每个测试报告段落，匹配含"注意事项"、"建议"、"要点"等标题后的列表项。
+        返回去重后的注意事项列表。
+        """
+        import re
+        notes: list = []
+        seen: set = set()
+
+        # 匹配注意事项/建议/要点相关段落的 pattern
+        section_patterns = [
+            r"(?:^|\n)#+\s*(?:注意事项|测试要点|建议|注意|关注点|回归测试)[：:]?\s*\n([\s\S]+?)(?=\n#+\s|\Z)",
+            r"(?:^|\n)(?:注意事项|测试要点|建议|注意|关注点)[：:]\s*\n([\s\S]+?)(?=\n#+\s|\Z)",
+        ]
+        # 匹配列表项
+        list_item_pattern = r"^[\s]*[-*•]\s*(.+)$"
+
+        for _project_name, section in report_sections:
+            for pattern in section_patterns:
+                matches = re.finditer(pattern, section)
+                for m in matches:
+                    block = m.group(1)
+                    # 从块中提取列表项
+                    for line_match in re.finditer(list_item_pattern, block, re.MULTILINE):
+                        item = line_match.group(1).strip()
+                        if item and item not in seen:
+                            seen.add(item)
+                            notes.append(item)
+
+        return notes
 
     async def on_work_item_task_completed(self, task_id: str, result: str):
         """
@@ -3350,6 +3511,22 @@ class WorkItemService:
                         except Exception as exc:
                             logger.warning(
                                 "[work_item] failed to enumerate changed files: %s", exc,
+                            )
+                    # 如果没有新的 auto-commit（Agent 已自行提交），获取最新 commit 的变更文件
+                    if not commit_hash and worktree_path:
+                        try:
+                            from backend.runtime.git_utils import git_command as _git_cmd
+                            _code, _log = await _git_cmd(
+                                Path(worktree_path), ["log", "-1", "--format=%H"], timeout=5
+                            )
+                            if _code == 0 and _log.strip():
+                                commit_hash = _log.strip()
+                                changed_files = await self._get_commit_changed_files(
+                                    worktree_path, commit_hash
+                                )
+                        except Exception as exc:
+                            logger.debug(
+                                "[work_item] failed to get latest commit for main task: %s", exc,
                             )
 
         # 提前加载工作项，以便提取产物时获取 project_id。同时后续需要检查节点一致性。

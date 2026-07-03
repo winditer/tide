@@ -8,6 +8,7 @@ import {
   useUpdateWorkflow,
   useRunWorkflow,
   useWorkflowRuns,
+  useAuth,
 } from "@tide/core";
 import type { WorkflowDefinition } from "@tide/core";
 import { WorkflowCanvas, WorkflowRunHistory } from "@tide/views";
@@ -32,6 +33,16 @@ function WorkflowEditorPageInner() {
   const update = useUpdateWorkflow();
   const run = useRunWorkflow();
   const { data: runs, isLoading: runsLoading } = useWorkflowRuns(id, 5000);
+  const { user } = useAuth();
+
+  // 判断当前用户是否可以编辑此工作流
+  const canEdit = (() => {
+    if (!user) return true; // 未登录不限制
+    if (user.role === "admin") return true;
+    if (user.role === "viewer") return false;
+    // member 只能编辑自己创建的
+    return workflow?.created_by != null && workflow.created_by === user.id;
+  })();
 
   const [draft, setDraft] = useState<WorkflowDefinition | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -160,12 +171,12 @@ function WorkflowEditorPageInner() {
               />
             ) : (
               <h1
-                className="group truncate text-2xl font-semibold tracking-tight cursor-pointer hover:text-primary/80 transition-colors"
-                onClick={startEditName}
-                title="点击编辑名称"
+                className={`truncate text-2xl font-semibold tracking-tight transition-colors ${canEdit ? "group cursor-pointer hover:text-primary/80" : ""}`}
+                onClick={canEdit ? startEditName : undefined}
+                title={canEdit ? "点击编辑名称" : undefined}
               >
                 {workflow.name}
-                <Pencil className="inline-block ml-1.5 h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+                {canEdit && <Pencil className="inline-block ml-1.5 h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />}
               </h1>
             )}
             <span className="rounded-md border border-border bg-muted px-1.5 py-[1px] font-mono text-[10px] tracking-widest text-muted-foreground">
@@ -192,12 +203,12 @@ function WorkflowEditorPageInner() {
             />
           ) : (
             <p
-              className="group mt-1 max-w-2xl truncate text-sm text-muted-foreground cursor-pointer hover:text-foreground/70 transition-colors"
-              onClick={startEditDesc}
-              title="点击编辑描述"
+              className={`mt-1 max-w-2xl truncate text-sm text-muted-foreground transition-colors ${canEdit ? "group cursor-pointer hover:text-foreground/70" : ""}`}
+              onClick={canEdit ? startEditDesc : undefined}
+              title={canEdit ? "点击编辑描述" : undefined}
             >
-              {workflow.description || "添加描述..."}
-              <Pencil className="inline-block ml-1 h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity" />
+              {workflow.description || (canEdit ? "添加描述..." : "暂无描述")}
+              {canEdit && <Pencil className="inline-block ml-1 h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity" />}
             </p>
           )}
         </div>
@@ -218,12 +229,13 @@ function WorkflowEditorPageInner() {
           definition={draft ?? workflow.definition}
           subtitle={workflow.name}
           projectId={projectId}
-          onChange={(def) => {
+          readOnly={!canEdit}
+          onChange={canEdit ? (def) => {
             setDraft(def);
             setDirty(true);
-          }}
-          onSave={handleSave}
-          onRun={handleRun}
+          } : undefined}
+          onSave={canEdit ? handleSave : undefined}
+          onRun={canEdit ? handleRun : undefined}
           isSaving={update.isPending}
           isRunning={run.isPending}
         />
