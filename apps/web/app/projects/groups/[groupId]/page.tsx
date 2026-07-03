@@ -99,6 +99,7 @@ import {
   type ProjectGroupMember,
   type ProjectInfo,
   getGroupCommitDiff,
+  appPath,
 } from "@tide/core";
 import { KnowledgeGraphCard } from "@tide/views";
 import { FileTree } from "@tide/views/code-editor";
@@ -2253,7 +2254,7 @@ function SettingsPane({
       </div>
 
       {/* Workflow Binding */}
-      <WorkflowBindingCard groupId={groupId} />
+      <WorkflowBindingCard groupId={groupId} members={members} />
 
       {/* Member project removal */}
       <MemberRemovalCard groupId={groupId} members={members} />
@@ -2287,7 +2288,7 @@ function SettingsPane({
   );
 }
 
-function WorkflowBindingCard({ groupId }: { groupId: string }) {
+function WorkflowBindingCard({ groupId, members = [] }: { groupId: string; members?: ProjectGroupMember[] }) {
   const [selectedWfId, setSelectedWfId] = useState("");
   const workflowsQuery = useWorkflows();
   const bindingQuery = useGroupWorkflow(groupId);
@@ -2364,7 +2365,7 @@ function WorkflowBindingCard({ groupId }: { groupId: string }) {
               <span className="font-medium">{currentWorkflowName}</span>
             </div>
             <a
-              href={`/workflows/${encodeURIComponent(binding.workflow_id)}`}
+              href={appPath(`/workflows/${encodeURIComponent(binding.workflow_id)}${members.length > 0 ? `?projectId=${encodeURIComponent(members[0].project_id)}` : ""}`)}
               className="mt-0.5 inline-block text-xs text-muted-foreground transition-colors hover:text-foreground"
             >
               查看工作流 →

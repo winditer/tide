@@ -10,6 +10,7 @@ import {
   updateWorkflow,
   deleteWorkflow,
   toggleWorkflow,
+  duplicateWorkflow,
   runWorkflow,
   fetchWorkflowRuns,
   fetchWorkflowRun,
@@ -92,6 +93,16 @@ export function useToggleWorkflow() {
     onSuccess: (_data, id) => {
       qc.invalidateQueries({ queryKey: ["workflows"] });
       qc.invalidateQueries({ queryKey: ["workflow", id] });
+    },
+  });
+}
+
+export function useDuplicateWorkflow() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => duplicateWorkflow(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["workflows"] });
     },
   });
 }

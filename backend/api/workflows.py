@@ -157,6 +157,23 @@ async def delete_workflow(
     return {"ok": True}
 
 
+@router.post("/{workflow_id}/duplicate", response_model=WorkflowResponse)
+async def duplicate_workflow(
+    workflow_id: str,
+    current_user=Depends(get_optional_user),
+):
+    """复制工作流：生成新副本，由当前用户创建。"""
+    existing = await workflow_service.get_workflow(workflow_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+
+    created_by = current_user.get("id") if current_user else None
+    result = await workflow_service.duplicate_workflow(workflow_id, created_by)
+    if not result:
+        raise HTTPException(status_code=500, detail="Failed to duplicate workflow")
+    return result
+
+
 # ── Run management ───────────────────────────────────────
 
 

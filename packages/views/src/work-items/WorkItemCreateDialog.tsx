@@ -10,6 +10,7 @@ import {
   useProjectGroups,
   useProjectGroup,
 } from "@tide/core";
+import { AIOptimizeButton } from "./AIOptimizeButton";
 
 interface WorkItemCreateDialogProps {
   /**
@@ -276,6 +277,11 @@ export function WorkItemCreateDialog({
               onChange={(e) => setDescription(e.target.value)}
               rows={3}
               className="w-full rounded-lg border-0 bg-muted/50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+            <AIOptimizeButton
+              description={description}
+              onOptimized={setDescription}
+              disabled={!description.trim()}
             />
           </Field>
 

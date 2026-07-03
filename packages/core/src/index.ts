@@ -214,6 +214,7 @@ export {
   updateWorkflow,
   deleteWorkflow,
   toggleWorkflow,
+  duplicateWorkflow,
   runWorkflow,
   fetchWorkflowRuns,
   fetchWorkflowRun,
@@ -233,6 +234,7 @@ export {
   useUpdateWorkflow,
   useDeleteWorkflow,
   useToggleWorkflow,
+  useDuplicateWorkflow,
   useRunWorkflow,
   useWorkflowRuns,
   useWorkflowRun,
@@ -349,6 +351,7 @@ export {
   aiDecomposeWorkItems,
   batchCreateWorkItems,
   resolveMerge,
+  optimizeDescription,
   type WorkItemFilters,
   type AIDecomposedItem,
   type AIDecomposeResponse,
@@ -356,6 +359,8 @@ export {
   type BatchCreateWorkItemsResponse,
   type ResolveMergeParams,
   type ResolveMergeResponse,
+  type OptimizeDescriptionParams,
+  type OptimizeDescriptionResponse,
 } from "./api/work-items";
 export {
   useWorkItemBoard,
@@ -375,6 +380,7 @@ export {
   useAIDecompose,
   useBatchCreateWorkItems,
   useResolveMerge,
+  useOptimizeDescription,
 } from "./hooks/use-work-items";
 
 // Versions

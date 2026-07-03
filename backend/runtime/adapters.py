@@ -46,6 +46,37 @@ from backend.runtime.task_runtime import CodexTaskRuntime
 logger = logging.getLogger("tide-ws")
 
 
+# ── CLI 噪声过滤 ──
+
+_STDIN_NOISE_RE = re.compile(
+    r"^Reading additional input from stdin\.{0,3}\n?|^Reading from stdin\.{0,3}\n?",
+    re.MULTILINE,
+)
+
+
+def _filter_cli_noise(text: str) -> str:
+    """移除 CLI stdin 噪声提示。"""
+    if not text:
+        return text
+    return _STDIN_NOISE_RE.sub("", text).strip()
+
+
+_FILTERABLE_EVENT_TYPES = {"message", "text", "tool_output", "complete"}
+
+
+def _apply_noise_filter(events: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """对事件列表中的文本内容做噪声过滤；过滤后为空则降级为 skip。"""
+    result: list[tuple[str, str]] = []
+    for event_type, text in events:
+        if event_type in _FILTERABLE_EVENT_TYPES:
+            text = _filter_cli_noise(text)
+            if not text:
+                result.append(("skip", ""))
+                continue
+        result.append((event_type, text))
+    return result
+
+
 # ── Qoder permission mode 常量与工具函数 ──
 
 QODER_PERMISSION_MODE_CHOICES = {"default", "accept_edits", "bypass_permissions", "dont_ask", "auto"}
@@ -462,6 +493,9 @@ def parse_codex_json_event(line: str) -> tuple[str, str]:
     try:
         obj = json.loads(line)
     except json.JSONDecodeError:
+        # 过滤已知的 CLI 噪声提示
+        if "Reading additional input from stdin" in raw or "Reading from stdin" in raw:
+            return "skip", ""
         return "text", raw
 
     typ = obj.get("type")
@@ -871,7 +905,7 @@ class CodexAdapter(AgentAdapter):
         return common + ["--json", "--skip-git-repo-check", "-C", str(task.cwd), task.prompt]
 
     def parse_events(self, line: str) -> list[tuple[str, str]]:
-        return [parse_codex_json_event(line)]
+        return _apply_noise_filter([parse_codex_json_event(line)])
 
     def is_resumable(self, conv: Optional[ConversationInfo]) -> bool:
         if not conv or conv.agent_id != self.id:
@@ -935,7 +969,7 @@ class ClaudeAdapter(AgentAdapter):
         try:
             obj = json.loads(raw)
         except json.JSONDecodeError:
-            return [("text", raw)]
+            return _apply_noise_filter([("text", raw)])
 
         events: list[tuple[str, str]] = []
         session_id = obj.get("session_id") or obj.get("sessionId")
@@ -965,7 +999,8 @@ class ClaudeAdapter(AgentAdapter):
         else:
             text = extract_claude_text_content(obj.get("message") or obj.get("content") or obj.get("result"))
             events.append(("message", text) if text else ("skip", ""))
-        return events or [("skip", "")]
+        return _apply_noise_filter(events or [("skip", "")])
+
 
     def is_resumable(self, conv: Optional[ConversationInfo]) -> bool:
         return bool(conv and conv.agent_id == self.id and conv.session_id)
@@ -1025,7 +1060,7 @@ class QoderAdapter(AgentAdapter):
     timeout_seconds = QODER_TIMEOUT_SECONDS
     valid_model_keys = QODER_VALID_MODEL_KEYS
 
-    def normalize_model(self, model: str) -> str:
+    def normalize_model(self, model: str) -> str:  # noqa: D102
         """Qoder CLI 只接受 tier 名称；'auto' 或无效值不传递给 CLI。
 
         与 Codex/Claude 不同，Qoder CLI 不接受原始模型名（如 gpt-4o），
@@ -1071,7 +1106,7 @@ class QoderAdapter(AgentAdapter):
         return argv
 
     def parse_events(self, line: str) -> list[tuple[str, str]]:
-        return parse_qoder_json_event(line)
+        return _apply_noise_filter(parse_qoder_json_event(line))
 
     def is_resumable(self, conv: Optional[ConversationInfo]) -> bool:
         return bool(conv and conv.agent_id == self.id and conv.session_id)

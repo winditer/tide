@@ -3,8 +3,11 @@
 提供工作项 CRUD + 流转操作，对接 ``work_item_service``。
 """
 
+import asyncio
 import json
 import logging
+import os
+import re
 import subprocess
 import uuid
 from datetime import datetime, timezone
@@ -28,6 +31,7 @@ from backend.models.schemas import (
     WorkItemTransitionResponse,
     WorkItemUpdate,
 )
+from backend.runtime.config import DEFAULT_AGENT_ID, OPTIMIZE_AGENT_ID
 from backend.services.ai_decompose_service import ai_decompose_service
 from backend.services.work_item_service import work_item_service
 from backend.db.engine import async_session_factory
@@ -38,6 +42,59 @@ logger = logging.getLogger("tide.api.work_items")
 AI_DECOMPOSE_MAX_FILE_BYTES = 10 * 1024 * 1024
 # 支持的文本扩展名（直接 UTF-8 读取）
 _TEXT_FILE_SUFFIXES = {".md", ".markdown", ".txt", ".log", ".rst", ".csv", ".json", ".yaml", ".yml"}
+
+# 描述优化 Agent 调用超时（秒）
+_OPTIMIZE_TIMEOUT = 60
+
+
+class OptimizeDescriptionRequest(BaseModel):
+    description: str
+    agent_id: Optional[str] = None
+
+
+async def _call_llm_for_text(agent_id: str, prompt: str) -> str:
+    """通过 AgentExecutor 调用 Agent CLI 获取纯文本响应。
+
+    与 ai_decompose_service._call_agent_cli 同模式，但更简化：
+    不解析 JSON，只收集纯文本输出。
+    """
+    from backend.runtime.executor import AgentExecutor
+
+    task_id = f"optimize-desc-{uuid.uuid4().hex[:8]}"
+    executor = AgentExecutor()
+    output_parts: list[str] = []
+
+    try:
+        async with asyncio.timeout(_OPTIMIZE_TIMEOUT):
+            async for event in executor.run_task(
+                task_id=task_id,
+                agent_id=agent_id,
+                prompt=prompt,
+                cwd=str(Path.cwd()),
+                model=None,
+                full_auto=True,
+            ):
+                if event.type == "output":
+                    output_parts.append(event.content)
+                elif event.type == "completed":
+                    # completed 事件的 content 是最终汇总，已包含流式 output 内容
+                    # 仅在没有收到任何流式输出时使用它作为 fallback
+                    if not output_parts and event.content:
+                        output_parts.append(event.content)
+                elif event.type == "failed":
+                    raise RuntimeError(
+                        f"Agent 执行失败：{event.content or 'unknown error'}"
+                    )
+    except asyncio.TimeoutError:
+        await executor.cancel_task(task_id)
+        raise RuntimeError(f"Agent CLI 执行超时（{_OPTIMIZE_TIMEOUT}s）")
+
+    result = "\n".join(str(p) for p in output_parts if p).strip()
+    # 过滤 CLI 噪声提示
+    result = re.sub(r"^Reading additional input from stdin\.{0,3}\n?", "", result, flags=re.MULTILINE).strip()
+    if not result:
+        raise RuntimeError("Agent 未返回有效输出")
+    return result
 
 router = APIRouter(prefix="/api/work-items", tags=["work-items"])
 
@@ -55,6 +112,41 @@ def _ensure_not_viewer(current_user: Optional[dict]) -> None:
     """写操作权限检查：viewer 角色禁止修改资源。"""
     if current_user and current_user.get("role") == "viewer":
         raise HTTPException(status_code=403, detail="Viewers cannot modify resources")
+
+
+@router.post("/optimize-description")
+async def optimize_description(
+    body: OptimizeDescriptionRequest,
+    current_user=Depends(get_optional_user),
+):
+    """调用 Agent 优化工作项描述文本。"""
+    # Agent 选择优先级：body.agent_id > OPTIMIZE_AGENT_ID > DEFAULT_AGENT_ID
+    agent_id = (
+        body.agent_id
+        or OPTIMIZE_AGENT_ID
+        or DEFAULT_AGENT_ID
+    )
+
+    # 构造优化提示词
+    prompt = (
+        "你是资深项目管理专家。请润色以下工作项描述，要求：\n"
+        "1. 保持原意不变\n"
+        "2. 表述更清晰、专业、简洁\n"
+        "3. 突出关键要点和验收标准\n"
+        "4. 仅返回润色后的描述文本，不要任何其他解释\n\n"
+        f"原始描述：\n{body.description}"
+    )
+
+    try:
+        result = await _call_llm_for_text(agent_id, prompt)
+    except RuntimeError as exc:
+        logger.error("[optimize-description] LLM 调用失败: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("[optimize-description] 未预期异常")
+        raise HTTPException(status_code=500, detail=f"描述优化失败：{type(exc).__name__}: {exc}")
+
+    return {"optimized": result, "agent_id": agent_id}
 
 
 @router.post("", response_model=WorkItemResponse)

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button, Input } from "@tide/ui";
-import { useDeleteWorkflow, useToggleWorkflow, useAuth } from "@tide/core";
+import { useDeleteWorkflow, useToggleWorkflow, useDuplicateWorkflow, useAuth } from "@tide/core";
 import type { Workflow } from "@tide/core";
 
 function formatTime(iso: string | null) {
@@ -30,6 +30,7 @@ export function WorkflowList({ items }: WorkflowListProps) {
   const [showMineOnly, setShowMineOnly] = useState(false);
   const del = useDeleteWorkflow();
   const toggle = useToggleWorkflow();
+  const dup = useDuplicateWorkflow();
   const { user } = useAuth();
 
   const canManageWorkflow = (workflow: Workflow) => {
@@ -102,6 +103,9 @@ export function WorkflowList({ items }: WorkflowListProps) {
                 版本
               </th>
               <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground">
+                创建者
+              </th>
+              <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground">
                 更新时间
               </th>
               <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground">
@@ -132,6 +136,9 @@ export function WorkflowList({ items }: WorkflowListProps) {
                   </td>
                   <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
                     v{w.version}
+                  </td>
+                  <td className="px-4 py-3 text-sm text-muted-foreground">
+                    {w.created_by_name || "—"}
                   </td>
                   <td className="px-4 py-3 text-xs text-muted-foreground">
                     {formatTime(w.updated_at)}
@@ -166,6 +173,14 @@ export function WorkflowList({ items }: WorkflowListProps) {
                         onClick={() => router.push(`/workflows/${w.id}`)}
                       >
                         {canManageWorkflow(w) ? "编辑" : "查看"}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => dup.mutate(w.id)}
+                        disabled={dup.isPending}
+                      >
+                        复制
                       </Button>
                       <Button
                         variant="ghost"

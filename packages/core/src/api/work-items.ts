@@ -253,3 +253,25 @@ export function resolveMerge(
     data,
   );
 }
+
+// ---------- AI 优化描述 ----------
+
+export interface OptimizeDescriptionParams {
+  description: string;
+  agent_id?: string;
+}
+
+export interface OptimizeDescriptionResponse {
+  optimized: string;
+  agent_id: string;
+}
+
+/** 调用 AI 优化工作项描述 */
+export function optimizeDescription(
+  params: OptimizeDescriptionParams,
+): Promise<OptimizeDescriptionResponse> {
+  return apiClient.post<OptimizeDescriptionResponse>(
+    "/api/work-items/optimize-description",
+    params,
+  );
+}

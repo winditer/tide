@@ -44,6 +44,10 @@ export function toggleWorkflow(id: string): Promise<Workflow> {
   return apiClient.patch<Workflow>(`/api/workflows/${id}/toggle`);
 }
 
+export function duplicateWorkflow(id: string): Promise<Workflow> {
+  return apiClient.post<Workflow>(`/api/workflows/${id}/duplicate`);
+}
+
 export function runWorkflow(
   id: string,
   body?: RunWorkflowInput

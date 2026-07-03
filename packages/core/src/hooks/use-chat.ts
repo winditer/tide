@@ -420,12 +420,17 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
           output_type?: string;
           payload?: Record<string, unknown>;
         };
-        const chunk =
+        const rawChunk =
           (typeof raw.chunk === "string" ? raw.chunk : "") ||
           (typeof raw.payload?.chunk === "string"
             ? (raw.payload!.chunk as string)
             : "") ||
           "";
+        // Filter CLI stdin noise before appending to message
+        const chunk = rawChunk
+          .replace(/^Reading additional input from stdin\.{0,3}\n?/gm, "")
+          .replace(/^Reading from stdin\.{0,3}\n?/gm, "")
+          .trim();
         if (chunk) {
           setMessages((prev) =>
             prev.map((m) => {

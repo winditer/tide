@@ -21,9 +21,11 @@ import {
   aiDecomposeWorkItems,
   batchCreateWorkItems,
   resolveMerge,
+  optimizeDescription,
   type WorkItemFilters,
   type BatchCreateWorkItemsPayload,
   type ResolveMergeParams,
+  type OptimizeDescriptionParams,
 } from "../api/work-items";
 import type {
   WorkItemCreate,
@@ -217,5 +219,12 @@ export function useResolveMerge() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["work-items"] });
     },
+  });
+}
+
+/** AI 优化工作项描述 */
+export function useOptimizeDescription() {
+  return useMutation({
+    mutationFn: (params: OptimizeDescriptionParams) => optimizeDescription(params),
   });
 }

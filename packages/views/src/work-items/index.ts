@@ -5,3 +5,4 @@ export { WorkItemDetailPanel } from "./WorkItemDetailPanel";
 export { WorkItemListView } from "./WorkItemListView";
 export { CrossRepoResults } from "./CrossRepoResults";
 export { AIDecomposeDialog, type AIDecomposeDialogProps } from "./AIDecomposeDialog";
+export { AIOptimizeButton } from "./AIOptimizeButton";

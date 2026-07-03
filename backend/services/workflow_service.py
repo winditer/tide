@@ -80,21 +80,23 @@ class WorkflowService:
         offset: int = 0,
         enabled: Optional[int] = None,
     ) -> list:
-        conditions = ["workspace_id = :workspace_id"]
+        conditions = ["w.workspace_id = :workspace_id"]
         params: dict = {"workspace_id": workspace_id, "limit": limit, "offset": offset}
         if enabled is not None:
-            conditions.append("enabled = :enabled")
+            conditions.append("w.enabled = :enabled")
             params["enabled"] = int(enabled)
         where = " AND ".join(conditions)
         async with async_session_factory() as session:
             result = await session.execute(
                 text(
                     f"""
-                    SELECT id, workspace_id, name, description, definition, version, enabled,
-                           created_by, created_at, updated_at
-                    FROM workflows
+                    SELECT w.id, w.workspace_id, w.name, w.description, w.definition,
+                           w.version, w.enabled, w.created_by, w.created_at, w.updated_at,
+                           COALESCE(u.display_name, u.username, w.created_by) AS created_by_name
+                    FROM workflows w
+                    LEFT JOIN users u ON w.created_by = u.id
                     WHERE {where}
-                    ORDER BY updated_at DESC
+                    ORDER BY w.updated_at DESC
                     LIMIT :limit OFFSET :offset
                     """
                 ),
@@ -113,9 +115,12 @@ class WorkflowService:
             result = await session.execute(
                 text(
                     """
-                    SELECT id, workspace_id, name, description, definition, version, enabled,
-                           created_by, created_at, updated_at
-                    FROM workflows WHERE id = :id
+                    SELECT w.id, w.workspace_id, w.name, w.description, w.definition,
+                           w.version, w.enabled, w.created_by, w.created_at, w.updated_at,
+                           COALESCE(u.display_name, u.username, w.created_by) AS created_by_name
+                    FROM workflows w
+                    LEFT JOIN users u ON w.created_by = u.id
+                    WHERE w.id = :id
                     """
                 ),
                 {"id": workflow_id},
@@ -221,6 +226,39 @@ class WorkflowService:
             await session.commit()
         logger.info("Workflow deleted: %s", workflow_id[:8])
         return True
+
+    async def duplicate_workflow(
+        self, workflow_id: str, created_by: Optional[str] = None
+    ) -> Optional[dict]:
+        """复制工作流，生成独立副本。"""
+        source = await self.get_workflow(workflow_id)
+        if not source:
+            return None
+
+        new_id = str(uuid.uuid4())
+        now = self._now_iso()
+        new_name = f"{source['name']}（副本）"
+
+        async with async_session_factory() as session:
+            await session.execute(
+                text("""
+                    INSERT INTO workflows
+                        (id, workspace_id, name, description, definition, version, enabled, created_by, created_at, updated_at)
+                    VALUES (:id, :workspace_id, :name, :description, :definition, 1, 1, :created_by, :created_at, :updated_at)
+                """),
+                {
+                    "id": new_id,
+                    "workspace_id": source.get("workspace_id", "default"),
+                    "name": new_name,
+                    "description": source.get("description") or "",
+                    "definition": json.dumps(source["definition"]),
+                    "created_by": created_by,
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+            await session.commit()
+        return await self.get_workflow(new_id)
 
     # ── runs query ───────────────────────────────────────
 

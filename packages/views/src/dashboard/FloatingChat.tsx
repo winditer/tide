@@ -11,6 +11,7 @@ import {
 import { useAgents, useChat, useProjects, useProjectGroups } from "@tide/core";
 import { ChatMessageList } from "./ChatMessageList";
 import { ChatArtifactPanel } from "./ChatArtifactPanel";
+import { AIOptimizeButton } from "../work-items/AIOptimizeButton";
 
 interface ButtonPosition {
   /** distance from viewport bottom in px */
@@ -581,6 +582,12 @@ export function FloatingChat() {
                         : "输入消息开始对话... (⌘+Enter)"
                   }
                   className="min-h-[60px] max-h-[200px] flex-1 resize-y rounded-lg border-0 bg-muted/50 px-3 py-2 text-sm leading-snug text-foreground placeholder:text-muted-foreground transition-shadow focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+                <AIOptimizeButton
+                  description={draftInput}
+                  onOptimized={setDraftInput}
+                  disabled={!draftInput.trim()}
+                  compact
                 />
                 <button
                   type="button"

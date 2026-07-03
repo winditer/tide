@@ -4,6 +4,7 @@
 import { useMemo, useState, useCallback } from "react";
 import { Pencil, Trash2, AlertTriangle, GitMerge, GitBranch, Maximize2, Minimize2, CheckCircle2, ArrowRight, Clock } from "lucide-react";
 import { Button, Badge, Input, Select } from "@tide/ui";
+import { AIOptimizeButton } from "./AIOptimizeButton";
 import {
   useWorkItem,
   useWorkItemTransitions,
@@ -220,6 +221,11 @@ export function WorkItemDetailPanel({
               rows={4}
               className="w-full rounded-lg border-0 bg-muted/50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
               placeholder="描述"
+            />
+            <AIOptimizeButton
+              description={editDescription}
+              onOptimized={setEditDescription}
+              disabled={!editDescription.trim()}
             />
             <div className="flex gap-2">
               <Button

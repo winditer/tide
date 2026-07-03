@@ -136,6 +136,9 @@ LARK_APP_REDIRECT_URI = os.environ.get("LARK_APP_REDIRECT_URI", "")
 TIDE_PASSWORD_MIN_LENGTH = int(os.environ.get("TIDE_PASSWORD_MIN_LENGTH", "8"))
 TIDE_DATA_DIR: str = os.getenv("TIDE_DATA_DIR", str(Path.home() / ".tide" / "data"))
 
+# ─── AI 描述优化 ──────────────────────────────────────────────────────
+OPTIMIZE_AGENT_ID = os.getenv("OPTIMIZE_AGENT_ID", "")
+
 # ─── Work Item Smart Routing ───────────────────────────────────────────
 WORKITEM_SMART_ROUTING = os.getenv("WORKITEM_SMART_ROUTING", "false").lower() == "true"
 WORKITEM_SMART_ROUTING_TIMEOUT = int(os.getenv("WORKITEM_SMART_ROUTING_TIMEOUT", "30"))
