@@ -346,6 +346,8 @@ CREATE TABLE IF NOT EXISTS remote_agents (
     timeout_ms INTEGER DEFAULT 300000,
     max_retries INTEGER DEFAULT 2,
     status TEXT DEFAULT 'active',
+    scope TEXT DEFAULT 'global',
+    scope_target TEXT DEFAULT '',
     last_health_check TIMESTAMP,
     last_error TEXT,
     workspace_id TEXT,
@@ -541,3 +543,27 @@ CREATE TABLE IF NOT EXISTS expert_teams (
     UNIQUE(workspace_id, slug)
 );
 CREATE INDEX IF NOT EXISTS idx_expert_teams_project ON expert_teams(workspace_id, project_id);
+
+-- ============================================================
+-- Agent Configs 配置覆盖层
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS agent_configs (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL DEFAULT 'default',
+    agent_id TEXT NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'global',
+    scope_target TEXT,
+    enabled INTEGER DEFAULT 1,
+    display_name TEXT,
+    description TEXT,
+    model_override TEXT,
+    timeout_override INTEGER,
+    config_json TEXT,
+    created_by TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(workspace_id, agent_id, scope, scope_target)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_configs_scope ON agent_configs(workspace_id, scope, scope_target);
+CREATE INDEX IF NOT EXISTS idx_agent_configs_agent ON agent_configs(agent_id);

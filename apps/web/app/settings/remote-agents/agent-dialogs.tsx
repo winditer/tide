@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { apiClient } from "@tide/core";
 import {
   Button,
   Dialog,
@@ -34,6 +35,8 @@ export interface AgentFormValue {
   approval_policy: string;
   timeout_ms: number;
   max_retries: number;
+  scope: string;
+  scope_target: string;
 }
 
 const DEFAULT_VALUE: AgentFormValue = {
@@ -47,6 +50,8 @@ const DEFAULT_VALUE: AgentFormValue = {
   approval_policy: "on-request",
   timeout_ms: 300000,
   max_retries: 2,
+  scope: "global",
+  scope_target: "",
 };
 
 const AUTH_OPTIONS = [
@@ -61,6 +66,17 @@ const POLICY_OPTIONS = [
   { value: "on-request", label: "按需审批 (on-request)" },
   { value: "never", label: "无需审批 (never)" },
 ];
+
+const SCOPE_OPTIONS = [
+  { value: "global", label: "全局" },
+  { value: "project", label: "项目" },
+  { value: "personal", label: "个人" },
+];
+
+interface ProjectOption {
+  id: string;
+  name: string;
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -90,6 +106,8 @@ function fromAgent(agent: RemoteAgent | null): AgentFormValue {
       typeof agent.timeout_ms === "number" ? agent.timeout_ms : 300000,
     max_retries:
       typeof agent.max_retries === "number" ? agent.max_retries : 2,
+    scope: agent.scope || "global",
+    scope_target: agent.scope_target ?? "",
   };
 }
 
@@ -157,6 +175,28 @@ export function AgentFormDialog({
   const [submitting, setSubmitting] = useState(false);
   const [discovering, setDiscovering] = useState(false);
   const [discovered, setDiscovered] = useState<DiscoverResult | null>(null);
+  const [projects, setProjects] = useState<ProjectOption[]>([]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await apiClient.get<{ projects?: ProjectOption[] }>(
+          "/api/projects?workspace_id=default",
+        );
+        const list = data?.projects || (Array.isArray(data) ? (data as ProjectOption[]) : []);
+        if (!cancelled) {
+          setProjects(list.map((p) => ({ id: p.id, name: p.name })));
+        }
+      } catch {
+        // ignore
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   useEffect(() => {
     if (open) {
@@ -215,6 +255,10 @@ export function AgentFormDialog({
       setError("最大重试次数必须 ≥ 0");
       return;
     }
+    if (value.scope === "project" && !value.scope_target) {
+      setError("请选择一个项目");
+      return;
+    }
     setSubmitting(true);
     try {
       await onSubmit({
@@ -225,6 +269,7 @@ export function AgentFormDialog({
         endpoint_url: value.endpoint_url.trim(),
         auth_credentials: value.auth_credentials.trim(),
         auth_header_name: value.auth_header_name.trim(),
+        scope_target: value.scope === "project" ? value.scope_target : "",
       });
     } catch (err) {
       // Parent already toasts; surface inline message too.
@@ -242,6 +287,7 @@ export function AgentFormDialog({
 
   const showAuthHeaderName = value.auth_type === "api-key";
   const showCredentials = value.auth_type !== "none";
+  const scopeInvalid = value.scope === "project" && !value.scope_target;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -336,6 +382,42 @@ export function AgentFormDialog({
               className="rounded-lg border-border/50"
             />
           </Field>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Field
+              label="作用域"
+              hint="全局/项目/个人"
+            >
+              <Select
+                value={value.scope}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setValue((prev) => ({
+                    ...prev,
+                    scope: v,
+                    scope_target: v === "project" ? prev.scope_target : "",
+                  }));
+                }}
+                options={SCOPE_OPTIONS}
+                className="rounded-lg border-border/50"
+              />
+            </Field>
+            {value.scope === "project" && (
+              <Field label="项目" required>
+                <Select
+                  value={value.scope_target}
+                  onChange={(e) => setField("scope_target", e.target.value)}
+                  options={[
+                    { value: "", label: "选择项目…" },
+                    ...projects.map((p) => ({ value: p.id, label: p.name })),
+                  ]}
+                  className={`rounded-lg border-border/50 ${
+                    scopeInvalid ? "border-destructive" : ""
+                  }`}
+                />
+              </Field>
+            )}
+          </div>
 
           <Field label="端点 URL" required hint="支持发现后自动填充">
             <Input

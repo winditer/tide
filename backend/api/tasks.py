@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, HTTPException, UploadFile, File
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import text
 
 from backend.core.dependencies import (
@@ -40,6 +40,22 @@ ATTACHMENTS_DIR = Path(".tide/attachments/web")
 def _safe_upload_name(filename: str) -> str:
     name = Path(filename or "attachment").name
     return "".join(ch if ch.isalnum() or ch in ".-_" else "_" for ch in name) or "attachment"
+
+
+_ATTACHMENT_CONTENT_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+    ".bmp": "image/bmp",
+    ".avif": "image/avif",
+}
+
+
+def _attachment_content_type(filename: str) -> str:
+    return _ATTACHMENT_CONTENT_TYPES.get(Path(filename).suffix.lower(), "application/octet-stream")
 
 
 @router.post("", response_model=TaskResponse)
@@ -107,6 +123,41 @@ async def upload_task_attachments(
         attachments.append(str(target))
 
     return {"attachments": attachments}
+
+
+@router.get("/attachments/content")
+async def get_task_attachment_content(
+    path: str = Query(..., description="任务附件本地路径"),
+    current_user=Depends(get_optional_user),
+):
+    """返回任务附件文件内容，用于图片预览/下载。
+
+    仅允许访问 ``.tide/attachments/web`` 目录下的文件，防止路径遍历。
+    """
+    _ensure_not_viewer(current_user)
+    try:
+        allowed_dir = (Path.cwd() / ".tide" / "attachments" / "web").resolve()
+        target = Path(path).resolve()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    try:
+        target.relative_to(allowed_dir)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Path traversal forbidden")
+
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="Attachment not found")
+
+    content_type = _attachment_content_type(target.name)
+    if content_type.startswith("image/"):
+        return FileResponse(path=str(target), media_type=content_type)
+
+    return FileResponse(
+        path=str(target),
+        media_type=content_type,
+        filename=target.name,
+    )
 
 
 async def _fetch_db_tasks(

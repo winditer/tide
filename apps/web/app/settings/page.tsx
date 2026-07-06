@@ -14,6 +14,7 @@ import {
   Scale,
   Webhook,
   BrainCircuit,
+  Bot,
   type LucideIcon,
 } from "lucide-react";
 
@@ -33,6 +34,12 @@ const ITEMS: SettingItem[] = [
     description: "管理工作台账号、角色权限与登录凭据",
     icon: Users,
     allowedRoles: ["admin"],
+  },
+  {
+    href: "/settings/agents",
+    label: "Agent 管理",
+    description: "管理本地和远程 Agent 配置、作用域与启用状态",
+    icon: Bot,
   },
   {
     href: "/settings/remote-agents",

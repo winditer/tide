@@ -4,19 +4,22 @@ Agent 运行时状态 API。
 返回可用 Agent 列表 + 运行时状态。
 本地 Agent (codex/claude/qoder) 来自 AGENT_ADAPTERS；
 远程 A2A Agent 来自 remote_agents 表。
+配置覆盖层来自 agent_configs 表（支持全局/项目/个人三级作用域）。
 """
 
 import json
 import logging
 import shutil
+from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import text
 
 from backend.core.dependencies import get_optional_user
 from backend.db.engine import async_session_factory
 from backend.runtime.adapters import AGENT_ADAPTERS
 from backend.runtime.task_runtime import TASKS
+from backend.services.agent_config_service import agent_config_service
 
 router = APIRouter(prefix="/api/agents", tags=["agents"])
 
@@ -66,9 +69,57 @@ async def _list_remote_agents() -> list[dict]:
     return agents
 
 
+def _apply_config_overrides(
+    agents: list[dict],
+    configs: dict[str, dict],
+) -> list[dict]:
+    """应用 agent_configs 配置覆盖层。
+
+    - enabled=0 的 Agent 被过滤掉
+    - display_name / description / model_override 等字段覆盖默认值
+    """
+    result: list[dict] = []
+    for agent in agents:
+        agent_id = agent.get("id", "")
+        cfg = configs.get(agent_id)
+        if cfg:
+            # disabled → 跳过
+            if cfg.get("enabled") == 0:
+                continue
+            # 覆盖显示名
+            if cfg.get("display_name"):
+                agent["name"] = cfg["display_name"]
+            # 覆盖描述
+            if cfg.get("description"):
+                agent["description"] = cfg["description"]
+            # 附加模型覆盖信息
+            if cfg.get("model_override"):
+                agent["model_override"] = cfg["model_override"]
+            if cfg.get("timeout_override"):
+                agent["timeout_override"] = cfg["timeout_override"]
+            if cfg.get("config_json"):
+                agent["config"] = cfg["config_json"]
+        result.append(agent)
+    return result
+
+
 @router.get("")
-async def list_agents(current_user=Depends(get_optional_user)):
-    """返回可用 Agent 列表 + 运行时状态（含远程 A2A Agent）"""
+async def list_agents(
+    project_id: Optional[str] = Query(None),
+    overrides: bool = Query(
+        True,
+        description="是否应用 agent_configs 配置覆盖层（禁用过滤 + 字段覆盖）。"
+        "管理页需要原始完整列表时传 false。",
+    ),
+    current_user=Depends(get_optional_user),
+):
+    """返回可用 Agent 列表 + 运行时状态（含远程 A2A Agent + 配置覆盖）。
+
+    - ``overrides=true``（默认）：应用配置覆盖层，禁用的 Agent 被过滤，
+      供各业务场景（任务/计划/对话/专家团等）选择时使用。
+    - ``overrides=false``：返回原始完整列表（含被禁用的 Agent），
+      供 Agent 管理页展示与配置。
+    """
     agents = []
     for agent_id, adapter in AGENT_ADAPTERS.items():
         running = sum(
@@ -90,5 +141,18 @@ async def list_agents(current_user=Depends(get_optional_user)):
 
     # 追加远程 Agent；查询失败时降级为只返回本地列表
     agents.extend(await _list_remote_agents())
+
+    # 应用 agent_configs 配置覆盖层（管理页可通过 overrides=false 跳过）
+    if overrides:
+        user_id = current_user.get("id") if current_user else None
+        try:
+            configs = await agent_config_service.resolve_configs(
+                user_id=user_id,
+                project_id=project_id,
+            )
+            if configs:
+                agents = _apply_config_overrides(agents, configs)
+        except Exception as exc:
+            logger.warning("apply agent_configs overrides failed: %s", exc)
 
     return {"agents": agents}

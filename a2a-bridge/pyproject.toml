@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tide-a2a-bridge"
+version = "1.0.0"
+description = "A2A Bridge: wraps Codex/Claude/Qoder CLI as A2A protocol agents"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Tide Team" }]
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.27.0",
+    "pydantic>=2.5.0",
+    "python-multipart>=0.0.9",
+]
+
+[project.scripts]
+a2a-bridge = "a2a_bridge.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/anthropic/tide"
+Repository = "https://github.com/anthropic/tide"
+
+[tool.hatch.build.targets.wheel]
+packages = ["a2a_bridge"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"config.py" = "config.py"
+"main.py" = "main.py"
+"models.py" = "models.py"
+"executor.py" = "executor.py"
+"event_parser.py" = "event_parser.py"
+"agent_card.py" = "agent_card.py"
+"git_manager.py" = "git_manager.py"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "a2a_bridge/",
+    "scripts/",
+    "README.md",
+    "requirements.txt",
+    "Dockerfile",
+    ".env.example",
+]

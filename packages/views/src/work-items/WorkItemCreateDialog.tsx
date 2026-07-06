@@ -1,6 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type DragEvent,
+} from "react";
 import { Button, Input, Select, type SelectOptionGroup } from "@tide/ui";
 import {
   useCreateWorkItem,
@@ -9,8 +17,10 @@ import {
   useProjects,
   useProjectGroups,
   useProjectGroup,
+  uploadWorkItemAttachments,
 } from "@tide/core";
 import { AIOptimizeButton } from "./AIOptimizeButton";
+import { ImagePlus, X } from "lucide-react";
 
 interface WorkItemCreateDialogProps {
   /**
@@ -40,6 +50,24 @@ const PRIORITY_OPTIONS = [
 
 const SCOPE_PROJECT_PREFIX = "project:";
 const SCOPE_GROUP_PREFIX = "group:";
+
+const IMAGE_RE = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
+const MAX_WI_IMAGES = 10;
+const MAX_WI_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB
+
+interface PendingAttachment {
+  id: string;
+  file: File;
+  previewUrl: string;
+}
+
+function isImageFile(file: File): boolean {
+  return file.type.startsWith("image/") || IMAGE_RE.test(file.name);
+}
+
+function genAttachmentId(): string {
+  return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
 
 /** 把传入的初始 scope 与 projectId 归一化为统一 selectValue。 */
 function buildInitialScopeValue(
@@ -73,6 +101,11 @@ export function WorkItemCreateDialog({
     buildInitialScopeValue(initialScopeValue, projectId),
   );
   const [error, setError] = useState<string | null>(null);
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  const [isUploadingImages, setIsUploadingImages] = useState(false);
+  const [imageError, setImageError] = useState<string | null>(null);
+  const [dragActive, setDragActive] = useState(false);
+  const imageInputRef = useRef<HTMLInputElement>(null);
 
   const createMutation = useCreateWorkItem();
   const { data: projectsData } = useProjects();
@@ -156,6 +189,85 @@ export function WorkItemCreateDialog({
     return opts;
   }, [membersData]);
 
+  const addPendingFiles = useCallback(
+    (files: FileList | File[] | null) => {
+      if (!files) return;
+      const incoming = Array.from(files).filter(isImageFile);
+      if (!incoming.length) {
+        setImageError("仅支持图片文件");
+        return;
+      }
+      const oversized = incoming.find((f) => f.size > MAX_WI_IMAGE_SIZE);
+      if (oversized) {
+        setImageError(`图片 ${oversized.name} 超过 10MB 上限`);
+        return;
+      }
+      if (pendingAttachments.length + incoming.length > MAX_WI_IMAGES) {
+        setImageError(`最多上传 ${MAX_WI_IMAGES} 张图片`);
+        return;
+      }
+      setImageError(null);
+      const newItems: PendingAttachment[] = incoming.map((file) => ({
+        id: genAttachmentId(),
+        file,
+        previewUrl: URL.createObjectURL(file),
+      }));
+      setPendingAttachments((prev) => [...prev, ...newItems]);
+    },
+    [pendingAttachments.length],
+  );
+
+  const removePendingAttachment = useCallback((id: string) => {
+    setPendingAttachments((prev) => {
+      const target = prev.find((a) => a.id === id);
+      if (target) URL.revokeObjectURL(target.previewUrl);
+      return prev.filter((a) => a.id !== id);
+    });
+  }, []);
+
+  const handleImagePick = (e: ChangeEvent<HTMLInputElement>) => {
+    addPendingFiles(e.target.files);
+    e.target.value = "";
+  };
+
+  const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(true);
+  };
+
+  const handleDragLeave = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+  };
+
+  const handleDrop = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    addPendingFiles(e.dataTransfer.files);
+  };
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLDivElement | HTMLTextAreaElement>) => {
+    const files = e.clipboardData?.files;
+    if (files && files.length > 0) {
+      const images = Array.from(files).filter(isImageFile);
+      if (images.length > 0) {
+        e.preventDefault();
+        addPendingFiles(files);
+      }
+    }
+  };
+
+  // 组件卸载时清理未使用的 object URL
+  useEffect(() => {
+    return () => {
+      pendingAttachments.forEach((a) => URL.revokeObjectURL(a.previewUrl));
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const versionOptions = useMemo(() => {
     const opts = [{ value: "", label: "不关联版本" }];
     for (const v of versions) {
@@ -172,6 +284,7 @@ export function WorkItemCreateDialog({
 
   const handleSubmit = async () => {
     setError(null);
+    setImageError(null);
     const trimmedTitle = title.trim();
     if (!trimmedTitle) {
       setError("标题不能为空");
@@ -187,7 +300,7 @@ export function WorkItemCreateDialog({
     }
 
     try {
-      await createMutation.mutateAsync({
+      const item = await createMutation.mutateAsync({
         project_id: effectiveProjectId,
         title: trimmedTitle,
         description: description.trim() || undefined,
@@ -200,6 +313,27 @@ export function WorkItemCreateDialog({
         version_id: versionId || null,
         group_id: selectedGroupId ?? null,
       });
+
+      if (pendingAttachments.length > 0 && item?.id) {
+        setIsUploadingImages(true);
+        try {
+          await uploadWorkItemAttachments(
+            item.id,
+            pendingAttachments.map((a) => a.file),
+          );
+          pendingAttachments.forEach((a) => URL.revokeObjectURL(a.previewUrl));
+          setPendingAttachments([]);
+        } catch (e) {
+          setImageError(e instanceof Error ? e.message : "图片上传失败");
+          setIsUploadingImages(false);
+          // 工作项已创建，仍触发 onSuccess 但保留弹窗让用户看到错误
+          onSuccess?.();
+          return;
+        } finally {
+          setIsUploadingImages(false);
+        }
+      }
+
       onSuccess?.();
       onClose();
     } catch (e) {
@@ -213,7 +347,7 @@ export function WorkItemCreateDialog({
       onClick={onClose}
     >
       <div
-        className="relative w-full max-w-lg overflow-hidden rounded-xl border border-border/50 bg-card shadow-2xl animate-in zoom-in-95 fade-in-0"
+        className="relative flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-border/50 bg-card shadow-2xl animate-in zoom-in-95 fade-in-0"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -236,7 +370,7 @@ export function WorkItemCreateDialog({
         </div>
 
         {/* Form */}
-        <div className="space-y-5 p-6">
+        <div className="flex-1 space-y-5 overflow-y-auto p-6">
           <Field label="归属" required>
             <Select
               value={scopeValue}
@@ -271,18 +405,83 @@ export function WorkItemCreateDialog({
           </Field>
 
           <Field label="描述">
-            <textarea
-              placeholder="可选的详细描述"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={3}
-              className="w-full rounded-lg border-0 bg-muted/50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            <div className="relative">
+              <textarea
+                placeholder="可选的详细描述（可粘贴图片）"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                onPaste={handlePaste}
+                rows={3}
+                className="w-full rounded-lg border-0 bg-muted/50 px-3 py-2 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+              <AIOptimizeButton
+                description={description}
+                onOptimized={setDescription}
+                disabled={!description.trim()}
+                inline
+              />
+            </div>
+
+            {/* 图片附件上传紧靠描述区域 */}
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={handleImagePick}
             />
-            <AIOptimizeButton
-              description={description}
-              onOptimized={setDescription}
-              disabled={!description.trim()}
-            />
+            <div
+              tabIndex={0}
+              role="button"
+              aria-label="图片上传区域，支持点击、拖拽或粘贴"
+              onClick={() => imageInputRef.current?.click()}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              onPaste={handlePaste}
+              className={
+                "mt-2 cursor-pointer rounded-lg border border-dashed p-3 text-center transition-colors focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-primary/30 " +
+                (dragActive
+                  ? "border-primary bg-primary/5"
+                  : "border-border/60 bg-muted/30 hover:bg-muted/50")
+              }
+            >
+              <ImagePlus className="mx-auto h-4 w-4 text-muted-foreground" />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                点击、拖拽或粘贴上传图片，最多 {MAX_WI_IMAGES} 张，单张 ≤10MB
+              </p>
+            </div>
+
+            {pendingAttachments.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {pendingAttachments.map((att) => (
+                  <div
+                    key={att.id}
+                    className="group relative h-8 w-8 overflow-hidden rounded border border-border/50 bg-muted"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={att.previewUrl}
+                      alt={att.file.name}
+                      className="h-full w-full object-cover"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removePendingAttachment(att.id)}
+                      className="absolute right-0 top-0 flex h-3 w-3 items-center justify-center rounded-full bg-black/60 text-white opacity-0 transition-opacity group-hover:opacity-100"
+                      aria-label="移除"
+                    >
+                      <X className="h-2 w-2" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {imageError && (
+              <p className="mt-2 text-xs text-destructive">{imageError}</p>
+            )}
           </Field>
 
           <div className="grid grid-cols-2 gap-4">
@@ -336,10 +535,12 @@ export function WorkItemCreateDialog({
             取消
           </Button>
           <Button
-            disabled={createMutation.isPending}
+            disabled={createMutation.isPending || isUploadingImages}
             onClick={handleSubmit}
           >
-            {createMutation.isPending ? "创建中…" : "创建工作项"}
+            {createMutation.isPending || isUploadingImages
+              ? "创建中…"
+              : "创建工作项"}
           </Button>
         </div>
       </div>

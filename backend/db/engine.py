@@ -269,4 +269,12 @@ async def init_db():
         if wf_columns and "created_by" not in wf_columns:
             await db.execute("ALTER TABLE workflows ADD COLUMN created_by TEXT")
 
+        # remote_agents 表补列 scope / scope_target（远程 Agent 作用域）
+        cursor = await db.execute("PRAGMA table_info(remote_agents)")
+        ra_columns = {row[1] for row in await cursor.fetchall()}
+        if ra_columns and "scope" not in ra_columns:
+            await db.execute("ALTER TABLE remote_agents ADD COLUMN scope TEXT DEFAULT 'global'")
+        if ra_columns and "scope_target" not in ra_columns:
+            await db.execute("ALTER TABLE remote_agents ADD COLUMN scope_target TEXT DEFAULT ''")
+
         await db.commit()

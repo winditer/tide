@@ -1,10 +1,25 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ChatArtifact, ChatMessage } from "@tide/core";
+import type { ChatArtifact, ChatAttachment, ChatMessage } from "@tide/core";
 import { extractArtifactsFromContent, appPath } from "@tide/core";
-import { ExternalLink, FileText } from "lucide-react";
+import { ExternalLink, FileText, X } from "lucide-react";
 import { SimpleMarkdown } from "../shared/SimpleMarkdown";
+
+const IMAGE_RE = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
+
+function isImageAttachment(att: ChatAttachment): boolean {
+  if (att.type === "image") return true;
+  return IMAGE_RE.test(att.name || att.path || "");
+}
+
+function getAttachmentPreviewUrl(att: ChatAttachment): string {
+  if (att.previewUrl) return att.previewUrl;
+  const path = att.path || "";
+  if (!path) return "";
+  if (path.startsWith("/api/") || /^https?:/i.test(path)) return path;
+  return `/api/tasks/attachments/content?path=${encodeURIComponent(path)}`;
+}
 
 interface ChatMessageListProps {
   messages: ChatMessage[];
@@ -121,9 +136,14 @@ function MessageBubble({ message, onApprove, onReject }: MessageBubbleProps) {
     return (
       <div className="flex flex-col items-end">
         <div className="max-w-[80%] rounded-2xl rounded-br-md bg-primary px-4 py-2 text-sm leading-relaxed text-primary-foreground shadow-sm">
-          <pre className="whitespace-pre-wrap break-words font-sans">
-            {message.content}
-          </pre>
+          {message.content && (
+            <pre className="whitespace-pre-wrap break-words font-sans">
+              {message.content}
+            </pre>
+          )}
+          {message.attachments && message.attachments.length > 0 && (
+            <UserAttachmentGrid attachments={message.attachments} />
+          )}
         </div>
         <div className="mt-1 text-xs text-muted-foreground">
           {formatTime(message.timestamp)}
@@ -242,6 +262,101 @@ function MessageBubble({ message, onApprove, onReject }: MessageBubbleProps) {
         )}
       </div>
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// User message attachments rendering
+// ─────────────────────────────────────────────────────────────────────────
+
+function UserAttachmentGrid({ attachments }: { attachments: ChatAttachment[] }) {
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const images = attachments.filter(isImageAttachment);
+  const files = attachments.filter((a) => !isImageAttachment(a));
+
+  useEffect(() => {
+    if (!lightboxUrl) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setLightboxUrl(null);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [lightboxUrl]);
+
+  return (
+    <>
+      {images.length > 0 && (
+        <div
+          className={
+            "mt-2 grid gap-2 " +
+            (images.length === 1 ? "grid-cols-1" : "grid-cols-2")
+          }
+        >
+          {images.map((att) => {
+            const url = getAttachmentPreviewUrl(att);
+            return (
+              <button
+                key={att.id}
+                type="button"
+                onClick={() => setLightboxUrl(url)}
+                className="relative overflow-hidden rounded-lg border border-primary-foreground/20 bg-primary-foreground/10 transition-opacity hover:opacity-90"
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={url}
+                  alt={att.name || "图片"}
+                  className="max-h-40 w-full object-cover"
+                  loading="lazy"
+                />
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {files.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {files.map((att) => (
+            <a
+              key={att.id}
+              href={getAttachmentPreviewUrl(att)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 rounded-md bg-primary-foreground/10 px-2 py-1 text-xs text-primary-foreground hover:bg-primary-foreground/20"
+            >
+              <FileText className="h-3 w-3" />
+              <span className="max-w-[120px] truncate">{att.name || "附件"}</span>
+            </a>
+          ))}
+        </div>
+      )}
+
+      {lightboxUrl && (
+        <button
+          type="button"
+          onClick={() => setLightboxUrl(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+        >
+          <div className="absolute right-4 top-4 text-white/80">
+            <X className="h-6 w-6" />
+          </div>
+          <a
+            href={lightboxUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="max-h-[90vh] max-w-[90vw]"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={lightboxUrl}
+              alt="图片预览"
+              className="max-h-[90vh] max-w-[90vw] rounded-lg object-contain"
+            />
+          </a>
+        </button>
+      )}
+    </>
   );
 }
 

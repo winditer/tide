@@ -868,6 +868,23 @@ GET /api/projects/{project_id}/git/diff/{commit_hash}
 
 ### 部署 Bridge
 
+**一键安装（推荐，自动安装 Git / Python 3.11+ / Node.js 20+ 与 CLI）：**
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/multica-ai/tide/main/a2a-bridge/scripts/install.sh | bash
+
+# Windows（PowerShell）
+irm https://raw.githubusercontent.com/multica-ai/tide/main/a2a-bridge/scripts/install.ps1 | iex
+
+# 安装后统一用 a2a-bridge 命令管理
+a2a-bridge setup      # 交互式配置 + CLI 探测
+a2a-bridge doctor     # 环境自检
+a2a-bridge start -d   # 后台守护启动
+```
+
+**Docker：**
+
 ```bash
 cd a2a-bridge
 cp .env.example .env
@@ -876,6 +893,8 @@ cp .env.example .env
 docker build -t tide-a2a-bridge .
 docker run -p 8720:8720 --env-file .env tide-a2a-bridge
 ```
+
+> 详见 [`a2a-bridge/README.md`](a2a-bridge/README.md)。
 
 ### 注册远程 Agent
 

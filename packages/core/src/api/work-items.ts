@@ -8,6 +8,7 @@ import type {
   ProjectSettings,
   WorkItemArtifact,
   CrossRepoResultsResponse,
+  WorkItemAttachment,
 } from "../types/work-item";
 
 function buildQuery(params?: Record<string, string | undefined>): string {
@@ -145,6 +146,29 @@ export function bindProjectWorkflow(
 export function unbindProjectWorkflow(projectId: string): Promise<void> {
   return apiClient.del<void>(
     `/api/projects/${encodeURIComponent(projectId)}/workflow`
+  );
+}
+
+// ---------- 附件 (Attachments) ----------
+
+export interface UploadWorkItemAttachmentsResponse {
+  attachments: WorkItemAttachment[];
+}
+
+export async function uploadWorkItemAttachments(
+  itemId: string,
+  files: File[],
+): Promise<UploadWorkItemAttachmentsResponse> {
+  if (!files.length) {
+    return { attachments: [] };
+  }
+  const formData = new FormData();
+  for (const file of files) {
+    formData.append("files", file, file.name);
+  }
+  return apiClient.postRaw<UploadWorkItemAttachmentsResponse>(
+    `/api/work-items/${encodeURIComponent(itemId)}/attachments`,
+    formData,
   );
 }
 

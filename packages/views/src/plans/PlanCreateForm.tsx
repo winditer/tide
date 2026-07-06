@@ -12,10 +12,12 @@ import {
   useProjects,
   useProjectGroups,
   useProjectGroup,
+  useAgents,
 } from "@tide/core";
 import type { PlanTaskDef } from "@tide/core";
 
-const AGENT_OPTIONS = [
+// 无法从 /api/agents 取得时的兵底选项
+const FALLBACK_AGENT_OPTIONS = [
   { label: "Codex", value: "codex" },
   { label: "Claude Code", value: "claude" },
   { label: "Qoder CLI", value: "qoder" },
@@ -97,6 +99,14 @@ export function PlanCreateForm({
     () => projects.find((p) => p.id === selectedProjectId),
     [projects, selectedProjectId],
   );
+
+  // 动态 Agent 列表（已过滤禁用项，含本地 + 远程）
+  const { data: agentsData } = useAgents({ projectId: selectedProjectId });
+  const agentOptions = useMemo(() => {
+    const list = agentsData?.agents ?? [];
+    if (list.length === 0) return FALLBACK_AGENT_OPTIONS;
+    return list.map((a) => ({ label: a.name, value: a.id }));
+  }, [agentsData]);
 
   const groupPrimary = useMemo(() => {
     if (!groupDetail) return undefined;
@@ -320,7 +330,7 @@ export function PlanCreateForm({
               />
               <div className="grid grid-cols-3 gap-2">
                 <Select
-                  options={AGENT_OPTIONS}
+                  options={agentOptions}
                   value={row.agent_id}
                   onChange={(e) =>
                     updateRow(idx, { agent_id: e.target.value })

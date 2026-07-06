@@ -53,10 +53,15 @@ RUN set -eux; \
 
 # 应用代码
 WORKDIR /app
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . /app/
+# 先复制包元数据和依赖清单（利用 Docker 层缓存）
+COPY pyproject.toml requirements.txt ./
+COPY a2a_bridge/ ./a2a_bridge/
+RUN pip install --no-cache-dir .
+
+# 再复制服务端模块和其余源码
+COPY config.py main.py models.py executor.py \
+     event_parser.py agent_card.py git_manager.py ./
 
 # 创建工作目录
 RUN mkdir -p /workspace

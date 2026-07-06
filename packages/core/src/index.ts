@@ -61,6 +61,7 @@ export type {
   SendMessageOverrides,
   ChatArtifact,
   ChatArtifactType,
+  ChatAttachment,
 } from "./hooks/use-chat";
 
 export {
@@ -329,6 +330,7 @@ export type {
   WorkItemBoardColumn,
   WorkItemBoard,
   WorkItemArtifact,
+  WorkItemAttachment,
   CrossRepoResultItem,
   CrossRepoResultsResponse,
 } from "./types/work-item";
@@ -348,6 +350,7 @@ export {
   unbindProjectWorkflow,
   addArtifact,
   removeArtifact,
+  uploadWorkItemAttachments,
   aiDecomposeWorkItems,
   batchCreateWorkItems,
   resolveMerge,
@@ -361,6 +364,7 @@ export {
   type ResolveMergeResponse,
   type OptimizeDescriptionParams,
   type OptimizeDescriptionResponse,
+  type UploadWorkItemAttachmentsResponse,
 } from "./api/work-items";
 export {
   useWorkItemBoard,

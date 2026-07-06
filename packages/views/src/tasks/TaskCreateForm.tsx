@@ -15,11 +15,13 @@ import {
   useCreateTaskMutation,
   useProjects,
   useProjectGroups,
+  useAgents,
   type CreateTaskParams,
   type SessionItem,
 } from "@tide/core";
 
-const AGENT_OPTIONS = [
+// 本地 Agent 的默认显示名（仅用于无法从 /api/agents 取得时的兵底）
+const FALLBACK_AGENT_OPTIONS = [
   { label: "Codex", value: "codex" },
   { label: "Claude Code", value: "claude" },
   { label: "Qoder CLI", value: "qoder" },
@@ -114,6 +116,28 @@ export function TaskCreateForm({ onSuccess }: TaskCreateFormProps) {
   // 从统一 scope 解码
   const projectCwd = scopeValue.startsWith("project:") ? scopeValue.slice(8) : "";
   const groupId = scopeValue.startsWith("group:") ? scopeValue.slice(6) : "";
+
+  // 依据当前项目作用域解析出 project_id，用于合并项目级 Agent 配置
+  const scopedProjectId = useMemo(
+    () => projects.find((p) => p.cwd === projectCwd)?.id,
+    [projects, projectCwd]
+  );
+
+  // 动态 Agent 列表（已过滤禁用项，含本地 + 远程）
+  const { data: agentsData } = useAgents({ projectId: scopedProjectId });
+  const agentOptions = useMemo(() => {
+    const list = agentsData?.agents ?? [];
+    if (list.length === 0) return FALLBACK_AGENT_OPTIONS;
+    return list.map((a) => ({ label: a.name, value: a.id }));
+  }, [agentsData]);
+
+  // 当前所选 Agent 若已被禁用/移除，自动回退到第一个可用项
+  useEffect(() => {
+    if (agentOptions.length === 0) return;
+    if (!agentOptions.some((o) => o.value === agentId)) {
+      setAgentId(agentOptions[0].value);
+    }
+  }, [agentOptions, agentId]);
 
   // 关闭 CWD 下拉（点击外部）
   // 项目组模式下不需要会话选择，状态以下仅在项目模式下生效
@@ -366,7 +390,7 @@ export function TaskCreateForm({ onSuccess }: TaskCreateFormProps) {
         <div>
           <label className="mb-1.5 block text-sm font-medium">Agent</label>
           <Select
-            options={AGENT_OPTIONS}
+            options={agentOptions}
             value={agentId}
             onChange={(e) => setAgentId(e.target.value)}
           />

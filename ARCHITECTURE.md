@@ -1227,6 +1227,20 @@ Tide Backend ←→ A2A Client ←→ HTTP/SSE ←→ A2A Bridge ←→ Agent CL
 | [git_manager.py](a2a-bridge/git_manager.py) | Git worktree 管理（fetch/checkout/push） |
 | [agent_card.py](a2a-bridge/agent_card.py) | Agent Card 自描述（能力声明） |
 | [event_parser.py](a2a-bridge/event_parser.py) | CLI stream-json 输出解析 |
+| [a2a_bridge/cli.py](a2a-bridge/a2a_bridge/cli.py) | `a2a-bridge` CLI（setup/start/stop/status/doctor） |
+
+### 15.2.1 打包与跨平台安装
+
+Bridge 已打包为标准 Python 包（[pyproject.toml](a2a-bridge/pyproject.toml)），并提供跨平台一键安装脚本，覆盖 Linux / macOS / Windows：
+
+| 交付形态 | 入口 | 说明 |
+|----------|------|------|
+| 安装脚本（Linux/macOS） | [scripts/install.sh](a2a-bridge/scripts/install.sh) | 自动检测并安装 Git / Python 3.11+ / Node.js 20+ 与 CLI，生成 `~/.a2a-bridge/.env`，可选注册 systemd/launchd |
+| 安装脚本（Windows） | [scripts/install.ps1](a2a-bridge/scripts/install.ps1) | winget/choco 安装依赖，可选注册计划任务 |
+| Python 包 | `pip install tide-a2a-bridge` | 注册 `a2a-bridge` 命令入口 |
+| 容器镜像 | [Dockerfile](a2a-bridge/Dockerfile) | 多阶段构建，内置 CLI + 服务端 |
+
+`a2a-bridge` 命令统一管理配置与生命周期：`setup`（交互式配置 + CLI 探测）、`start [-d]`（前台/守护）、`stop`、`status`、`doctor`（环境自检）。
 
 ### 15.3 执行时序
 

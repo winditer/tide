@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import uuid
 from collections import deque
 from datetime import datetime, timezone
@@ -77,6 +78,55 @@ def _doc_naming_instruction(item_id: str, title: str = "", project_name: str = "
         f"必须以 `{prefix}-` 作为文件名前缀。"
         f"例如：`{prefix}-技术方案.md`、`{prefix}-测试报告.md`、`{prefix}-修改点.md`。\n"
     )
+
+
+def _copy_work_item_attachments(item: dict, cwd: str) -> list[str]:
+    """把工作项 metadata.attachments 中的图片附件复制到 cwd，返回相对路径列表。
+
+    仅复制 type == image 的附件；复制失败时记录 warning 并跳过。
+    """
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    attachments = metadata.get("attachments") if isinstance(metadata.get("attachments"), list) else []
+    if not attachments or not cwd:
+        return []
+
+    cwd_path = Path(cwd)
+    cwd_path.mkdir(parents=True, exist_ok=True)
+    copied: list[str] = []
+
+    for att in attachments:
+        if not isinstance(att, dict):
+            continue
+        if att.get("type") != "image":
+            continue
+        src = (att.get("path") or "").strip()
+        if not src:
+            continue
+        src_path = Path(src)
+        if not src_path.exists() or not src_path.is_file():
+            logging.getLogger("tide.work_item_service").warning(
+                "Work item attachment not found: %s", src
+            )
+            continue
+        try:
+            dst = cwd_path / src_path.name
+            # 避免同名文件冲突，生成唯一文件名
+            if dst.exists():
+                stem, suffix = dst.stem, dst.suffix
+                for i in range(2, 1000):
+                    cand = cwd_path / f"{stem}-{i}{suffix}"
+                    if not cand.exists():
+                        dst = cand
+                        break
+            shutil.copy2(src_path, dst)
+            rel = dst.name
+            copied.append(rel)
+        except Exception as exc:
+            logging.getLogger("tide.work_item_service").warning(
+                "Failed to copy attachment %s to %s: %s", src, cwd, exc
+            )
+
+    return copied
 
 
 def _smart_truncate(text: str, max_chars: int) -> str:
@@ -1256,6 +1306,16 @@ class WorkItemService:
             # 添加自动执行系统指令前缀 + 文档命名规范
             prompt = AUTO_EXEC_PREFIX + prompt + _doc_naming_instruction(item["id"], title=item.get("title", ""))
 
+            # 复制工作项图片附件到工作目录，并在 prompt 中提示 Agent 读取
+            attachment_paths = _copy_work_item_attachments(item, cwd)
+            if attachment_paths:
+                prompt += (
+                    "\n\n## 附件图片\n"
+                    "以下图片已复制到当前工作目录，请按需读取并参考：\n"
+                    + "\n".join(f"- ./{p}" for p in attachment_paths)
+                    + "\n"
+                )
+
             # 创建 task
             task = await task_service.create_task(
                 workspace_id="default",
@@ -1554,6 +1614,16 @@ class WorkItemService:
                 task_prompt += "\n请只修改本仓库相关的代码。如果此需求不涉及本仓库，请输出'无需修改'并结束。"
                 # 添加自动执行系统指令前缀 + 文档命名规范
                 task_prompt = AUTO_EXEC_PREFIX + task_prompt + _doc_naming_instruction(item["id"], title=item.get("title", ""), project_name=project_name)
+
+                # 复制工作项图片附件到当前目标仓库，并在 prompt 中提示 Agent 读取
+                attachment_paths = _copy_work_item_attachments(item, project_cwd)
+                if attachment_paths:
+                    task_prompt += (
+                        "\n\n## 附件图片\n"
+                        "以下图片已复制到当前工作目录，请按需读取并参考：\n"
+                        + "\n".join(f"- ./{p}" for p in attachment_paths)
+                        + "\n"
+                    )
 
                 plan_task_def = {
                     "title": f"[{project_name}] {item['title'][:50]}",

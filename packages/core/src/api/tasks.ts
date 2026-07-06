@@ -47,10 +47,6 @@ export interface UploadAttachmentsResponse {
   attachments: string[];
 }
 
-const BASE_URL =
-  (typeof process !== "undefined" && process.env.NEXT_PUBLIC_API_BASE_URL) ||
-  "";
-
 export async function uploadTaskAttachments(
   files: File[]
 ): Promise<UploadAttachmentsResponse> {
@@ -61,24 +57,10 @@ export async function uploadTaskAttachments(
   for (const file of files) {
     formData.append("files", file, file.name);
   }
-  const response = await fetch(`${BASE_URL}/api/tasks/attachments`, {
-    method: "POST",
-    body: formData,
-  });
-  if (!response.ok) {
-    let body: unknown;
-    try {
-      body = await response.json();
-    } catch {
-      body = await response.text();
-    }
-    throw new Error(
-      `Upload failed (${response.status}): ${
-        typeof body === "string" ? body : JSON.stringify(body)
-      }`
-    );
-  }
-  return response.json() as Promise<UploadAttachmentsResponse>;
+  return apiClient.postRaw<UploadAttachmentsResponse>(
+    `/api/tasks/attachments`,
+    formData,
+  );
 }
 
 export function listTasks(params?: ListTasksParams): Promise<ListTasksResponse> {

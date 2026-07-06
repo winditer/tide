@@ -723,7 +723,28 @@ Bridge 源码位于项目 `a2a-bridge/` 目录。
 
 ### 14.2 部署方式
 
-**方式一：直接运行**
+**方式一：一键安装脚本（推荐）**
+
+自动检测并安装 Git / Python 3.11+ / Node.js 20+ 与各 CLI，安装 `a2a-bridge` 命令并生成 `~/.a2a-bridge/.env`，可选注册 systemd/launchd/计划任务：
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/multica-ai/tide/main/a2a-bridge/scripts/install.sh | bash
+# Windows（PowerShell）
+irm https://raw.githubusercontent.com/multica-ai/tide/main/a2a-bridge/scripts/install.ps1 | iex
+
+a2a-bridge setup      # 交互式配置 + CLI 探测
+a2a-bridge start -d   # 后台守护启动
+a2a-bridge status     # 查看运行状态
+```
+
+**方式二：pip 安装**
+```bash
+cd a2a-bridge
+pip install -e .        # 或发布后：pip install tide-a2a-bridge
+a2a-bridge setup && a2a-bridge start
+```
+
+**方式三：直接运行**
 ```bash
 cd a2a-bridge
 pip install -r requirements.txt
@@ -733,7 +754,7 @@ export BRIDGE_WORK_DIR="/home/deploy/workspace"
 uvicorn main:app --host 0.0.0.0 --port 8720
 ```
 
-**方式二：Docker 部署**
+**方式四：Docker 部署**
 ```bash
 cd a2a-bridge
 docker build -t tide-a2a-bridge .

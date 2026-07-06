@@ -63,12 +63,6 @@ interface ProjectOption {
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const LOCAL_AGENTS: AgentOption[] = [
-  { id: "codex", name: "Codex", type: "local" },
-  { id: "claude", name: "Claude", type: "local" },
-  { id: "qoder", name: "Qoder", type: "local" },
-];
-
 const MODEL_OPTIONS = [
   "gpt-5.4",
   "gpt-5.5",
@@ -96,7 +90,7 @@ export default function SettingsExpertTeamsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [agents, setAgents] = useState<AgentOption[]>(LOCAL_AGENTS);
+  const [agents, setAgents] = useState<AgentOption[]>([]);
   const [skills, setSkills] = useState<SkillOption[]>([]);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
 
@@ -120,18 +114,20 @@ export default function SettingsExpertTeamsPage() {
     return () => clearTimeout(id);
   }, [search]);
 
-  // Fetch agents
+  // Fetch agents (local + remote from unified API)
   useEffect(() => {
     if (!hydrated) return;
     (async () => {
       try {
-        const data = await apiClient.get<{ agents: AgentOption[] }>("/api/agents");
-        const remoteAgents: AgentOption[] = (data?.agents || [])
-          .filter((a) => a.type === "remote")
-          .map((a) => ({ id: a.id, name: a.name, type: "remote" as const }));
-        setAgents([...LOCAL_AGENTS, ...remoteAgents]);
+        const data = await apiClient.get<{ agents: any[] }>("/api/agents");
+        const allAgents: AgentOption[] = (data?.agents || []).map((a: any) => ({
+          id: a.id,
+          name: a.name,
+          type: a.type === "remote" ? ("remote" as const) : ("local" as const),
+        }));
+        setAgents(allAgents);
       } catch {
-        // fallback to local agents only
+        // fallback: empty list
       }
     })();
   }, [hydrated]);

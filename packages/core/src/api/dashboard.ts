@@ -113,8 +113,16 @@ export function getRecentTasks(limit = 10): Promise<RecentTasksResponse> {
   return apiClient.get<RecentTasksResponse>(`/api/dashboard/recent-tasks?limit=${limit}`);
 }
 
-export function getAgents(): Promise<AgentsResponse> {
-  return apiClient.get<AgentsResponse>("/api/agents");
+export function getAgents(params?: {
+  projectId?: string;
+  /** 是否应用配置覆盖层（禁用过滤）。默认 true。管理页传 false 获取原始列表。 */
+  overrides?: boolean;
+}): Promise<AgentsResponse> {
+  const qs = new URLSearchParams();
+  if (params?.projectId) qs.set("project_id", params.projectId);
+  if (params?.overrides === false) qs.set("overrides", "false");
+  const query = qs.toString();
+  return apiClient.get<AgentsResponse>(`/api/agents${query ? `?${query}` : ""}`);
 }
 
 export function getProjects(params?: { show_archived?: boolean; search?: string }): Promise<ProjectsResponse> {

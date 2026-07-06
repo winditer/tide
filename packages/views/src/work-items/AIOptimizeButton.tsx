@@ -9,6 +9,8 @@ interface AIOptimizeButtonProps {
   agentId?: string;
   disabled?: boolean;
   compact?: boolean;
+  /** 内嵌到输入框右下角，仅显示图标 */
+  inline?: boolean;
 }
 
 export function AIOptimizeButton({
@@ -17,6 +19,7 @@ export function AIOptimizeButton({
   agentId,
   disabled,
   compact,
+  inline,
 }: AIOptimizeButtonProps) {
   const mutation = useOptimizeDescription();
 
@@ -34,6 +37,20 @@ export function AIOptimizeButton({
 
   const isLoading = mutation.isPending;
   const isDisabled = disabled || isLoading || !description.trim();
+
+  if (inline) {
+    return (
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={isDisabled}
+        title={isLoading ? "优化中…" : "AI 优化"}
+        className="absolute bottom-2 right-2 flex h-6 w-6 items-center justify-center rounded-md bg-primary/10 text-primary transition-all hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        <Sparkles className={`h-3.5 w-3.5 ${isLoading ? "animate-spin" : ""}`} />
+      </button>
+    );
+  }
 
   if (compact) {
     return (

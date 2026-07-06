@@ -18,13 +18,22 @@
 ```
 a2a-bridge/
 ├── README.md             # 本文件
+├── pyproject.toml        # Python 包定义（注册 a2a-bridge CLI）
 ├── requirements.txt      # Python 依赖
 ├── Dockerfile            # 容器化部署
 ├── .env.example          # 环境变量示例
+├── scripts/
+│   ├── install.sh        # macOS / Linux 一键安装脚本
+│   └── install.ps1       # Windows 一键安装脚本
+├── a2a_bridge/           # CLI 包装器包
+│   ├── __init__.py
+│   ├── __main__.py       # python -m a2a_bridge 入口
+│   └── cli.py            # a2a-bridge 命令（setup/start/stop/status/doctor）
 ├── config.py             # 配置管理（环境变量）
 ├── main.py               # FastAPI 应用入口（JSON-RPC + SSE）
 ├── agent_card.py         # /.well-known/agent.json 端点
 ├── executor.py           # 子进程执行器 + 任务生命周期
+├── git_manager.py        # Git 工作区管理
 ├── models.py             # JSON-RPC / Task / Message 数据模型
 └── event_parser.py       # CLI stream-json 输出解析
 ```
@@ -74,7 +83,70 @@ JSON-RPC 请求示例：
 
 ## 3. 快速部署
 
-### 方式一：直接运行（推荐用于快速验证）
+### 方式一：一键安装脚本（推荐）
+
+安装脚本会自动检测并按需安装 **Git、Python 3.11+、Node.js 20+**，全局安装 `codex / claude / qoder` CLI，安装 `a2a-bridge` 命令并生成默认配置，还可选注册系统服务（systemd / launchd）。
+
+**macOS / Linux：**
+
+```bash
+# 远程安装
+curl -fsSL https://raw.githubusercontent.com/multica-ai/tide/main/a2a-bridge/scripts/install.sh | bash
+
+# 或从本地 checkout 安装
+cd a2a-bridge && bash scripts/install.sh
+```
+
+**Windows（PowerShell）：**
+
+```powershell
+# 远程安装
+irm https://raw.githubusercontent.com/multica-ai/tide/main/a2a-bridge/scripts/install.ps1 | iex
+
+# 或从本地 checkout 安装
+cd a2a-bridge; powershell -ExecutionPolicy Bypass -File scripts\install.ps1
+```
+
+> Windows 依赖优先通过 `winget` 安装，回退到 `chocolatey`。
+
+安装完成后：
+
+```bash
+a2a-bridge setup      # 交互式配置向导（端口 / API Key / LLM Key / Git / 自动探测 CLI）
+a2a-bridge doctor      # 环境自检
+a2a-bridge start       # 前台启动
+a2a-bridge start -d    # 后台守护进程
+```
+
+配置写入 `~/.a2a-bridge/.env`；守护进程日志位于 `~/.a2a-bridge/bridge.log`。
+
+#### `a2a-bridge` 命令参考
+
+| 命令 | 说明 |
+|------|------|
+| `a2a-bridge setup` | 交互式配置向导，自动探测本地 CLI，可选注册系统服务 |
+| `a2a-bridge start` | 前台启动（Ctrl+C 停止） |
+| `a2a-bridge start -d` | 后台守护进程，写入 PID 文件 |
+| `a2a-bridge start --log-level debug` | 覆盖日志级别启动 |
+| `a2a-bridge stop` | 通过 PID 文件优雅停止后台进程 |
+| `a2a-bridge status` | 显示运行状态、CLI 探测结果与 Health 接口 |
+| `a2a-bridge doctor` | 诊断 Python / Node / Git / CLI / 配置 是否就绪 |
+
+### 方式二：pip 直接安装
+
+若已自行准备好 Node.js 与各 CLI，可直接用 pip 安装：
+
+```bash
+cd a2a-bridge
+pip install -e .        # 本地可编辑安装
+# 或（发布后）
+pip install tide-a2a-bridge
+
+a2a-bridge setup
+a2a-bridge start
+```
+
+### 方式三：手动运行（用于快速验证）
 
 ```bash
 cd a2a-bridge
@@ -92,7 +164,7 @@ uvicorn main:app --host 0.0.0.0 --port 8720
 
 > 前提：本机已安装并可执行 `codex` / `claude` / `qoder` CLI，且已完成各自登录认证。
 
-### 方式二：Docker
+### 方式四：Docker
 
 ```bash
 cd a2a-bridge
@@ -112,7 +184,7 @@ docker run -d --name a2a-bridge \
 > Volume 挂载凭证目录是为了让容器内的 CLI 复用宿主机的登录态。
 > 如果使用 CC Switch 等代理网关，需要再透传 `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `CODEX_HOME` 等环境变量。
 
-### 方式三：docker-compose 片段
+### 方式五：docker-compose 片段
 
 ```yaml
 services:

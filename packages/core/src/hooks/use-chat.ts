@@ -20,6 +20,15 @@ export interface ChatInteractive {
   status?: ChatInteractiveStatus;
 }
 
+export interface ChatAttachment {
+  id: string;
+  path: string;
+  name?: string;
+  type?: "image" | "file";
+  /** 本地预览 object URL，不持久化到 localStorage */
+  previewUrl?: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: ChatMessageRole;
@@ -29,6 +38,7 @@ export interface ChatMessage {
   taskId?: string;
   status?: ChatMessageStatus;
   interactive?: ChatInteractive;
+  attachments?: ChatAttachment[];
 }
 
 export type ChatArtifactType = "file" | "link" | "markdown";
@@ -192,11 +202,24 @@ function loadFromStorage(projectId?: string): ChatMessage[] {
   }
 }
 
+function serializeMessagesForStorage(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map((m) => {
+    if (!m.attachments?.length) return m;
+    return {
+      ...m,
+      attachments: m.attachments.map(({ previewUrl, ...rest }) => rest),
+    };
+  });
+}
+
 function saveToStorage(projectId: string | undefined, messages: ChatMessage[]) {
   if (typeof window === "undefined") return;
   try {
     const slice = messages.slice(-HISTORY_LIMIT);
-    window.localStorage.setItem(storageKey(projectId), JSON.stringify(slice));
+    window.localStorage.setItem(
+      storageKey(projectId),
+      JSON.stringify(serializeMessagesForStorage(slice))
+    );
   } catch {
     // quota exceeded — ignore
   }
@@ -233,6 +256,7 @@ export interface SendMessageOverrides {
   sessionId?: string;
   agentId?: string;
   groupId?: string;
+  attachments?: ChatAttachment[];
 }
 
 export interface UseChatResult {
@@ -599,13 +623,15 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
   const sendMessage = useCallback(
     async (content: string, overrides?: SendMessageOverrides) => {
       const trimmed = content.trim();
-      if (!trimmed) return;
+      const messageAttachments = overrides?.attachments;
+      if (!trimmed && !messageAttachments?.length) return;
       const now = new Date().toISOString();
       const userMsg: ChatMessage = {
         id: genId(),
         role: "user",
         content: trimmed,
         timestamp: now,
+        attachments: messageAttachments,
       };
 
       // Snapshot history BEFORE adding user message for context build
@@ -645,6 +671,7 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
           cwd: finalCwd || undefined,
           session_id: finalSessionId || undefined,
           group_id: finalGroupId || undefined,
+          attachments: messageAttachments?.map((a) => a.path) ?? [],
         });
         setMessages((prev) =>
           prev.map((m) =>
@@ -689,6 +716,7 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
               cwd: finalCwd || undefined,
               session_id: undefined,
               group_id: finalGroupId || undefined,
+              attachments: messageAttachments?.map((a) => a.path) ?? [],
             });
             setMessages((prev) =>
               prev.map((m) =>

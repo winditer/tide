@@ -389,6 +389,15 @@ class WorkItemTransitionResponse(BaseModel):
     task_info: Optional[dict] = None
 
 
+class WorkItemAttachment(BaseModel):
+    id: str
+    name: str
+    path: str
+    type: str = "file"
+    size: int = 0
+    created_at: Optional[str] = None
+
+
 class ProjectSettingsUpdate(BaseModel):
     workflow_id: Optional[str] = None
     default_assignee: Optional[str] = None

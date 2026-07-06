@@ -55,6 +55,8 @@ export interface RemoteAgent {
   last_error: string | null;
   capabilities?: { streaming?: boolean; pushNotifications?: boolean };
   skills: RemoteAgentSkill[];
+  scope?: string | null;
+  scope_target?: string | null;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -111,6 +113,16 @@ function getApiErrorMessage(err: unknown): string {
   }
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+function scopeLabel(
+  scope: string | null | undefined,
+  scopeTarget: string | null | undefined,
+): string {
+  const v = (scope ?? "global").toLowerCase();
+  if (v === "project") return scopeTarget ? `项目 · ${scopeTarget}` : "项目";
+  if (v === "personal") return "个人";
+  return "全局";
 }
 
 function statusMeta(status: string | null | undefined): {
@@ -289,6 +301,8 @@ export default function RemoteAgentsPage() {
       approval_policy: input.approval_policy,
       timeout_ms: input.timeout_ms,
       max_retries: input.max_retries,
+      scope: input.scope,
+      scope_target: input.scope_target,
     });
     toast({ title: "已注册远程 Agent", description: input.name });
     setCreateOpen(false);
@@ -307,6 +321,8 @@ export default function RemoteAgentsPage() {
       approval_policy: input.approval_policy,
       timeout_ms: input.timeout_ms,
       max_retries: input.max_retries,
+      scope: input.scope,
+      scope_target: input.scope_target,
     });
     setEditing(null);
     await reload();
@@ -447,6 +463,7 @@ export default function RemoteAgentsPage() {
                 <tr className="border-b border-border/50 bg-muted/30 text-left text-xs uppercase tracking-wider text-muted-foreground">
                   <th className="px-4 py-3 font-medium">名称</th>
                   <th className="px-4 py-3 font-medium">端点 URL</th>
+                  <th className="px-4 py-3 font-medium">作用域</th>
                   <th className="px-4 py-3 font-medium">状态</th>
                   <th className="px-4 py-3 font-medium">技能</th>
                   <th className="px-4 py-3 font-medium">最后检查</th>
@@ -492,6 +509,11 @@ export default function RemoteAgentsPage() {
                             {agent.last_error}
                           </div>
                         )}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="inline-flex items-center rounded-md border border-border/50 bg-muted/40 px-2 py-0.5 text-xs">
+                          {scopeLabel(agent.scope, agent.scope_target)}
+                        </span>
                       </td>
                       <td className="px-4 py-3">
                         <span

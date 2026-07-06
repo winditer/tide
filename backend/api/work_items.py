@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import uuid
 from datetime import datetime, timezone
@@ -97,6 +98,40 @@ async def _call_llm_for_text(agent_id: str, prompt: str) -> str:
     return result
 
 router = APIRouter(prefix="/api/work-items", tags=["work-items"])
+
+
+# ── Work Item Attachments ────────────────────────────────────
+
+WI_ATTACHMENTS_DIR = Path(".tide/attachments/work-items")
+WI_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024  # 10MB
+WI_ATTACHMENT_MAX_COUNT = 10
+
+_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".avif"}
+
+_ATTACHMENT_CONTENT_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+    ".bmp": "image/bmp",
+    ".avif": "image/avif",
+}
+
+
+def _safe_upload_name(filename: str) -> str:
+    name = Path(filename or "attachment").name
+    return "".join(ch if ch.isalnum() or ch in ".-_" else "_" for ch in name) or "attachment"
+
+
+def _infer_attachment_type(filename: str) -> str:
+    suffix = Path(filename).suffix.lower()
+    return "image" if suffix in _IMAGE_SUFFIXES else "file"
+
+
+def _attachment_content_type(filename: str) -> str:
+    return _ATTACHMENT_CONTENT_TYPES.get(Path(filename).suffix.lower(), "application/octet-stream")
 
 
 # ── Artifact Schema ──────────────────────────────────────────
@@ -657,6 +692,167 @@ async def get_artifact_content(
     return FileResponse(
         path=str(target_path),
         media_type="application/octet-stream",
+        filename=target_path.name,
+    )
+
+
+# ── Attachments 管理 ─────────────────────────────────────────
+
+
+def _get_attachments(item: dict) -> list:
+    """从工作项 metadata 中安全提取 attachments 列表。"""
+    metadata = item.get("metadata")
+    if not metadata or not isinstance(metadata, dict):
+        return []
+    attachments = metadata.get("attachments")
+    if not isinstance(attachments, list):
+        return []
+    return attachments
+
+
+@router.post("/{item_id}/attachments")
+async def upload_work_item_attachments(
+    item_id: str,
+    files: list[UploadFile] = File(...),
+    current_user=Depends(get_optional_user),
+):
+    """上传图片/文件附件到工作项，并持久化到 metadata.attachments。"""
+    _ensure_not_viewer(current_user)
+    if not files:
+        raise HTTPException(status_code=400, detail="No files uploaded")
+
+    item = await work_item_service.get_work_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Work item not found")
+    await check_project_write_permission(item.get("project_id"), current_user)
+
+    attachments = _get_attachments(item)
+    if len(attachments) + len(files) > WI_ATTACHMENT_MAX_COUNT:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Work item attachments limit is {WI_ATTACHMENT_MAX_COUNT}",
+        )
+
+    target_dir = WI_ATTACHMENTS_DIR / item_id
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    created = []
+    for upload in files:
+        safe_name = _safe_upload_name(upload.filename or "attachment")
+        stored_name = f"{uuid.uuid4().hex[:12]}-{safe_name}"
+        target = target_dir / stored_name
+        try:
+            with target.open("wb") as out:
+                shutil.copyfileobj(upload.file, out)
+        finally:
+            await upload.close()
+
+        size = target.stat().st_size
+        if size > WI_ATTACHMENT_MAX_BYTES:
+            target.unlink(missing_ok=True)
+            raise HTTPException(
+                status_code=400,
+                detail=f"File {upload.filename} exceeds {WI_ATTACHMENT_MAX_BYTES} bytes",
+            )
+
+        attachment = {
+            "id": str(uuid.uuid4()),
+            "name": upload.filename or stored_name,
+            "path": str(target),
+            "type": _infer_attachment_type(upload.filename or ""),
+            "size": size,
+            "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        }
+        attachments.append(attachment)
+        created.append(attachment)
+
+    metadata = item.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    metadata["attachments"] = attachments
+    await work_item_service.update_work_item(item_id, WorkItemUpdate(metadata=metadata))
+    return {"attachments": created}
+
+
+@router.delete("/{item_id}/attachments/{attachment_id}")
+async def remove_work_item_attachment(
+    item_id: str,
+    attachment_id: str,
+    current_user=Depends(get_optional_user),
+):
+    """删除工作项附件。"""
+    _ensure_not_viewer(current_user)
+    item = await work_item_service.get_work_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Work item not found")
+    await check_project_write_permission(item.get("project_id"), current_user)
+
+    attachments = _get_attachments(item)
+    target = next(
+        (a for a in attachments if isinstance(a, dict) and a.get("id") == attachment_id),
+        None,
+    )
+    if not target:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+
+    # 尝试删除磁盘文件（忽略失败）
+    try:
+        path = Path(target.get("path", ""))
+        if path.exists():
+            path.unlink()
+    except Exception:
+        pass
+
+    new_attachments = [a for a in attachments if a.get("id") != attachment_id]
+    metadata = item.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    metadata["attachments"] = new_attachments
+    await work_item_service.update_work_item(item_id, WorkItemUpdate(metadata=metadata))
+    return {"attachments": new_attachments}
+
+
+@router.get("/{item_id}/attachments/{attachment_id}/content")
+async def get_work_item_attachment_content(
+    item_id: str,
+    attachment_id: str,
+    current_user=Depends(get_optional_user),
+):
+    """获取工作项附件内容，用于图片预览/下载。"""
+    item = await work_item_service.get_work_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Work item not found")
+
+    attachments = _get_attachments(item)
+    target = next(
+        (a for a in attachments if isinstance(a, dict) and a.get("id") == attachment_id),
+        None,
+    )
+    if not target:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+
+    file_path = (target.get("path") or "").strip()
+    if not file_path:
+        raise HTTPException(status_code=400, detail="Attachment has no path")
+
+    try:
+        target_path = Path(file_path).resolve()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid file path")
+
+    if not target_path.exists() or not target_path.is_file():
+        raise HTTPException(status_code=404, detail="Attachment file not found")
+
+    content_type = _attachment_content_type(target_path.name)
+    if content_type.startswith("image/"):
+        return FileResponse(
+            path=str(target_path),
+            media_type=content_type,
+        )
+
+    return FileResponse(
+        path=str(target_path),
+        media_type=content_type,
         filename=target_path.name,
     )
 

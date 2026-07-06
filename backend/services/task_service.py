@@ -451,6 +451,7 @@ class TaskService:
             status="queued",
             session_id=session_id or "",
             conversation_id=conversation_id or "",
+            attachments=attachments or [],
         )
         with LOCK:
             TASKS[task_id] = runtime
@@ -461,7 +462,8 @@ class TaskService:
         self._schedule_agent_start(task_id, workspace_id, agent_id, prompt, cwd, model,
                                     conversation_id=conversation_id or "",
                                     session_id=session_id or "",
-                                    full_auto=full_auto)
+                                    full_auto=full_auto,
+                                    attachments=attachments)
 
         # 查询并返回
         return await self.get_task(task_id)
@@ -480,6 +482,7 @@ class TaskService:
         conversation_id: str = "",
         session_id: str = "",
         full_auto: bool = False,
+        attachments: Optional[list[str]] = None,
     ) -> None:
         """启动 Agent；缺少 CLI 时显式失败，不伪造成功结果。"""
         adapter = AGENT_ADAPTERS.get(agent_id)
@@ -506,6 +509,7 @@ class TaskService:
                 conversation_id=conversation_id,
                 session_id=session_id,
                 full_auto=full_auto,
+                attachments=attachments,
             )
         )
 
@@ -537,6 +541,7 @@ class TaskService:
         conversation_id: str = "",
         session_id: str = "",
         full_auto: bool = False,
+        attachments: Optional[list[str]] = None,
     ):
         """使用 AgentExecutor 执行真实 Agent CLI"""
         # 单独跟踪 agent 的 "output" 类型事件（即 agent 的自然语言回复），
@@ -568,6 +573,7 @@ class TaskService:
                 conversation_id=conversation_id,
                 session_id=session_id,
                 full_auto=full_auto,
+                attachments=attachments,
             ):
                 if event.type == "started":
                     await self._update_status(task_id, workspace_id, "running")
@@ -848,6 +854,18 @@ class TaskService:
         model = task.get("model") or ""
         prompt = task["prompt"]
 
+        # 解析任务附件
+        attachments: list[str] = []
+        try:
+            raw_attachments = task.get("attachments")
+            if raw_attachments:
+                if isinstance(raw_attachments, str):
+                    attachments = json.loads(raw_attachments) or []
+                elif isinstance(raw_attachments, list):
+                    attachments = raw_attachments
+        except Exception:
+            attachments = []
+
         # model 透传：DB 中已有非空 model 直接使用，仅为空时取默认值
         if not model:
             adapter = AGENT_ADAPTERS.get(agent_id)
@@ -875,6 +893,7 @@ class TaskService:
             model=model,
             status="queued",
             approved_retry=True,
+            attachments=attachments,
         )
         with LOCK:
             TASKS[task_id] = runtime
@@ -888,6 +907,7 @@ class TaskService:
             model,
             approved_retry=True,
             full_auto=full_auto,
+            attachments=attachments,
         )
         return await self.get_task(task_id)
 
@@ -980,6 +1000,18 @@ class TaskService:
         model = task.get("model") or ""
         prompt = task["prompt"]
 
+        # 解析任务附件
+        attachments: list[str] = []
+        try:
+            raw_attachments = task.get("attachments")
+            if raw_attachments:
+                if isinstance(raw_attachments, str):
+                    attachments = json.loads(raw_attachments) or []
+                elif isinstance(raw_attachments, list):
+                    attachments = raw_attachments
+        except Exception:
+            attachments = []
+
         # model 透传：DB 中已有非空 model 直接使用，仅为空时取默认值
         if not model:
             adapter = AGENT_ADAPTERS.get(agent_id)
@@ -1007,6 +1039,7 @@ class TaskService:
             agent_id=agent_id,
             model=model,
             status="queued",
+            attachments=attachments,
         )
         with LOCK:
             TASKS[task_id] = runtime
@@ -1014,6 +1047,7 @@ class TaskService:
         self._schedule_agent_start(
             task_id, task["workspace_id"], agent_id, prompt, cwd, model,
             approved_retry=True, full_auto=full_auto,
+            attachments=attachments,
         )
 
         return await self.get_task(task_id)

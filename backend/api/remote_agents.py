@@ -50,6 +50,8 @@ class RemoteAgentCreate(BaseModel):
     approval_policy: Optional[str] = "on-request"
     timeout_ms: Optional[int] = 300000
     max_retries: Optional[int] = 2
+    scope: str = "global"
+    scope_target: str = ""
 
 
 class RemoteAgentUpdate(BaseModel):
@@ -65,6 +67,8 @@ class RemoteAgentUpdate(BaseModel):
     timeout_ms: Optional[int] = None
     max_retries: Optional[int] = None
     status: Optional[str] = None
+    scope: Optional[str] = None
+    scope_target: Optional[str] = None
 
 
 class DiscoverRequest(BaseModel):
@@ -152,7 +156,7 @@ _SELECT_COLUMNS = (
     "protocol_binding, protocol_version, auth_type, auth_credentials, "
     "auth_header_name, capabilities_streaming, capabilities_push_notifications, "
     "skills_json, approval_required, approval_policy, timeout_ms, max_retries, "
-    "status, last_health_check, last_error, workspace_id, created_by, "
+    "status, scope, scope_target, last_health_check, last_error, workspace_id, created_by, "
     "created_at, updated_at"
 )
 
@@ -282,6 +286,8 @@ async def create_remote_agent(
         "approval_policy": body.approval_policy or "on-request",
         "timeout_ms": body.timeout_ms if body.timeout_ms is not None else 300000,
         "max_retries": body.max_retries if body.max_retries is not None else 2,
+        "scope": body.scope or "global",
+        "scope_target": body.scope_target or "",
         "created_by": created_by,
         "created_at": now,
         "updated_at": now,
@@ -297,12 +303,14 @@ async def create_remote_agent(
                         endpoint_url, auth_type, auth_credentials, auth_header_name,
                         capabilities_streaming, capabilities_push_notifications,
                         skills_json, approval_policy, timeout_ms, max_retries,
+                        scope, scope_target,
                         created_by, created_at, updated_at
                     ) VALUES (
                         :id, :name, :description, :agent_card_url, :agent_card_json,
                         :endpoint_url, :auth_type, :auth_credentials, :auth_header_name,
                         :capabilities_streaming, :capabilities_push_notifications,
                         :skills_json, :approval_policy, :timeout_ms, :max_retries,
+                        :scope, :scope_target,
                         :created_by, :created_at, :updated_at
                     )
                     """
@@ -329,12 +337,19 @@ async def create_remote_agent(
 
 
 @router.get("")
-async def list_remote_agents(current_user=Depends(get_optional_user)):
-    """列出所有已注册的远程 Agent。"""
+async def list_remote_agents(
+    scope: Optional[str] = None,
+    current_user=Depends(get_optional_user),
+):
+    """列出所有已注册的远程 Agent。可通过 scope 查询参数过滤。"""
+    sql = f"SELECT {_SELECT_COLUMNS} FROM remote_agents"
+    params: dict[str, Any] = {}
+    if scope:
+        sql += " WHERE scope = :scope"
+        params["scope"] = scope
+    sql += " ORDER BY created_at DESC"
     async with async_session_factory() as session:
-        result = await session.execute(
-            text(f"SELECT {_SELECT_COLUMNS} FROM remote_agents ORDER BY created_at DESC")
-        )
+        result = await session.execute(text(sql), params)
         rows = result.fetchall()
     items = [_row_to_dict(r) for r in rows]
     return {"items": items, "total": len(items)}

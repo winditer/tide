@@ -113,6 +113,7 @@ class AgentExecutor:
         conversation_id: str = "",
         session_id: str = "",
         full_auto: bool = False,
+        attachments: Optional[list[str]] = None,
     ) -> AsyncGenerator[TaskEvent, None]:
         """执行 Agent CLI 并流式产出事件。
 
@@ -160,6 +161,7 @@ class AgentExecutor:
             approved_retry=approved_retry,
             conversation_id=conversation_id,
             session_id=session_id,
+            attachments=attachments or [],
         )
         if full_auto:
             if adapter.id == "codex":
@@ -175,6 +177,9 @@ class AgentExecutor:
                 runtime.sandbox_mode = APPROVED_CODEX_SANDBOX_MODE
             else:
                 runtime.permission_mode = approved_permission_mode(adapter.id)
+
+        # 复制任务图片附件到 cwd 并在 prompt 中追加引用说明
+        adapter.prepare_attachments(runtime)
 
         try:
             command = adapter.build_command(runtime)

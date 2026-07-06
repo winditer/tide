@@ -1150,6 +1150,7 @@ class MessageHandler:
             return
 
         state.active_project_key = str(path)
+        state.cwd = str(path)
         await save_chat_state(state)
         await lark_bridge.send_text(chat_id, f"✅ 已标记为项目：`{path}`")
 
@@ -1676,9 +1677,10 @@ class MessageHandler:
             return
 
         state.active_project_key = project.get("id") or project.get("cwd", "")
-        await save_chat_state(state)
-
         project_cwd = project.get("cwd") or ""
+        if project_cwd:
+            state.cwd = project_cwd
+        await save_chat_state(state)
 
         # DB 查询：获取该项目下的会话
         db_sessions: list[dict] = []
@@ -1840,6 +1842,9 @@ class MessageHandler:
         project = projects[index]
         state = await get_chat_state(chat_id)
         state.active_project_key = project.get("id") or project.get("cwd", "")
+        project_cwd = project.get("cwd") or ""
+        if project_cwd:
+            state.cwd = project_cwd
         await save_chat_state(state)
 
         sessions = discover_sessions(project_cwd=project.get("cwd"))
@@ -2041,6 +2046,9 @@ class MessageHandler:
 
         state = await get_chat_state(chat_id)
         state.active_project_key = project.get("id") or project.get("cwd", "")
+        project_cwd = project.get("cwd") or ""
+        if project_cwd:
+            state.cwd = project_cwd
         await save_chat_state(state)
         sessions = discover_sessions(project_cwd=project.get("cwd"))
         # Task #89: 过滤已归档会话

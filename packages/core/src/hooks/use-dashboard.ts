@@ -30,10 +30,10 @@ export function useRecentTasks(limit = 10) {
   });
 }
 
-export function useAgents() {
+export function useAgents(params?: { projectId?: string; overrides?: boolean }) {
   return useQuery({
-    queryKey: ["agents"],
-    queryFn: getAgents,
+    queryKey: ["agents", params?.projectId ?? null, params?.overrides ?? true],
+    queryFn: () => getAgents(params),
   });
 }
 

@@ -1,8 +1,8 @@
 "use client";
 
 
-import { useMemo, useState, useCallback } from "react";
-import { Pencil, Trash2, AlertTriangle, GitMerge, GitBranch, Maximize2, Minimize2, CheckCircle2, ArrowRight, Clock } from "lucide-react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { Pencil, Trash2, AlertTriangle, GitMerge, GitBranch, Maximize2, Minimize2, CheckCircle2, ArrowRight, Clock, Image as ImageIcon, X } from "lucide-react";
 import { Button, Badge, Input, Select } from "@tide/ui";
 import { AIOptimizeButton } from "./AIOptimizeButton";
 import {
@@ -19,6 +19,7 @@ import {
   parseApprovalDetail,
   useAddArtifact,
   useAuth,
+  uploadWorkItemAttachments,
   appPath,
   type WorkItem,
   type WorkItemUpdate,
@@ -26,9 +27,30 @@ import {
   type WorkItemArtifact,
   type WorkItemPlanTask,
   type Approval,
+  type WorkItemAttachment,
 } from "@tide/core";
 import { CrossRepoResults } from "./CrossRepoResults";
 import { MergeConflictPanel } from "../code-editor/MergeConflictPanel";
+
+const TERMINAL_STATUSES = new Set(["completed", "stopped"]);
+
+const EDIT_IMAGE_RE = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
+const MAX_EDIT_IMAGES = 10;
+const MAX_EDIT_IMAGE_SIZE = 10 * 1024 * 1024;
+
+interface EditPendingAttachment {
+  id: string;
+  file: File;
+  previewUrl: string;
+}
+
+function isEditImageFile(file: File): boolean {
+  return file.type.startsWith("image/") || EDIT_IMAGE_RE.test(file.name);
+}
+
+function genEditAttachmentId(): string {
+  return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
 
 const TASK_STATUS_LABEL: Record<string, string> = {
   queued: "排队中",
@@ -156,24 +178,131 @@ export function WorkItemDetailPanel({
   const [editing, setEditing] = useState(false);
   const [editTitle, setEditTitle] = useState("");
   const [editDescription, setEditDescription] = useState("");
+  const [editPendingAttachments, setEditPendingAttachments] = useState<EditPendingAttachment[]>([]);
+  const [editImageError, setEditImageError] = useState<string | null>(null);
+  const [editDragActive, setEditDragActive] = useState(false);
+  const [editUploadingImages, setEditUploadingImages] = useState(false);
+  const editImageInputRef = useRef<HTMLInputElement>(null);
+
+  const isEnded = TERMINAL_STATUSES.has(item?.status ?? "");
 
   const startEditing = () => {
-    if (!item) return;
+    if (!item || isEnded) return;
     setEditTitle(item.title);
     setEditDescription(item.description ?? "");
     setEditing(true);
   };
 
+  const addEditFiles = useCallback(
+    (files: FileList | File[] | null) => {
+      if (!files) return;
+      const incoming = Array.from(files).filter(isEditImageFile);
+      if (!incoming.length) {
+        setEditImageError("仅支持图片文件");
+        return;
+      }
+      const oversized = incoming.find((f) => f.size > MAX_EDIT_IMAGE_SIZE);
+      if (oversized) {
+        setEditImageError(`图片 ${oversized.name} 超过 10MB 上限`);
+        return;
+      }
+      if (editPendingAttachments.length + incoming.length > MAX_EDIT_IMAGES) {
+        setEditImageError(`最多上传 ${MAX_EDIT_IMAGES} 张图片`);
+        return;
+      }
+      setEditImageError(null);
+      const newItems: EditPendingAttachment[] = incoming.map((file) => ({
+        id: genEditAttachmentId(),
+        file,
+        previewUrl: URL.createObjectURL(file),
+      }));
+      setEditPendingAttachments((prev) => [...prev, ...newItems]);
+    },
+    [editPendingAttachments.length],
+  );
+
+  const removeEditAttachment = useCallback((id: string) => {
+    setEditPendingAttachments((prev) => {
+      const target = prev.find((a) => a.id === id);
+      if (target) URL.revokeObjectURL(target.previewUrl);
+      return prev.filter((a) => a.id !== id);
+    });
+  }, []);
+
+  const handleEditImagePick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    addEditFiles(e.target.files);
+    e.target.value = "";
+  };
+
+  const handleEditDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setEditDragActive(true);
+  };
+
+  const handleEditDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setEditDragActive(false);
+  };
+
+  const handleEditDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setEditDragActive(false);
+    addEditFiles(e.dataTransfer.files);
+  };
+
+  const handleEditPaste = (e: React.ClipboardEvent<HTMLDivElement | HTMLTextAreaElement>) => {
+    const files = e.clipboardData?.files;
+    if (files && files.length > 0) {
+      const images = Array.from(files).filter(isEditImageFile);
+      if (images.length > 0) {
+        e.preventDefault();
+        addEditFiles(files);
+      }
+    }
+  };
+
+  // 清理编辑图片 URL
+  useEffect(() => {
+    return () => {
+      editPendingAttachments.forEach((a) => URL.revokeObjectURL(a.previewUrl));
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const saveEdit = async () => {
     if (!item) return;
-    await updateMutation.mutateAsync({
-      id: item.id,
-      data: {
-        title: editTitle.trim() || item.title,
-        description: editDescription.trim() || undefined,
-      },
-    });
-    setEditing(false);
+    try {
+      await updateMutation.mutateAsync({
+        id: item.id,
+        data: {
+          title: editTitle.trim() || item.title,
+          description: editDescription.trim() || undefined,
+        },
+      });
+      if (editPendingAttachments.length > 0) {
+        setEditUploadingImages(true);
+        try {
+          await uploadWorkItemAttachments(
+            item.id,
+            editPendingAttachments.map((a) => a.file),
+          );
+          editPendingAttachments.forEach((a) => URL.revokeObjectURL(a.previewUrl));
+          setEditPendingAttachments([]);
+        } catch (e) {
+          setEditImageError(e instanceof Error ? e.message : "图片上传失败");
+          setEditUploadingImages(false);
+          return;
+        } finally {
+          setEditUploadingImages(false);
+        }
+      }
+      setEditing(false);
+    } catch {
+      // updateMutation error is handled by react-query
+    }
   };
 
   const handleDelete = async () => {
@@ -202,7 +331,7 @@ export function WorkItemDetailPanel({
 
   const inlineSelectClass =
     "h-7 w-full rounded-md border border-border/50 bg-background px-2 py-0 text-xs focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-0";
-  const fieldDisabled = updateMutation.isPending || isViewer;
+  const fieldDisabled = updateMutation.isPending || isViewer || isEnded;
 
   return (
     <PanelShell onClose={onClose} isExpanded={isExpanded} onToggleExpand={() => setIsExpanded(!isExpanded)} itemId={itemId}>
@@ -215,30 +344,103 @@ export function WorkItemDetailPanel({
               onChange={(e) => setEditTitle(e.target.value)}
               className="h-11 rounded-lg border-0 bg-muted/50 text-lg font-semibold focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0"
             />
-            <textarea
-              value={editDescription}
-              onChange={(e) => setEditDescription(e.target.value)}
-              rows={4}
-              className="w-full rounded-lg border-0 bg-muted/50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-              placeholder="描述"
+            <div className="relative">
+              <textarea
+                value={editDescription}
+                onChange={(e) => setEditDescription(e.target.value)}
+                onPaste={handleEditPaste}
+                rows={4}
+                className="w-full rounded-lg border-0 bg-muted/50 px-3 py-2 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                placeholder="描述（可粘贴图片）"
+              />
+              <AIOptimizeButton
+                description={editDescription}
+                onOptimized={setEditDescription}
+                disabled={!editDescription.trim()}
+                inline
+              />
+            </div>
+
+            {/* 编辑模式图片附件上传 */}
+            <input
+              ref={editImageInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={handleEditImagePick}
             />
-            <AIOptimizeButton
-              description={editDescription}
-              onOptimized={setEditDescription}
-              disabled={!editDescription.trim()}
-            />
+            <div
+              tabIndex={0}
+              role="button"
+              aria-label="编辑模式图片上传区域"
+              onClick={() => editImageInputRef.current?.click()}
+              onDragOver={handleEditDragOver}
+              onDragLeave={handleEditDragLeave}
+              onDrop={handleEditDrop}
+              onPaste={handleEditPaste}
+              className={
+                "cursor-pointer rounded-lg border border-dashed p-3 text-center transition-colors focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-primary/30 " +
+                (editDragActive
+                  ? "border-primary bg-primary/5"
+                  : "border-border/60 bg-muted/30 hover:bg-muted/50")
+              }
+            >
+              <ImageIcon className="mx-auto h-4 w-4 text-muted-foreground" />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                点击、拖拽或粘贴添加图片
+              </p>
+            </div>
+
+            {editPendingAttachments.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {editPendingAttachments.map((att) => (
+                  <div
+                    key={att.id}
+                    className="group relative h-8 w-8 overflow-hidden rounded border border-border/50 bg-muted"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={att.previewUrl}
+                      alt={att.file.name}
+                      className="h-full w-full object-cover"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeEditAttachment(att.id)}
+                      className="absolute right-0 top-0 flex h-3 w-3 items-center justify-center rounded-full bg-black/60 text-white opacity-0 transition-opacity group-hover:opacity-100"
+                      aria-label="移除"
+                    >
+                      <X className="h-2 w-2" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {editImageError && (
+              <p className="text-xs text-destructive">{editImageError}</p>
+            )}
+
             <div className="flex gap-2">
               <Button
                 size="sm"
                 onClick={saveEdit}
-                disabled={updateMutation.isPending}
+                disabled={updateMutation.isPending || editUploadingImages}
               >
-                {updateMutation.isPending ? "保存中…" : "保存"}
+                {updateMutation.isPending || editUploadingImages
+                  ? "保存中…"
+                  : "保存"}
               </Button>
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => setEditing(false)}
+                onClick={() => {
+                  editPendingAttachments.forEach((a) => URL.revokeObjectURL(a.previewUrl));
+                  setEditPendingAttachments([]);
+                  setEditImageError(null);
+                  setEditing(false);
+                }}
               >
                 取消
               </Button>
@@ -251,27 +453,31 @@ export function WorkItemDetailPanel({
                 {item.title}
               </h2>
               <div className="flex shrink-0 items-center gap-1">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
-                  onClick={startEditing}
-                  aria-label="编辑"
-                  title="编辑"
-                >
-                  <Pencil className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 w-8 p-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                  onClick={handleDelete}
-                  disabled={deleteMutation.isPending}
-                  aria-label="删除"
-                  title="删除"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
+                {!isEnded && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
+                    onClick={startEditing}
+                    aria-label="编辑"
+                    title="编辑"
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </Button>
+                )}
+                {!isEnded && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 p-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                    onClick={handleDelete}
+                    disabled={deleteMutation.isPending}
+                    aria-label="删除"
+                    title="删除"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                )}
               </div>
             </div>
             {item.description && (
@@ -279,6 +485,9 @@ export function WorkItemDetailPanel({
                 {item.description}
               </p>
             )}
+
+            {/* 图片附件紧靠描述下方 */}
+            <WorkItemAttachmentsSection item={item} />
           </div>
         )}
 
@@ -508,6 +717,17 @@ interface WorkItemArtifactsSectionProps {
   item: WorkItem;
 }
 
+const IMAGE_RE = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
+
+function isImageAttachment(att: WorkItemAttachment): boolean {
+  if (att.type === "image") return true;
+  return IMAGE_RE.test(att.name || att.path || "");
+}
+
+function getAttachmentContentUrl(itemId: string, att: WorkItemAttachment): string {
+  return `/api/work-items/${encodeURIComponent(itemId)}/attachments/${encodeURIComponent(att.id)}/content`;
+}
+
 function WorkItemArtifactsSection({ item }: WorkItemArtifactsSectionProps) {
   const { user } = useAuth();
   const isViewer = user?.role === "viewer";
@@ -642,6 +862,119 @@ function WorkItemArtifactsSection({ item }: WorkItemArtifactsSectionProps) {
 
 interface WorkItemApprovalSectionProps {
   item: WorkItem;
+}
+
+interface WorkItemAttachmentsSectionProps {
+  item: WorkItem;
+}
+
+function WorkItemAttachmentsSection({ item }: WorkItemAttachmentsSectionProps) {
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+
+  const attachments: WorkItemAttachment[] = (() => {
+    const meta = item.metadata;
+    if (!meta || typeof meta !== "object") return [];
+    const list = (meta as Record<string, unknown>).attachments;
+    if (!Array.isArray(list)) return [];
+    return list as WorkItemAttachment[];
+  })();
+
+  const images = attachments.filter(isImageAttachment);
+  const files = attachments.filter((a) => !isImageAttachment(a));
+
+  useEffect(() => {
+    if (!lightboxUrl) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setLightboxUrl(null);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [lightboxUrl]);
+
+  if (attachments.length === 0) {
+    return null;
+  }
+
+  return (
+    <div>
+      <div className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        图片附件
+      </div>
+
+      {images.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {images.map((att) => {
+            const url = getAttachmentContentUrl(item.id, att);
+            return (
+              <button
+                key={att.id}
+                type="button"
+                onClick={() => setLightboxUrl(url)}
+                className="group relative h-12 w-12 overflow-hidden rounded border border-border/50 bg-muted transition-smooth hover:border-primary/40"
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={url}
+                  alt={att.name}
+                  className="h-full w-full object-cover"
+                  loading="lazy"
+                />
+                <span className="absolute inset-0 flex items-center justify-center bg-black/50 text-[8px] text-white opacity-0 transition-opacity group-hover:opacity-100">
+                  查看
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {files.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {files.map((att) => {
+            const url = getAttachmentContentUrl(item.id, att);
+            return (
+              <a
+                key={att.id}
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-md border border-border/50 bg-muted/30 px-2.5 py-1.5 text-xs text-foreground transition-smooth hover:bg-muted/50"
+              >
+                <ImageIcon className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="max-w-[160px] truncate">{att.name}</span>
+              </a>
+            );
+          })}
+        </div>
+      )}
+
+      {lightboxUrl && (
+        <button
+          type="button"
+          onClick={() => setLightboxUrl(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+        >
+          <div className="absolute right-4 top-4 text-white/80">
+            <X className="h-6 w-6" />
+          </div>
+          <a
+            href={lightboxUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="max-h-[90vh] max-w-[90vw]"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={lightboxUrl}
+              alt="图片预览"
+              className="max-h-[90vh] max-w-[90vw] rounded-lg object-contain"
+            />
+          </a>
+        </button>
+      )}
+    </div>
+  );
 }
 
 function WorkItemApprovalSection({ item }: WorkItemApprovalSectionProps) {

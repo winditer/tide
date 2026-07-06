@@ -7,8 +7,17 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type ChangeEvent,
+  type DragEvent,
 } from "react";
-import { useAgents, useChat, useProjects, useProjectGroups } from "@tide/core";
+import {
+  useAgents,
+  useChat,
+  useProjects,
+  useProjectGroups,
+  uploadTaskAttachments,
+  type ChatAttachment,
+} from "@tide/core";
 import { ChatMessageList } from "./ChatMessageList";
 import { ChatArtifactPanel } from "./ChatArtifactPanel";
 import { AIOptimizeButton } from "../work-items/AIOptimizeButton";
@@ -33,6 +42,24 @@ const MIN_W = 320;
 const MIN_H = 400;
 const MAX_W_VW = 0.9;
 const MAX_H_VH = 0.85;
+
+const IMAGE_RE = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
+const MAX_CHAT_IMAGES = 10;
+const MAX_CHAT_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB
+
+interface PendingAttachment {
+  id: string;
+  file: File;
+  previewUrl: string;
+}
+
+function isImageFile(file: File): boolean {
+  return file.type.startsWith("image/") || IMAGE_RE.test(file.name);
+}
+
+function genAttachmentId(): string {
+  return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
 
 function loadPosition(): ButtonPosition {
   if (typeof window === "undefined") return DEFAULT_POSITION;
@@ -90,6 +117,11 @@ export function FloatingChat() {
   const [isDragging, setIsDragging] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
   const [windowSize, setWindowSize] = useState({ width: WINDOW_W, height: WINDOW_H });
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  const [isUploadingImages, setIsUploadingImages] = useState(false);
+  const [imageUploadError, setImageUploadError] = useState<string | null>(null);
+  const [dragActive, setDragActive] = useState(false);
+  const imageInputRef = useRef<HTMLInputElement>(null);
 
   // hydrate
   useEffect(() => {
@@ -145,11 +177,84 @@ export function FloatingChat() {
 
   const sendingRef = useRef(false);
 
+  const addPendingFiles = useCallback(
+    (files: FileList | File[] | null) => {
+      if (!files) return;
+      const incoming = Array.from(files).filter(isImageFile);
+      if (!incoming.length) {
+        setImageUploadError("仅支持图片文件");
+        return;
+      }
+      const oversized = incoming.find((f) => f.size > MAX_CHAT_IMAGE_SIZE);
+      if (oversized) {
+        setImageUploadError(`图片 ${oversized.name} 超过 10MB 上限`);
+        return;
+      }
+      if (pendingAttachments.length + incoming.length > MAX_CHAT_IMAGES) {
+        setImageUploadError(`最多上传 ${MAX_CHAT_IMAGES} 张图片`);
+        return;
+      }
+      setImageUploadError(null);
+      const newItems: PendingAttachment[] = incoming.map((file) => ({
+        id: genAttachmentId(),
+        file,
+        previewUrl: URL.createObjectURL(file),
+      }));
+      setPendingAttachments((prev) => [...prev, ...newItems]);
+    },
+    [pendingAttachments.length]
+  );
+
+  const removePendingAttachment = useCallback((id: string) => {
+    setPendingAttachments((prev) => {
+      const target = prev.find((a) => a.id === id);
+      if (target) {
+        URL.revokeObjectURL(target.previewUrl);
+      }
+      return prev.filter((a) => a.id !== id);
+    });
+  }, []);
+
+  const handleImagePick = (e: ChangeEvent<HTMLInputElement>) => {
+    addPendingFiles(e.target.files);
+    e.target.value = "";
+  };
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = e.clipboardData.files;
+    if (files && files.length > 0) {
+      const images = Array.from(files).filter(isImageFile);
+      if (images.length > 0) {
+        e.preventDefault();
+        addPendingFiles(files);
+      }
+    }
+  };
+
+  const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(true);
+  };
+
+  const handleDragLeave = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+  };
+
+  const handleDrop = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    addPendingFiles(e.dataTransfer.files);
+  };
+
   const handleSend = useCallback(async () => {
     const trimmed = draftInput.trim();
-    if (!trimmed) return;
-    if (chatRef.current.isSending) {
-      console.warn("[FloatingChat] Blocked: chat.isSending");
+    if (!trimmed && pendingAttachments.length === 0) return;
+    if (chatRef.current.isSending || isUploadingImages) {
+      console.warn("[FloatingChat] Blocked: chat.isSending or uploading images");
       return;
     }
     if (sendingRef.current) {
@@ -159,15 +264,35 @@ export function FloatingChat() {
     sendingRef.current = true;
     setDraftInput("");
     try {
+      let messageAttachments: ChatAttachment[] | undefined;
+      if (pendingAttachments.length > 0) {
+        setIsUploadingImages(true);
+        const files = pendingAttachments.map((a) => a.file);
+        const res = await uploadTaskAttachments(files);
+        messageAttachments = files.map((file, idx) => ({
+          id: genAttachmentId(),
+          path: res.attachments[idx] ?? "",
+          name: file.name,
+          type: "image" as const,
+        }));
+        pendingAttachments.forEach((a) => URL.revokeObjectURL(a.previewUrl));
+        setPendingAttachments([]);
+        setIsUploadingImages(false);
+      }
       await chatRef.current.sendMessage(trimmed, {
         projectCwd: projectCwd || undefined,
         groupId: groupId || undefined,
         agentId: agentId || undefined,
+        attachments: messageAttachments,
       });
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : "图片上传失败";
+      setImageUploadError(errMsg);
     } finally {
+      setIsUploadingImages(false);
       sendingRef.current = false;
     }
-  }, [draftInput, projectCwd, groupId, agentId]);
+  }, [draftInput, projectCwd, groupId, agentId, pendingAttachments, isUploadingImages]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -178,6 +303,14 @@ export function FloatingChat() {
     },
     [handleSend]
   );
+
+  // 释放未发送图片的预览 URL
+  useEffect(() => {
+    return () => {
+      pendingAttachments.forEach((a) => URL.revokeObjectURL(a.previewUrl));
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Drag handling
   const dragStateRef = useRef<{
@@ -561,48 +694,135 @@ export function FloatingChat() {
             </div>
 
             {/* Input */}
-            <div className="shrink-0 border-t border-border/50 bg-card p-3">
+            <div
+              className={
+                "shrink-0 border-t border-border/50 bg-card p-3 transition-shadow " +
+                (dragActive ? "ring-2 ring-inset ring-primary/40" : "")
+              }
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+            >
               <div className="mb-1.5 flex items-center justify-center" aria-hidden="true">
                 <span
                   title="拖动输入框右下角可调整高度"
                   className="inline-flex h-1 w-8 rounded-full bg-border"
                 />
               </div>
-              <div className="flex items-end gap-2">
-                <textarea
-                  rows={2}
-                  value={draftInput}
-                  onChange={(e) => setDraftInput(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder={
-                    selectedGroup
-                      ? `在项目组「${selectedGroup.name}」中执行... (⌘+Enter)`
-                      : selectedProject
-                        ? `在「${selectedProject.name}」中执行... (⌘+Enter)`
-                        : "输入消息开始对话... (⌘+Enter)"
-                  }
-                  className="min-h-[60px] max-h-[200px] flex-1 resize-y rounded-lg border-0 bg-muted/50 px-3 py-2 text-sm leading-snug text-foreground placeholder:text-muted-foreground transition-shadow focus:outline-none focus:ring-2 focus:ring-ring"
-                />
-                <AIOptimizeButton
-                  description={draftInput}
-                  onOptimized={setDraftInput}
-                  disabled={!draftInput.trim()}
-                  compact
+
+              {pendingAttachments.length > 0 && (
+                <div className="mb-2 flex gap-1.5 overflow-x-auto pb-1">
+                  {pendingAttachments.map((att) => (
+                    <div
+                      key={att.id}
+                      className="group relative h-8 w-8 shrink-0 overflow-hidden rounded border border-border/50 bg-muted"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={att.previewUrl}
+                        alt="待发送图片"
+                        className="h-full w-full object-cover"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removePendingAttachment(att.id)}
+                        className="absolute right-0 top-0 flex h-3 w-3 items-center justify-center rounded-full bg-black/60 text-white opacity-0 transition-opacity group-hover:opacity-100"
+                        title="移除"
+                      >
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          width="8"
+                          height="8"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="M18 6 6 18" />
+                          <path d="m6 6 12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex items-end gap-1.5">
+                <div className="relative flex-1">
+                  <textarea
+                    rows={2}
+                    value={draftInput}
+                    onChange={(e) => setDraftInput(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    onPaste={handlePaste}
+                    placeholder={
+                      selectedGroup
+                        ? `在项目组「${selectedGroup.name}」中执行... (⌘+Enter，可粘贴/拖拽图片)`
+                        : selectedProject
+                          ? `在「${selectedProject.name}」中执行... (⌘+Enter，可粘贴/拖拽图片)`
+                          : "输入消息开始对话... (⌘+Enter，可粘贴/拖拽图片)"
+                    }
+                    className="min-h-[60px] max-h-[200px] w-full resize-y rounded-lg border-0 bg-muted/50 px-3 py-2 pr-10 text-sm leading-snug text-foreground placeholder:text-muted-foreground transition-shadow focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                  <AIOptimizeButton
+                    description={draftInput}
+                    onOptimized={setDraftInput}
+                    disabled={!draftInput.trim()}
+                    inline
+                  />
+                </div>
+                <input
+                  ref={imageInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  onChange={handleImagePick}
                 />
                 <button
                   type="button"
+                  onClick={() => imageInputRef.current?.click()}
+                  disabled={isUploadingImages || chat.isSending}
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground transition-smooth hover:bg-muted/80 disabled:cursor-not-allowed disabled:opacity-50"
+                  title="发送图片"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
+                    <circle cx="9" cy="9" r="2" />
+                    <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
                   onClick={() => void handleSend()}
-                  disabled={!draftInput.trim() || chat.isSending}
-                  className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground transition-smooth hover:bg-primary/90 hover:shadow-md disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground disabled:hover:shadow-none"
+                  disabled={
+                    (!draftInput.trim() && pendingAttachments.length === 0) ||
+                    chat.isSending ||
+                    isUploadingImages
+                  }
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground transition-smooth hover:bg-primary/90 hover:shadow-md disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground disabled:hover:shadow-none"
                   title="发送 (⌘+Enter)"
                 >
-                  {chat.isSending ? (
+                  {chat.isSending || isUploadingImages ? (
                     <span className="inline-block h-2.5 w-2.5 animate-pulse rounded-full bg-current" />
                   ) : (
                     <svg
                       xmlns="http://www.w3.org/2000/svg"
-                      width="16"
-                      height="16"
+                      width="15"
+                      height="15"
                       viewBox="0 0 24 24"
                       fill="none"
                       stroke="currentColor"
@@ -625,8 +845,13 @@ export function FloatingChat() {
                       ? `项目 · ${selectedProject.name}`
                       : "纯对话模式"}
                 </span>
-                <span>⌘ + ↵ 发送</span>
+                <span className="flex items-center gap-2">
+                  <span>⌘ + ↵ 发送</span>
+                </span>
               </div>
+              {imageUploadError && (
+                <p className="mt-1.5 text-[11px] text-destructive">{imageUploadError}</p>
+              )}
             </div>
           </div>
         </div>

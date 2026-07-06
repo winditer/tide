@@ -130,6 +130,15 @@ export interface WorkItemArtifact {
   created_at: string;
 }
 
+export interface WorkItemAttachment {
+  id: string;
+  name: string;
+  path: string;
+  type: "image" | "file";
+  size: number;
+  created_at: string;
+}
+
 export interface WorkItemBoardColumn {
   id: string;
   label: string;
