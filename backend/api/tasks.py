@@ -249,10 +249,21 @@ async def _fetch_db_dedup_keys(
     若去重集合也随之缺失这些 session_id，文件源扫描到同一会话时去重会失效，
     导致已取消/隐藏的任务被文件源当作 ``completed`` 重新显示（"重复出现"缺陷）。
 
+    例外：因服务重启被 auto-recovery 标记为 cancelled 的任务，其"取消"并非
+    反映会话真实结果——会话文件才是事实来源。若将它们纳入去重集合，会导致
+    对应的 Codex/Claude 对话文件被错误过滤（"对话任务消失"回归缺陷）。故排除
+    这类任务，使其会话文件仍可作为已完成任务展示；同时保留用户主动取消/拒绝
+    的任务在去重集合中，避免其被文件源当作 completed 重现。
+
     返回 ``(session_ids, task_ids)`` 两个集合。
     """
     conditions = ["workspace_id = :workspace_id"]
     params: dict = {"workspace_id": workspace_id}
+    # 排除 auto-recovery 因服务重启取消的任务（见 docstring）
+    conditions.append(
+        "NOT (status = 'cancelled' AND result LIKE "
+        "'%[auto-recovery] Task interrupted by server restart.%')"
+    )
     if agent_id:
         conditions.append("agent_id = :agent_id")
         params["agent_id"] = agent_id

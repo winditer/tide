@@ -238,6 +238,43 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+# freeform 模式（无 worktree/无 git commit）下，Agent 在 cwd 生成的产物文件会在
+# 执行结束后丢失（目录被清理/覆盖/非 git 仓库无法回溯）。Bridge 回传的
+# 文件内容需持久化到此目录，供 content API 回读。
+_ARTIFACT_CONTENT_DIR = Path(".tide/attachments/artifacts")
+
+
+def _safe_artifact_name(filename: str) -> str:
+    """将产物文件名归一化为安全的磁盘文件名（保留中文/字母/数字）。"""
+    name = Path(filename or "artifact").name
+    cleaned = "".join(
+        ch if (ch.isalnum() or ch in ".-_") else "_" for ch in name
+    )
+    return cleaned or "artifact"
+
+
+def _persist_artifact_content(
+    work_item_id: str, artifact_id: str, filename: str, content: str
+) -> Optional[str]:
+    """将产物文本内容持久化到 .tide/attachments/artifacts/{work_item_id}/ 下。
+
+    返回存储的相对路径字符串（相对后端进程 cwd）；失败时返回 None。
+    任何异常均不中断主流程。
+    """
+    if not content:
+        return None
+    try:
+        target_dir = _ARTIFACT_CONTENT_DIR / work_item_id
+        target_dir.mkdir(parents=True, exist_ok=True)
+        stored_name = f"{artifact_id}-{_safe_artifact_name(filename)}"
+        target = target_dir / stored_name
+        target.write_text(content, encoding="utf-8")
+        return str(target)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("persist artifact content failed for %s: %s", filename, exc)
+        return None
+
+
 # 终态节点类型（与 workflow_engine.TERMINAL_NODE_TYPES 保持同步）
 _TERMINAL_NODE_TYPES = {"end", "cancel", "error", "close"}
 
@@ -618,6 +655,18 @@ class WorkItemService:
         #    flow_mode 采用继承链（项目级 > 项目组级 > 系统默认）
         flow_mode = await self.get_effective_flow_mode(project_id, settings=settings)
         if flow_mode == "freeform":
+            # 读取有效的 freeform 状态列表（项目级 > 全局 > 默认），
+            # 取第一列作为新建工作项的初始状态列，避免落到非首列或看板兜底列。
+            status_list = await self.get_freeform_status_list(project_id)
+            first_key = "unassigned"
+            if isinstance(status_list, list) and status_list:
+                fk = str((status_list[0] or {}).get("key", "")).strip()
+                if fk:
+                    first_key = fk
+            # 默认首列（unassigned）沿用按分配聚合推导，status 列保持 NULL；
+            # 自定义首列则显式写入 status 列，确保工作项归入配置的第一个状态列。
+            initial_status = first_key if first_key != "unassigned" else None
+
             item_id = str(uuid.uuid4())
             now = _now_iso()
             tags_json = json.dumps(tags, ensure_ascii=False) if tags else None
@@ -629,16 +678,16 @@ class WorkItemService:
                         INSERT INTO work_items
                             (id, project_id, workflow_id, current_node_id, title, description,
                              priority, assignee, tags, source_type, source_id, metadata,
-                             version_id, flow_mode, started_at, created_at, updated_at, group_id)
+                             version_id, flow_mode, status, started_at, created_at, updated_at, group_id)
                         VALUES (:id, :project_id, :workflow_id, :current_node_id, :title, :description,
                                 :priority, :assignee, :tags, :source_type, :source_id, :metadata,
-                                :version_id, :flow_mode, :started_at, :created_at, :updated_at, :group_id)
+                                :version_id, :flow_mode, :status, :started_at, :created_at, :updated_at, :group_id)
                     """),
                     {
                         "id": item_id,
                         "project_id": project_id,
                         "workflow_id": "__freeform__",
-                        "current_node_id": "unassigned",
+                        "current_node_id": first_key,
                         "title": title,
                         "description": description,
                         "priority": priority,
@@ -649,6 +698,7 @@ class WorkItemService:
                         "metadata": metadata_json,
                         "version_id": version_id,
                         "flow_mode": "freeform",
+                        "status": initial_status,
                         "started_at": now,
                         "created_at": now,
                         "updated_at": now,
@@ -661,7 +711,7 @@ class WorkItemService:
             await self._record_transition(
                 item_id=item_id,
                 from_node_id=None,
-                to_node_id="unassigned",
+                to_node_id=first_key,
                 trigger_type="create",
                 operator="system",
             )
@@ -3107,22 +3157,37 @@ class WorkItemService:
         artifacts: list = []
 
         def _infer_file_stage(filename: str, file_path: str = "") -> str:
-            """根据文件名/路径推断产物分类：测试报告→test，工作流文档→doc，其余→code。"""
+            """根据文件名/路径推断产物分类：测试报告→test，文档→doc，其余→code。
+
+            分类规则（按优先级）：
+            1. 测试报告关键词 → test（优先级最高，避免测试报告 .md 被误归为 doc）。
+            2. 所有 .md/.markdown 文件 → doc（.md 本身即文档格式，与路径无关）。
+            3. docs/ 目录下的文件 → doc。
+            4. 文件名含文档类关键词（报告/分析/方案/设计等）→ doc。
+            5. 其余 → code。
+            """
             lower = filename.lower()
             path_lower = file_path.lower() if file_path else ""
-            # 测试报告
+            # 1. 测试报告（优先级最高）
             if "测试报告" in lower or "test-report" in lower or "test_report" in lower:
                 return "test"
-            # 工作流文档：docs/ 目录下的 .md 或含特定关键词的 .md
-            if lower.endswith(".md"):
-                # docs/ 目录下的 .md 文件
-                if path_lower.startswith("docs/") or "/docs/" in path_lower:
+            # 2. 所有 Markdown 文件均视为文档
+            if lower.endswith(".md") or lower.endswith(".markdown"):
+                return "doc"
+            # 3. docs/ 目录下的文件一律视为文档
+            if path_lower.startswith("docs/") or "/docs/" in path_lower:
+                return "doc"
+            # 4. 文件名含文档类关键词（覆盖无扩展名或非 .md 的文档，如“DDD-研究报告”）
+            doc_keywords = (
+                "技术方案", "修改点", "测试用例", "研究报告", "分析报告", "架构设计",
+                "报告", "分析", "方案", "设计",
+                "tech-solution", "design-doc", "modification",
+                "architecture", "analysis", "report", "proposal",
+                "specification", "spec",
+            )
+            for kw in doc_keywords:
+                if kw in lower:
                     return "doc"
-                # 文件名含工作流文档关键词
-                doc_keywords = ("技术方案", "修改点", "测试用例", "tech-solution", "design-doc", "modification")
-                for kw in doc_keywords:
-                    if kw in lower:
-                        return "doc"
             return "code"
 
         # 提前获取 repo_url 与 project_path，供文件链接与 commit 链接复用
@@ -3190,6 +3255,59 @@ class WorkItemService:
 
         # 2. 从 Agent 文本输出中提取生成的文件路径（兜底）
         if output and isinstance(output, str):
+            # 2a. Bridge 回传的文件产物块：--- File: <relative_path> ---\n<content>
+            #     这些内容需持久化，因为 freeform 模式（无 worktree/无 git commit）下
+            #     源文件会在任务结束后丢失，仅靠 file_path 引用会导致 content API 404。
+            handled_paths: set = set()
+            try:
+                block_pattern = re.compile(
+                    r"---\s*File:\s*(.+?)\s*---\n(.*?)(?=\n---\s*File:|\Z)",
+                    re.DOTALL,
+                )
+                blocks = block_pattern.findall(output)
+            except re.error:
+                blocks = []
+            for raw_path, block_content in blocks[:10]:
+                raw_path = (raw_path or "").strip().strip("`'\"")
+                if not raw_path:
+                    continue
+                relative_path = raw_path
+                if project_path and raw_path.startswith(project_path):
+                    relative_path = raw_path[len(project_path):].lstrip("/")
+                handled_paths.add(relative_path)
+                handled_paths.add(raw_path)
+
+                art_id = str(uuid.uuid4())
+                file_name = relative_path.rsplit("/", 1)[-1] or relative_path
+                # 持久化回传的文件内容到 attachments 目录
+                stored_path = _persist_artifact_content(
+                    work_item_id, art_id, file_name, block_content or ""
+                )
+
+                file_url = ""
+                if is_pushed and repo_url and commit_hash:
+                    file_url = self._build_file_url(repo_url, commit_hash, relative_path)
+                if not file_url:
+                    file_url = _build_local_file_url(relative_path)
+
+                art_entry = {
+                    "id": art_id,
+                    "type": "file",
+                    "label": file_name,
+                    "stage": _infer_file_stage(file_name, relative_path),
+                    "url": file_url,
+                    "file_path": relative_path,
+                    "commit_hash": commit_hash or "",
+                    "created_at": _now_iso(),
+                    "task_id": task_id,
+                }
+                if stored_path:
+                    art_entry["stored_path"] = stored_path
+                if source_project:
+                    art_entry["source_project"] = source_project
+                artifacts.append(art_entry)
+
+            # 2b. 其余纯路径提示模式（无内容，仅记录引用）
             file_patterns = [
                 r"File created successfully at:\s*(.+?)(?:\n|$)",
                 r"Created file:\s*(.+?)(?:\n|$)",
@@ -3211,6 +3329,9 @@ class WorkItemService:
                     relative_path = raw_path
                     if project_path and raw_path.startswith(project_path):
                         relative_path = raw_path[len(project_path):].lstrip("/")
+                    # 已由 2a 的 Bridge 文件块处理过则跳过，避免重复
+                    if relative_path in handled_paths or raw_path in handled_paths:
+                        continue
 
                     file_url = ""
                     if is_pushed and repo_url and commit_hash:
@@ -4046,28 +4167,48 @@ class WorkItemService:
                     )
                     sibling_row = sibling_result.fetchone()
 
-            if not session_row:
+            if session_row and sibling_row:
+                # 找到关联工作项：续聊任务，仅提取产物，不推进工作项状态
+                is_continuation = True
+                item_id = sibling_row[0]
+                current_node_id = sibling_row[1]
                 logger.info(
-                    "No work item transition found for task %s, skipping auto-advance.",
-                    task_id[:8],
+                    "[work_item_service] on_work_item_task_completed: task=%s is continuation in session, "
+                    "linked to work_item=%s. Extracting artifacts without advancing.",
+                    task_id[:8], item_id[:8],
                 )
-                return
-            if not sibling_row:
+            else:
+                # 自由协作（freeform）模式兜底：
+                # 经评论 @agent 触发的任务只记录在 work_item_comments.task_id 中，
+                # 没有 transition 记录，此处通过 comments 表反查工作项，
+                # 以便提取并保存产物（不推进节点状态）。
+                async with async_session_factory() as session:
+                    comment_result = await session.execute(
+                        text("""
+                            SELECT work_item_id
+                            FROM work_item_comments
+                            WHERE task_id = :task_id
+                            ORDER BY created_at DESC
+                            LIMIT 1
+                        """),
+                        {"task_id": task_id},
+                    )
+                    comment_row = comment_result.fetchone()
+                if not comment_row:
+                    logger.info(
+                        "No work item transition/comment found for task %s, skipping auto-advance.",
+                        task_id[:8],
+                    )
+                    return
+                # 通过评论找到关联工作项：freeform 协作任务，仅提取产物，不推进状态
+                is_continuation = True
+                item_id = comment_row[0]
+                current_node_id = None
                 logger.info(
-                    "No work item transition found for task %s (incl. session siblings), skipping auto-advance.",
-                    task_id[:8],
+                    "[work_item_service] on_work_item_task_completed: task=%s linked via comment "
+                    "to work_item=%s (freeform mode). Extracting artifacts without advancing.",
+                    task_id[:8], item_id[:8],
                 )
-                return
-
-            # 找到关联工作项：续聊任务，仅提取产物，不推进工作项状态
-            is_continuation = True
-            item_id = sibling_row[0]
-            current_node_id = sibling_row[1]
-            logger.info(
-                "[work_item_service] on_work_item_task_completed: task=%s is continuation in session, "
-                "linked to work_item=%s. Extracting artifacts without advancing.",
-                task_id[:8], item_id[:8],
-            )
         else:
             mapping = dict(row._mapping)
             item_id = mapping["work_item_id"]

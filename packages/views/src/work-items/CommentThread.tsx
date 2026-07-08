@@ -292,6 +292,7 @@ export function CommentThread({
       <div className="mt-3">
         <MentionInput
           projectId={projectId}
+          workItemId={workItemId}
           submitting={createComment.isPending}
           onSubmit={handleSubmit}
         />

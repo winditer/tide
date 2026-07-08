@@ -15,6 +15,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 import shlex
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Optional
@@ -44,6 +45,35 @@ from models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------- 产物文件扫描配置 ----------------
+# 扫描 cwd 时跳过的目录（版本控制/依赖/缓存等，无产物价值且体量大）
+_SCAN_EXCLUDE_DIRS = {
+    ".git", "node_modules", "__pycache__", ".venv", "venv",
+    ".idea", ".vscode", "dist", "build", ".next", ".ruff_cache",
+    ".pytest_cache", ".mypy_cache", "target", ".gradle",
+}
+# 仅收集这些文本类扩展名的文件
+_SCAN_TEXT_EXTENSIONS = {
+    ".md", ".txt", ".py", ".js", ".ts", ".tsx", ".jsx", ".json",
+    ".yaml", ".yml", ".html", ".css", ".scss", ".sh", ".sql",
+    ".java", ".go", ".rs", ".c", ".cpp", ".h", ".hpp", ".xml",
+    ".toml", ".ini", ".cfg", ".csv", ".rst",
+}
+_SCAN_MAX_DEPTH = 3            # 相对 cwd 的最大递归深度
+_SCAN_MAX_FILE_SIZE = 100 * 1024   # 单文件大小上限（100KB）
+_SCAN_MAX_FILES = 10          # 最多收集的文件数
+
+# freeform 模式下 cwd 常为用户项目目录，可能被后台系统/第三方客户端进程
+# （如 Sangfor VDI 客户端）写入无关脚本文件。这些文件 mtime 在任务执行期间
+# 被更新后会被误当作"新增产物"收集。此处按文件名匹配排除已知的非项目系统文件。
+_SCAN_EXCLUDE_NAME_PATTERNS = [
+    re.compile(r"sangfor", re.IGNORECASE),          # 深信服 VDI 客户端
+    re.compile(r"vdiclient", re.IGNORECASE),        # 通用 VDI 客户端脚本
+    re.compile(r"citrix", re.IGNORECASE),           # Citrix 远程桌面客户端
+    re.compile(r"vmware.?horizon", re.IGNORECASE),  # VMware Horizon 客户端
+]
 
 
 # ---------------- 任务执行上下文 ----------------
@@ -241,6 +271,9 @@ class CLIExecutor:
                     logger.warning("work_dir %s does not exist, falling back to /tmp", cwd)
                     cwd = "/tmp"
 
+                # 任务开始前记录 cwd 文件快照，用于任务完成后回收新增/修改的产物文件
+                cwd_snapshot = self._snapshot_cwd(cwd)
+
                 # 切换到 working
                 rt.task.state = TaskState.WORKING
                 rt.task.touch()
@@ -316,6 +349,8 @@ class CLIExecutor:
                                 error=f"git finalize failed: {exc}",
                             )
                             return
+                    # 回收 Agent 在 cwd 下生成/修改的文本文件作为产物
+                    await self._emit_file_artifacts(rt, cwd, cwd_snapshot)
                     await self._finalize_complete(rt)
                 else:
                     err_text = "\n".join(rt.output_buffer[-20:]).strip() or f"exit code {rc}"
@@ -466,20 +501,18 @@ class CLIExecutor:
             argv = [agent_cfg.bin]
             if model:
                 argv += ["-m", model]
-            approval = configuration.get("approvalPolicy") or agent_cfg.approval_policy
-            sandbox = configuration.get("sandboxMode") or agent_cfg.sandbox_mode
-            # fullAuto：daemon 为非交互环境（stdin=DEVNULL）。若以 -a on-request
-            # 运行，codex exec 在需要执行命令/编辑时会等待人工审批，但无人
-            # 应答 → 产生不了实际 agent_message，表现为“无实际内容”。
-            # 与 backend full_auto 行为对齐（approval_policy="never"），强制禁用审批交互。
-            if configuration.get("fullAuto", True):
-                approval = "never"
-                if not sandbox:
-                    sandbox = "workspace-write"
-            if approval:
-                argv += ["-a", approval]
-            if sandbox:
-                argv += ["-s", sandbox]
+            # Bridge/daemon 恒为非交互环境（stdin=DEVNULL），无人应答审批。
+            # 若以 -a on-request 运行，codex exec 在需要执行命令/编辑时会阻塞
+            # 等待人工审批 → 产生不了实际 agent_message，表现为“无实际内容”。
+            # 因此无论任务是否标记 fullAuto，都强制 approval=never 全自动执行。
+            # 注意：codex CLI 有效值为 untrusted/on-failure/on-request/never
+            # sandbox 允许被显式配置覆盖，approval 恒为 never 不可协商。
+            sandbox = (
+                configuration.get("sandboxMode")
+                or agent_cfg.sandbox_mode
+                or "workspace-write"
+            )
+            argv += ["-a", "never", "-s", sandbox]
             argv += ["exec", "--json", "--skip-git-repo-check"]
             if cwd:
                 argv += ["-C", cwd]
@@ -515,6 +548,119 @@ class CLIExecutor:
         env = dict(os.environ)
         env.setdefault("PYTHONUNBUFFERED", "1")
         return env
+
+    # ---------- 产物文件扫描 ----------
+    def _iter_scan_files(self, cwd: str):
+        """浅层遍历 cwd，产出符合文本扩展名的文件绝对路径。
+
+        - 跳过 _SCAN_EXCLUDE_DIRS 与隐藏目录
+        - 限制递归深度为 _SCAN_MAX_DEPTH
+        """
+        base_depth = cwd.rstrip(os.sep).count(os.sep)
+        for root, dirs, files in os.walk(cwd):
+            # 原地过滤子目录：排除依赖/缓存目录与隐藏目录
+            dirs[:] = [
+                d for d in dirs
+                if d not in _SCAN_EXCLUDE_DIRS and not d.startswith(".")
+            ]
+            depth = root.rstrip(os.sep).count(os.sep) - base_depth
+            if depth >= _SCAN_MAX_DEPTH:
+                dirs[:] = []
+            for fn in files:
+                ext = os.path.splitext(fn)[1].lower()
+                if ext not in _SCAN_TEXT_EXTENSIONS:
+                    continue
+                # 排除已知的非项目系统/第三方客户端脚本（如 Sangfor VDI）
+                if any(p.search(fn) for p in _SCAN_EXCLUDE_NAME_PATTERNS):
+                    continue
+                yield os.path.join(root, fn)
+
+    def _snapshot_cwd(self, cwd: str) -> dict[str, float]:
+        """任务开始前记录 cwd 下文本文件的 path -> mtime 快照。
+
+        任何异常均不影响主流程，返回已收集到的部分快照。
+        """
+        snapshot: dict[str, float] = {}
+        if not cwd or not os.path.isdir(cwd):
+            return snapshot
+        try:
+            for fp in self._iter_scan_files(cwd):
+                try:
+                    snapshot[fp] = os.path.getmtime(fp)
+                except OSError:
+                    continue
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("snapshot cwd %s failed: %s", cwd, exc)
+        return snapshot
+
+    def _collect_new_files(
+        self, cwd: str, snapshot: dict[str, float]
+    ) -> list[tuple[str, str]]:
+        """对比快照，收集新增/修改的文本文件内容。
+
+        返回 [(relative_path, content), ...]，按 mtime 倒序、数量与大小受限。
+        """
+        collected: list[tuple[str, str]] = []
+        if not cwd or not os.path.isdir(cwd):
+            return collected
+        try:
+            candidates: list[tuple[str, float]] = []
+            for fp in self._iter_scan_files(cwd):
+                try:
+                    mtime = os.path.getmtime(fp)
+                except OSError:
+                    continue
+                prev = snapshot.get(fp)
+                # 未变更文件跳过（快照中存在且 mtime 未增大）
+                if prev is not None and mtime <= prev:
+                    continue
+                candidates.append((fp, mtime))
+            # 最近修改的优先
+            candidates.sort(key=lambda item: item[1], reverse=True)
+            for fp, _mtime in candidates[:_SCAN_MAX_FILES]:
+                try:
+                    if os.path.getsize(fp) > _SCAN_MAX_FILE_SIZE:
+                        logger.info("skip large artifact file: %s", fp)
+                        continue
+                    with open(fp, "r", encoding="utf-8", errors="replace") as f:
+                        content = f.read()
+                except OSError as exc:
+                    logger.warning("read artifact file %s failed: %s", fp, exc)
+                    continue
+                rel = os.path.relpath(fp, cwd)
+                collected.append((rel, content))
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("collect new files in %s failed: %s", cwd, exc)
+        return collected
+
+    async def _emit_file_artifacts(
+        self, rt: _TaskRuntime, cwd: str, snapshot: dict[str, float]
+    ) -> None:
+        """扫描任务新增/修改文件并作为 artifact 推送。
+
+        每个文件生成一个 artifact，文本格式：
+            --- File: <relative_path> ---
+            <file_content>
+        artifact 同时追加到 rt.task.artifacts 并推送到事件队列，
+        经 daemon_client 流式回传，最终被后端产物提取识别。
+        """
+        try:
+            files = self._collect_new_files(cwd, snapshot)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("emit file artifacts failed: %s", exc)
+            return
+        if not files:
+            return
+        logger.info(
+            "task=%s collected %d file artifact(s) from cwd=%s: %s",
+            rt.task.id, len(files), cwd, [rel for rel, _ in files],
+        )
+        for rel, content in files:
+            text = f"--- File: {rel} ---\n{content}"
+            artifact = make_artifact(text, name=f"file:{rel}")
+            rt.task.artifacts.append(artifact)
+            rt.task.touch()
+            await rt.queue.put(artifact_update_event(rt.task, artifact, append=True))
 
 
 # 全局单例

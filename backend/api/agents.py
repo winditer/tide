@@ -83,6 +83,36 @@ async def _list_remote_agents() -> list[dict]:
     return agents
 
 
+def _agent_visible_for_scope(
+    agent: dict,
+    cfg: Optional[dict],
+    project_id: Optional[str],
+    user_id: Optional[str],
+) -> bool:
+    """判断 Agent 是否在当前用户/项目上下文下有权使用（作用域权限过滤）。
+
+    - ``global`` 作用域：所有人可见
+    - ``project`` 作用域：仅目标项目（``scope_target == project_id``）成员可见
+    - ``personal`` 作用域：仅目标用户（``scope_target == user_id``）可见
+
+    有效作用域优先取 agent_configs 覆盖，其次取 Agent 自带 scope（远程 Agent
+    在 remote_agents 表中的注册作用域），最后默认 ``global``（本地 Agent）。
+    """
+    if cfg and cfg.get("scope"):
+        scope = cfg.get("scope")
+        target = cfg.get("scope_target")
+    else:
+        scope = agent.get("scope") or "global"
+        target = agent.get("scope_target")
+
+    if scope == "project":
+        return bool(project_id) and target == project_id
+    if scope == "personal":
+        return bool(user_id) and target == user_id
+    # global 或未知作用域 → 所有人可见
+    return True
+
+
 def _apply_config_overrides(
     agents: list[dict],
     configs: dict[str, dict],
@@ -125,6 +155,12 @@ async def list_agents(
         description="是否应用 agent_configs 配置覆盖层（禁用过滤 + 字段覆盖）。"
         "管理页需要原始完整列表时传 false。",
     ),
+    scope_filter: bool = Query(
+        False,
+        description="为 true 时按作用域权限过滤，仅返回当前用户/项目有权使用的 Agent"
+        "（global 所有人可用；project 仅目标项目成员；personal 仅目标用户）。"
+        "供 @mention 等选择场景使用。",
+    ),
     current_user=Depends(get_optional_user),
 ):
     """返回可用 Agent 列表 + 运行时状态（含远程 A2A Agent + 配置覆盖）。
@@ -156,17 +192,31 @@ async def list_agents(
     # 追加远程 Agent；查询失败时降级为只返回本地列表
     agents.extend(await _list_remote_agents())
 
-    # 应用 agent_configs 配置覆盖层（管理页可通过 overrides=false 跳过）
-    if overrides:
-        user_id = current_user.get("id") if current_user else None
+    # 解析 agent_configs 三级作用域配置（覆盖过滤与作用域权限过滤共用）
+    user_id = current_user.get("id") if current_user else None
+    configs: dict[str, dict] = {}
+    if overrides or scope_filter:
         try:
             configs = await agent_config_service.resolve_configs(
                 user_id=user_id,
                 project_id=project_id,
             )
-            if configs:
-                agents = _apply_config_overrides(agents, configs)
         except Exception as exc:
-            logger.warning("apply agent_configs overrides failed: %s", exc)
+            logger.warning("resolve agent_configs failed: %s", exc)
+            configs = {}
+
+    # 应用 agent_configs 配置覆盖层（禁用过滤 + 字段覆盖；管理页可通过 overrides=false 跳过）
+    if overrides and configs:
+        agents = _apply_config_overrides(agents, configs)
+
+    # 按作用域权限过滤：仅保留当前用户/项目有权使用的 Agent
+    if scope_filter:
+        agents = [
+            a
+            for a in agents
+            if _agent_visible_for_scope(
+                a, configs.get(a.get("id", "")), project_id, user_id
+            )
+        ]
 
     return {"agents": agents}

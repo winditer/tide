@@ -1031,12 +1031,11 @@ async def _sync_session_token_usage_inner(sa_text, async_session_factory, cost_s
             # 查找或创建关联的 task
             task_id: Optional[str] = None
             synced_count = 0
-            db_completed_at = None
 
             async with async_session_factory() as db_session:
                 r = await db_session.execute(
                     sa_text(
-                        "SELECT id, COALESCE(synced_message_count, 0), completed_at "
+                        "SELECT id, COALESCE(synced_message_count, 0) "
                         "FROM tasks WHERE session_id = :sid "
                         "ORDER BY created_at DESC LIMIT 1"
                     ),
@@ -1046,32 +1045,26 @@ async def _sync_session_token_usage_inner(sa_text, async_session_factory, cost_s
                 if row:
                     task_id = row[0]
                     synced_count = int(row[1] or 0)
-                    db_completed_at = row[2]
 
-            # 已有 DB 记录时，先用文件 mtime 判断是否需要刷新：
-            # 文件自上次同步（completed_at）后未修改 → 跳过，避免读盘/估算 token；
-            # 文件已更新 → 继续走下方增量估算逻辑刷新 token。
-            # 时间无法解析（如 completed_at 为空）时不跳过，回退既有行为，保证不漏刷。
             pre_existing = task_id is not None
-            if pre_existing:
-                file_mtime_dt = _safe_file_mtime(file_path)
-                db_time_dt = _parse_db_timestamp(db_completed_at)
-                if (
-                    file_mtime_dt is not None
-                    and db_time_dt is not None
-                    and file_mtime_dt <= db_time_dt
-                ):
-                    stats["skipped"] += 1
-                    continue
 
-            # 使用专用函数估算 token（计入 tool_use/tool_result 等全部内容）
-            # synced_count 语义为已处理的文件行数
-            # 通过 asyncio.to_thread 在线程池中执行，避免阻塞事件循环
+            # 是否需要刷新，唯一权威依据是"文件行数是否超过已同步行数"
+            # （synced_message_count = 已计入 token 统计的文件行数）。
+            # 不再用文件 mtime 与 completed_at 比较来预判：completed_at 由任务完成/
+            # 同步时刻写入，天然晚于文件最后写入时刻（客户端先写文件、Tide 随后记录完成），
+            # 且实时任务流（带 'Z'）与本同步流（不带 'Z'）会互相覆盖该字段，导致
+            # "file_mtime <= completed_at" 对真实续聊误判为未变更而漏刷 token。
+            #
+            # 使用专用函数估算 token（计入 tool_use/tool_result 等全部内容）。
+            # 当 synced_count>0 时仅对新增行估算（增量，未变更文件几乎零开销：
+            #   老行在读取时被提前 continue，不做 JSON 解析与 tokenize）；
+            # 当 synced_count==0 时 start_line=0，返回的是整文件估算。
+            # 通过 asyncio.to_thread 在线程池中执行，避免阻塞事件循环。
             input_tokens, output_tokens, total_lines = await asyncio.to_thread(
                 _estimate_session_file_tokens, file_path, synced_count
             )
 
-            # 增量检查：文件行数未变则跳过
+            # 权威增量检查：文件行数未增长则跳过（时钟无关，不受 mtime 偏差影响）
             if total_lines <= synced_count:
                 stats["skipped"] += 1
                 continue
@@ -1106,24 +1099,55 @@ async def _sync_session_token_usage_inner(sa_text, async_session_factory, cost_s
                 stats["skipped"] += 1
                 continue
 
-            # 写入 cost_service（累加到 task 的 token 计数）
-            await cost_service.update_task_cost(
-                task_id=task_id,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                model=sess.get("model", "auto"),
+            # 以文件 mtime 作为会话最后活跃时间（比 utcnow 更能反映真实活动时刻）。
+            file_mtime_dt = _safe_file_mtime(file_path)
+            last_active_iso = (
+                file_mtime_dt.isoformat() if file_mtime_dt else datetime.utcnow().isoformat()
             )
 
-            # 更新 synced_message_count（语义：已处理的文件行数）+ completed_at（最后活跃时间）
-            async with async_session_factory() as db_session:
-                await db_session.execute(
-                    sa_text(
-                        "UPDATE tasks SET synced_message_count = :cnt, "
-                        "completed_at = :now WHERE id = :tid"
-                    ),
-                    {"cnt": total_lines, "tid": task_id, "now": datetime.utcnow().isoformat()},
+            if synced_count > 0:
+                # 增量路径：synced_count 已可靠反映已计入 token 的行数，
+                # input/output 仅为新增行的估算值 → 累加（续聊新回合）。
+                await cost_service.update_task_cost(
+                    task_id=task_id,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    model=sess.get("model", "auto"),
                 )
-                await db_session.commit()
+                async with async_session_factory() as db_session:
+                    await db_session.execute(
+                        sa_text(
+                            "UPDATE tasks SET synced_message_count = :cnt, "
+                            "completed_at = :now WHERE id = :tid"
+                        ),
+                        {"cnt": total_lines, "tid": task_id, "now": last_active_iso},
+                    )
+                    await db_session.commit()
+            else:
+                # synced_count==0：首次同步或尚未被本同步接管的任务。
+                # 此时 input/output 为整文件估算值。采用 SET（而非累加）语义，
+                # 以文件为权威重置 token 计数：避免与实时执行时已记录的
+                # （可能不完整的）实时 token 叠加而重复计数（根因修复）。
+                cost = cost_service.calculate_cost(
+                    sess.get("model", "auto"), input_tokens, output_tokens
+                )
+                async with async_session_factory() as db_session:
+                    await db_session.execute(
+                        sa_text(
+                            "UPDATE tasks SET token_input = :ti, token_output = :to_, "
+                            "estimated_cost_usd = :cost, synced_message_count = :cnt, "
+                            "completed_at = :now WHERE id = :tid"
+                        ),
+                        {
+                            "ti": input_tokens,
+                            "to_": output_tokens,
+                            "cost": cost,
+                            "cnt": total_lines,
+                            "tid": task_id,
+                            "now": last_active_iso,
+                        },
+                    )
+                    await db_session.commit()
 
             stats["synced"] += 1
             if pre_existing:

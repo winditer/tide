@@ -699,21 +699,30 @@ class NoWorkflowService:
         mention: dict,
         prompt: str,
     ) -> Optional[str]:
-        """@mention 专家团/小队 → 触发 Agent CLI 执行。"""
+        """@mention 专家团/小队/单个 Agent → 触发 Agent CLI 执行。"""
         from backend.services.task_service import task_service
 
-        team_id = mention.get("id")
-        if not team_id:
+        target_id = mention.get("id")
+        if not target_id:
             return None
 
-        resolved = await expert_team_service.resolve_squad(team_id, "default")
-        if not resolved:
-            logger.warning("execute_from_comment: mention %s not resolvable", team_id)
-            return None
-
-        agent_id = resolved.get("agent_id") or "codex"
-        model = resolved.get("model") or None
-        role_prompt = resolved.get("role_prompt") or ""
+        mention_type = mention.get("type")
+        if mention_type == "agent":
+            # 直接 @单个 Agent：agent_id 即 mention.id（本地 codex/claude/qoder
+            # 或远程 a2a: 前缀），无角色 prompt / 模型覆盖。
+            agent_id = target_id
+            model = None
+            role_prompt = ""
+        else:
+            resolved = await expert_team_service.resolve_squad(target_id, "default")
+            if not resolved:
+                logger.warning(
+                    "execute_from_comment: mention %s not resolvable", target_id
+                )
+                return None
+            agent_id = resolved.get("agent_id") or "codex"
+            model = resolved.get("model") or None
+            role_prompt = resolved.get("role_prompt") or ""
 
         item = await self._get_work_item(work_item_id)
         title = (item or {}).get("title") or ""

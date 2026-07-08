@@ -685,9 +685,56 @@ async def get_artifact_content(
     if not target:
         raise HTTPException(status_code=404, detail="Artifact not found")
 
+    # 优先从持久化的产物内容读取。freeform 模式（无 worktree/无 git commit）下，
+    # Agent 在 cwd 生成的源文件会在任务结束后丢失，此时磁盘/ git 均无法回读，
+    # 只能依赖产物搜集时持久化到 .tide/attachments/artifacts 的副本。
+    stored_path = (target.get("stored_path") or "").strip()
+    if stored_path:
+        stored_abs = Path(stored_path)
+        if not stored_abs.is_absolute():
+            stored_abs = (Path.cwd() / stored_path).resolve()
+        if stored_abs.exists() and stored_abs.is_file():
+            suffix = (Path(target.get("file_path") or "").suffix or stored_abs.suffix).lower()
+            content_type = TEXT_CONTENT_TYPES.get(suffix)
+            if content_type:
+                try:
+                    stored_text = stored_abs.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    stored_text = stored_abs.read_text(encoding="utf-8", errors="replace")
+                return PlainTextResponse(content=stored_text, media_type=content_type)
+            return FileResponse(
+                path=str(stored_abs),
+                media_type="application/octet-stream",
+                filename=Path(target.get("label") or stored_abs.name).name,
+            )
+
     file_path = (target.get("file_path") or "").strip()
     if not file_path:
         raise HTTPException(status_code=400, detail="Artifact has no file_path")
+
+    # 优先级 0：Bridge 回传并已持久化的产物内容（freeform 模式无 worktree/无 commit，
+    # 源文件在任务结束后丢失，仅靠 file_path 会 404）。stored_path 由
+    # work_item_service._persist_artifact_content 写入 .tide/attachments/artifacts/ 下。
+    stored_path = (target.get("stored_path") or "").strip()
+    if stored_path:
+        try:
+            sp = Path(stored_path)
+            if sp.exists() and sp.is_file():
+                suffix = Path(file_path).suffix.lower()
+                content_type = TEXT_CONTENT_TYPES.get(suffix)
+                if content_type:
+                    try:
+                        text = sp.read_text(encoding="utf-8")
+                    except UnicodeDecodeError:
+                        text = sp.read_text(encoding="utf-8", errors="replace")
+                    return PlainTextResponse(content=text, media_type=content_type)
+                return FileResponse(
+                    path=str(sp),
+                    media_type="application/octet-stream",
+                    filename=Path(file_path).name,
+                )
+        except Exception:
+            pass
 
     project_id = item.get("project_id") or ""
     project_path = await work_item_service._get_project_path(project_id)
@@ -788,6 +835,31 @@ async def get_artifact_content(
                     break
             except Exception:
                 continue
+
+        # Fallback（方案 C）：从关联 task 的输出文本中重新提取 Bridge 回传的
+        # 文件内容块（--- File: <path> ---\n<content>）。适用于早期未持久化
+        # stored_path 的历史产物，且源文件已丢失、git 中也无法定位的情况。
+        if content is None and task_id:
+            try:
+                async with async_session_factory() as session:
+                    from sqlalchemy import text as _sqltext
+                    tr = (await session.execute(
+                        _sqltext("SELECT result FROM tasks WHERE id = :id"),
+                        {"id": task_id},
+                    )).fetchone()
+                task_output = dict(tr._mapping).get("result") if tr else None
+                if task_output and isinstance(task_output, str):
+                    fname = Path(file_path).name
+                    for m in re.finditer(
+                        r"---\s*File:\s*(.+?)\s*---\n(.*?)(?=\n---\s*File:|\Z)",
+                        task_output, re.DOTALL,
+                    ):
+                        blk_path = (m.group(1) or "").strip()
+                        if blk_path == file_path or Path(blk_path).name == fname:
+                            content = (m.group(2) or "").encode("utf-8")
+                            break
+            except Exception:
+                content = None
 
         if content is None:
             raise HTTPException(status_code=404, detail="File not found on disk or in git history")
@@ -1331,7 +1403,7 @@ async def create_work_item_comment(
     body: WorkItemCommentCreate,
     current_user=Depends(get_current_user),
 ):
-    """创建评论。若 mentions 含 expert_team/squad，触发 Agent 执行。"""
+    """创建评论。若 mentions 含 expert_team/squad/agent，触发 Agent 执行。"""
     _ensure_not_viewer(current_user)
     from backend.services.no_workflow_service import no_workflow_service
     from backend.services.event_emitter import event_emitter
@@ -1347,10 +1419,10 @@ async def create_work_item_comment(
         mentions=mentions,
     )
 
-    # 2. 解析 mentions：若有 expert_team/squad 类型 → 触发 Agent 执行
+    # 2. 解析 mentions：若有 expert_team/squad/agent 类型 → 触发 Agent 执行
     task_id = None
     for mention in mentions:
-        if mention.get("type") in ("expert_team", "squad"):
+        if mention.get("type") in ("expert_team", "squad", "agent"):
             try:
                 task_id = await no_workflow_service.execute_from_comment(
                     work_item_id=item_id,

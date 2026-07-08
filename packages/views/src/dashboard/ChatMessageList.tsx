@@ -393,14 +393,21 @@ export function ArtifactCard({ artifact }: { artifact: ChatArtifact }) {
       : artifact.type === "link"
         ? "链接"
         : "文件";
+  // 若 url 已是 /docs/view 查看链接（如 work-item 产物），直接经 appPath 前缀化，
+  // 避免被当作文件路径二次包装成 /api/files/content。
+  const isViewLink =
+    artifact.url.startsWith("/docs/view") ||
+    artifact.url.startsWith("/tide/docs/view");
   // 绝对文件路径（如 /Users/...）转为后端 API 读取
   const resolvedUrl =
-    !isExternal && !artifact.url.startsWith("/api/") && artifact.url.startsWith("/")
+    !isExternal && !isViewLink && !artifact.url.startsWith("/api/") && artifact.url.startsWith("/")
       ? `/api/files/content?path=${encodeURIComponent(artifact.url)}`
       : artifact.url;
   const href = isExternal
     ? artifact.url
-    : appPath(`/docs/view?url=${encodeURIComponent(resolvedUrl)}&title=${encodeURIComponent(artifact.label)}`);
+    : isViewLink
+      ? appPath(artifact.url)
+      : appPath(`/docs/view?url=${encodeURIComponent(resolvedUrl)}&title=${encodeURIComponent(artifact.label)}`);
 
   return (
     <a

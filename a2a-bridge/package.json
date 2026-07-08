@@ -1,6 +1,6 @@
 {
   "name": "@tide-ai/a2a-bridge",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "A2A Bridge - Agent-to-Agent protocol bridge for Tide. Wraps local CLI Agents as A2A endpoints.",
   "bin": {
     "a2a-bridge": "./bin/a2a-bridge.js"

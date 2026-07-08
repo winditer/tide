@@ -57,9 +57,9 @@ export interface WorkItemContextEntry {
   created_at: string;
 }
 
-/** @mention 引用项：成员 / 专家团 / 小队 */
+/** @mention 引用项：成员 / 专家团 / 小队 / 单个 Agent */
 export interface MentionItem {
-  type: "member" | "expert_team" | "squad";
+  type: "member" | "expert_team" | "squad" | "agent";
   id: string;
   name?: string;
 }
