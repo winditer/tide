@@ -81,6 +81,10 @@ def parse_codex_event(obj: dict[str, Any]) -> Optional[ParsedEvent]:
         # 旧版本（及部分分支）使用 "assistant_message"。两者均需识别，
         # 否则 AI 实际输出会落入 EVENT_RAW 被丢弃，导致任务无输出。
         if item_type in ("agent_message", "assistant_message"):
+            # 仅 item.completed 携带完整最终文本；item.started/updated 为流式
+            # 增量，与 backend 对齐只在 completed 输出，避免重复或半截内容。
+            if t != "item.completed":
+                return None
             text = item.get("text") or ""
             if _looks_like_approval(text):
                 return ParsedEvent(type=EVENT_APPROVAL, text=text, role="assistant", raw=obj)
@@ -224,7 +228,11 @@ def parse_claude_event(obj: dict[str, Any]) -> Optional[ParsedEvent]:
             return ParsedEvent(type=EVENT_TOOL_USE, text=tool_use_text, role="assistant", raw=obj)
         if _looks_like_approval(text):
             return ParsedEvent(type=EVENT_APPROVAL, text=text, role="assistant", raw=obj)
-        return ParsedEvent(type=EVENT_MESSAGE, text=text, role="assistant", raw=obj)
+        # Claude/Qoder 在 stream-json --verbose 下会对同一回复输出多个流式
+        # assistant 事件（每个都可能携带完整/累加文本），最后又以 result
+        # 事件重发一次。若每个 assistant 都生成 artifact，最终内容会重复多次。
+        # 因此中间 assistant 文本只作为进度事件，最终 artifact 由 result 事件生成。
+        return ParsedEvent(type=EVENT_PROGRESS, text=text, role="assistant", raw=obj)
     if t == "user":
         msg = obj.get("message") or {}
         contents = msg.get("content") or []

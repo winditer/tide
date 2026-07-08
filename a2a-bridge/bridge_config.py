@@ -148,7 +148,10 @@ _DEFAULT_AGENTS: dict[str, dict[str, Any]] = {
         "permission_mode": _env_str("CLAUDE_PERMISSION_MODE", "acceptEdits"),
     },
     "qoder": {
-        "bin": _env_str("QODER_BIN", "qoder"),
+        # Qoder CLI 的实际可执行文件名是 qodercli（默认安装于 ~/.local/bin/qodercli），
+        # 并非 qoder，否则子进程启动会报 "No such file or directory"。
+        # 可通过 QODER_BIN 环境变量覆盖为其它路径/名称。
+        "bin": _env_str("QODER_BIN", "qodercli"),
         "model": _env_str("QODER_MODEL", ""),
         "timeout": _env_int("QODER_TIMEOUT", DEFAULT_TIMEOUT),
         "permission_mode": _env_str("QODER_PERMISSION_MODE", "acceptEdits"),

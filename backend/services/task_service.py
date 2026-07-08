@@ -609,7 +609,11 @@ class TaskService:
                 if event.type == "started":
                     await self._update_status(task_id, workspace_id, "running")
                 elif event.type in ("output", "tool_output", "progress"):
-                    await self._append_result_chunk(task_id, event.content)
+                    # progress 为状态/进度类事件（如 "Task execution started"、
+                    # "turn completed"、reasoning 思考摘要），仅用于前端实时展示，
+                    # 不写入 result，避免状态噪声污染最终任务结果。
+                    if event.type != "progress":
+                        await self._append_result_chunk(task_id, event.content)
                     # 推送实时输出到 WebSocket
                     await event_emitter.emit_task_output(
                         task_id, workspace_id, event.content, event.type

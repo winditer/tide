@@ -317,6 +317,32 @@ class DaemonWSClient:
             return "working", content, "artifact"
         return "working", "", "output"
 
+    @staticmethod
+    def _dedup_artifacts(artifacts: list, pushed_texts: set) -> list:
+        """过滤掉已通过流式 task_event 推送过的 artifact。
+
+        终态 task_result 会携带 executor 累积的全部 artifacts，而这些内容
+        已在流式阶段逐段推送。若不过滤，后端会将流式 output_chunk 与
+        终态 artifacts 双重累计，导致 AI 回复重复多次。此处仅保留尚未
+        推送过的新内容（通常为空），确保每段文本只传递一次。
+        """
+        if not artifacts:
+            return []
+        result: list = []
+        for art in artifacts:
+            if not isinstance(art, dict):
+                result.append(art)
+                continue
+            texts: list[str] = []
+            for part in art.get("parts", []) or []:
+                if isinstance(part, dict) and part.get("kind") == "text":
+                    texts.append(part.get("text", "") or "")
+            norm = "".join(texts).strip()
+            if norm and norm in pushed_texts:
+                continue
+            result.append(art)
+        return result
+
     async def _execute_task(self, msg: dict):
         """接收 task_dispatch 后执行任务并回传事件。"""
         task_id = msg.get("task_id", "")
@@ -357,6 +383,13 @@ class DaemonWSClient:
             )
             self._task_map[task_id] = rt.task.id
 
+            # 内容去重：同一段文本可能既作为 assistant 消息（EVENT_MESSAGE）又作为
+            # result 完成事件（EVENT_COMPLETE）被推送（Claude 的 result 事件会重复
+            # 最终 assistant 文本），且终态 task_result 会再次携带全部 artifacts，
+            # 后端会把流式 output_chunk 与终态 artifacts 双重累计，导致内容重复多次。
+            # 此处按内容去重，确保每段 AI 文本只推送一次。
+            pushed_texts: set[str] = set()
+
             # 流式读取输出并回传
             async for ev in self._executor.run_streaming(
                 rt,
@@ -367,7 +400,16 @@ class DaemonWSClient:
                 git_ctx=git_ctx,
             ):
                 state, content, kind = self._extract_event(ev)
-                if content or kind != "status":
+                if kind in ("artifact", "output"):
+                    norm = (content or "").strip()
+                    if not norm:
+                        continue
+                    if norm in pushed_texts:
+                        # 重复内容（如 result 事件回显 assistant 文本）跳过
+                        continue
+                    pushed_texts.add(norm)
+                    await self._send_task_event(task_id, state, content, kind=kind)
+                elif content or kind != "status":
                     await self._send_task_event(task_id, state, content, kind=kind)
 
             # 获取最终结果（run_streaming 结束后 task 已进入终态）
@@ -376,14 +418,14 @@ class DaemonWSClient:
                 await self._send_task_result(
                     task_id,
                     "failed",
-                    artifacts=rt.task.artifacts,
+                    artifacts=self._dedup_artifacts(rt.task.artifacts, pushed_texts),
                     error=rt.task.error or "",
                 )
             else:
                 await self._send_task_result(
                     task_id,
                     state=final_state,
-                    artifacts=rt.task.artifacts,
+                    artifacts=self._dedup_artifacts(rt.task.artifacts, pushed_texts),
                 )
 
         except Exception as e:

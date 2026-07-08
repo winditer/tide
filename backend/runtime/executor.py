@@ -293,6 +293,12 @@ class AgentExecutor:
                                 pass
                         break
                     elif event_type == "complete":
+                        # completed/result 事件常回显已通过流式 message 输出过的最终文本
+                        # （Claude/Qoder 的 result 事件），若该内容已累积则跳过，
+                        # 避免最终结果重复两次。
+                        _already = "\n".join(p for p in output_parts if p)
+                        if content and content.strip() and content.strip() in _already:
+                            continue
                         if content:
                             output_parts.append(content)
                         ev = TaskEvent(type="output", content=content, session_id=session_id)
@@ -448,6 +454,10 @@ class AgentExecutor:
                                     pass
                             break
                         elif event_type == "complete":
+                            # 同主循环：result 事件回显已流式输出的文本时跳过，避免重复。
+                            _already = "\n".join(p for p in output_parts if p)
+                            if content and content.strip() and content.strip() in _already:
+                                continue
                             if content:
                                 output_parts.append(content)
                             yield TaskEvent(type="output", content=content, session_id=session_id)
@@ -685,8 +695,12 @@ class AgentExecutor:
                     break
                 elif etype == "completed":
                     result_text = str(event.get("result") or "")
-                    if result_text:
-                        output_parts.append(result_text)
+                    # 终态 result 常回显已通过 output_chunk 流式推送过的文本，
+                    # 若已累积则跳过，避免远程 Agent 结果重复。
+                    if result_text and result_text.strip():
+                        _already = "\n".join(p for p in output_parts if p)
+                        if result_text.strip() not in _already:
+                            output_parts.append(result_text)
                     completed = True
                 elif etype == "failed":
                     failure_msg = str(event.get("error") or "")

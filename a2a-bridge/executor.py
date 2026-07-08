@@ -259,6 +259,12 @@ class CLIExecutor:
                         stderr=asyncio.subprocess.PIPE,
                         cwd=cwd,
                         env=env,
+                        # Agent CLI 单行 JSON 事件（如 codex item.completed 的
+                        # agent_message、大段 command_execution 输出）可能远超
+                        # StreamReader 默认 64KB 限制，超限时 readline/async for 会
+                        # 抛 LimitOverrunError 导致 stdout 泵提前终止、AI 实际输出
+                        # 丢失（表现为“无内容”）。与后端 executor 对齐为 16MB。
+                        limit=16 * 1024 * 1024,
                     )
                 except FileNotFoundError as exc:
                     await self._finish(rt, state=TaskState.FAILED, error=f"CLI binary not found: {exc}")
@@ -322,7 +328,20 @@ class CLIExecutor:
     async def _pump_stdout(self, rt: _TaskRuntime) -> None:
         proc = rt.process
         assert proc and proc.stdout
-        async for raw in proc.stdout:
+        while True:
+            try:
+                raw = await proc.stdout.readline()
+            except (asyncio.LimitOverrunError, ValueError) as exc:
+                # 单行超出 StreamReader 缓冲上限：跳过该超长行的剩余数据，
+                # 而非让整个 stdout 泵崩溃导致后续 AI 输出全部丢失。
+                logger.warning("stdout line exceeded buffer limit, skipping: %s", exc)
+                try:
+                    await proc.stdout.read(1)
+                except Exception:
+                    break
+                continue
+            if not raw:
+                break
             try:
                 line = raw.decode("utf-8", errors="replace")
             except Exception:
@@ -339,11 +358,11 @@ class CLIExecutor:
                 continue
             if not line:
                 continue
+            # stderr 仅保留到 output_buffer 供任务失败时提取错误尾部，
+            # 不作为用户可见内容推送到事件流（避免 CLI 调试/日志
+            # 输出，如 "ERROR codex_memories_write..."，混入 AI 回复）。
             rt.output_buffer.append(line)
-            # stderr 仅作为进度消息发送，不直接报错
-            msg = make_message("agent", f"[stderr] {line}")
-            ev = status_update_event(rt.task, message=msg)
-            await rt.queue.put(ev)
+            logger.debug("[%s stderr] %s", rt.task.skill, line)
 
     async def _handle_line(self, rt: _TaskRuntime, line: str) -> None:
         ev = parse_line(rt.task.skill, line)
@@ -449,6 +468,14 @@ class CLIExecutor:
                 argv += ["-m", model]
             approval = configuration.get("approvalPolicy") or agent_cfg.approval_policy
             sandbox = configuration.get("sandboxMode") or agent_cfg.sandbox_mode
+            # fullAuto：daemon 为非交互环境（stdin=DEVNULL）。若以 -a on-request
+            # 运行，codex exec 在需要执行命令/编辑时会等待人工审批，但无人
+            # 应答 → 产生不了实际 agent_message，表现为“无实际内容”。
+            # 与 backend full_auto 行为对齐（approval_policy="never"），强制禁用审批交互。
+            if configuration.get("fullAuto", True):
+                approval = "never"
+                if not sandbox:
+                    sandbox = "workspace-write"
             if approval:
                 argv += ["-a", approval]
             if sandbox:
@@ -457,12 +484,6 @@ class CLIExecutor:
             if cwd:
                 argv += ["-C", cwd]
             argv += list(agent_cfg.extra_args)
-            # fullAuto: 确保使用宽松权限（--full-auto 已废弃，改用 -a/-s 参数）
-            if configuration.get("fullAuto", True):
-                if not approval:
-                    argv += ["-a", "full-auto"]
-                if not sandbox:
-                    argv += ["-s", "workspace-write"]
             argv += [prompt]
             return argv
         if skill == "claude":
