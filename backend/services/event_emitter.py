@@ -30,6 +30,15 @@ class EventTypes:
     # Lark 桥接事件（来自 tide_ws.py）
     LARK_TASK_CREATED = "lark.task.created"
     LARK_TASK_UPDATED = "lark.task.updated"
+    # Freeform collaboration events
+    WORK_ITEM_ASSIGNED = "work_item.assigned"
+    WORK_ITEM_DISPATCH_STARTED = "work_item.dispatch_started"
+    ASSIGNMENT_STATUS_CHANGED = "assignment.status_changed"
+    WORK_ITEM_CONTEXT_UPDATED = "work_item.context_updated"
+    WORK_ITEM_COMMENT_ADDED = "work_item.comment_added"
+    WORK_ITEM_COMMENT_UPDATED = "work_item.comment_updated"
+    WORK_ITEM_BLOCKED = "work_item.blocked"
+    WORK_ITEM_UNBLOCKED = "work_item.unblocked"
 
 
 class EventEmitter:
@@ -197,6 +206,118 @@ class EventEmitter:
         await ws_hub.broadcast("tasks", event)
         await ws_hub.broadcast("approvals", event)
         await ws_hub.broadcast(f"task:{task_id}", event)
+
+    async def emit_work_item_assigned(
+        self,
+        work_item_id: str,
+        target_type: str,
+        target_id: str,
+        assigned_by: str,
+        role: str = "executor",
+    ):
+        """广播工作项分配事件。"""
+        event = {
+            "type": EventTypes.WORK_ITEM_ASSIGNED,
+            "work_item_id": work_item_id,
+            "target_type": target_type,
+            "target_id": target_id,
+            "assigned_by": assigned_by,
+            "role": role,
+        }
+        await ws_hub.broadcast("work_items", event)
+        # Also broadcast to item-specific channel
+        await ws_hub.broadcast(f"work_item:{work_item_id}", event)
+
+    async def emit_work_item_dispatch_started(
+        self,
+        work_item_id: str,
+        leader_id: str,
+        member_ids: list,
+    ):
+        """广播 Squad Leader 派遣事件。"""
+        event = {
+            "type": EventTypes.WORK_ITEM_DISPATCH_STARTED,
+            "work_item_id": work_item_id,
+            "leader_id": leader_id,
+            "member_ids": member_ids,
+        }
+        await ws_hub.broadcast("work_items", event)
+        await ws_hub.broadcast(f"work_item:{work_item_id}", event)
+
+    async def emit_assignment_status_changed(
+        self,
+        assignment_id: str,
+        work_item_id: str,
+        old_status: str,
+        new_status: str,
+        actor_id: str = None,
+    ):
+        """广播分配状态变更事件。"""
+        event = {
+            "type": EventTypes.ASSIGNMENT_STATUS_CHANGED,
+            "assignment_id": assignment_id,
+            "work_item_id": work_item_id,
+            "old_status": old_status,
+            "new_status": new_status,
+            "actor_id": actor_id,
+        }
+        await ws_hub.broadcast("work_items", event)
+        await ws_hub.broadcast(f"work_item:{work_item_id}", event)
+
+    async def emit_work_item_context_updated(
+        self,
+        work_item_id: str,
+        context_type: str,
+        author_id: str,
+    ):
+        """广播工作项共享上下文更新事件。"""
+        event = {
+            "type": EventTypes.WORK_ITEM_CONTEXT_UPDATED,
+            "work_item_id": work_item_id,
+            "context_type": context_type,
+            "author_id": author_id,
+        }
+        await ws_hub.broadcast("work_items", event)
+        await ws_hub.broadcast(f"work_item:{work_item_id}", event)
+
+    async def emit_work_item_comment(self, work_item_id: str, comment: dict):
+        """广播工作项评论添加事件。"""
+        event = {
+            "type": EventTypes.WORK_ITEM_COMMENT_ADDED,
+            "work_item_id": work_item_id,
+            "comment": comment,
+        }
+        await ws_hub.broadcast("work_items", event)
+        await ws_hub.broadcast(f"work_item:{work_item_id}", event)
+
+    async def emit_work_item_comment_updated(self, work_item_id: str, comment: dict):
+        """广播工作项评论更新事件（如关联任务 task_status 变化）。"""
+        event = {
+            "type": EventTypes.WORK_ITEM_COMMENT_UPDATED,
+            "work_item_id": work_item_id,
+            "comment": comment,
+        }
+        await ws_hub.broadcast("work_items", event)
+        await ws_hub.broadcast(f"work_item:{work_item_id}", event)
+
+    async def emit_work_item_blocked(self, work_item_id: str, reason: str = ""):
+        """广播工作项进入阻塞状态（待审批）事件。"""
+        event = {
+            "type": EventTypes.WORK_ITEM_BLOCKED,
+            "work_item_id": work_item_id,
+            "reason": reason,
+        }
+        await ws_hub.broadcast("work_items", event)
+        await ws_hub.broadcast(f"work_item:{work_item_id}", event)
+
+    async def emit_work_item_unblocked(self, work_item_id: str):
+        """广播工作项解除阻塞事件。"""
+        event = {
+            "type": EventTypes.WORK_ITEM_UNBLOCKED,
+            "work_item_id": work_item_id,
+        }
+        await ws_hub.broadcast("work_items", event)
+        await ws_hub.broadcast(f"work_item:{work_item_id}", event)
 
     async def _record_event(
         self,

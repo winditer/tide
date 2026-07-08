@@ -4,7 +4,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button, Select, type SelectOptionGroup } from "@tide/ui";
 import { usePlans, useProjects, useProjectGroups } from "@tide/core";
-import { PlanList, PlanCreateForm } from "@tide/views";
+import { PlanList, PlanCreateForm, PlanGuide } from "@tide/views";
 
 const STATUS_FILTERS = [
   { label: "全部", value: "" },
@@ -103,6 +103,7 @@ function PlansPageInner() {
           <span className="text-xs text-muted-foreground">
             {data?.length ?? 0} 个 Plan
           </span>
+          <PlanGuide />
           <Button onClick={() => setShowCreate(true)}>+ 新建 Plan</Button>
         </div>
       </header>

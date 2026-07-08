@@ -158,6 +158,7 @@ CREATE TABLE IF NOT EXISTS workflows (
     version INTEGER DEFAULT 1,
     enabled INTEGER DEFAULT 1,
     created_by TEXT,
+    is_system INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -215,6 +216,13 @@ CREATE TABLE IF NOT EXISTS project_settings (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- system_settings 全局系统配置（key-value 存储，与项目无关）
+CREATE TABLE IF NOT EXISTS system_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- versions 版本（项目级版本管理）
 CREATE TABLE IF NOT EXISTS versions (
     id TEXT PRIMARY KEY,
@@ -261,6 +269,47 @@ CREATE TABLE IF NOT EXISTS work_item_transitions (
     output TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- work_item_assignments 工作项分配记录
+CREATE TABLE IF NOT EXISTS work_item_assignments (
+    id TEXT PRIMARY KEY,
+    work_item_id TEXT NOT NULL REFERENCES work_items(id),
+    target_type TEXT NOT NULL CHECK(target_type IN ('member', 'expert_team', 'squad')),
+    target_id TEXT NOT NULL,
+    role TEXT DEFAULT 'executor',
+    status TEXT DEFAULT 'pending',
+    assigned_by TEXT,
+    dispatched_to TEXT,
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_wia_work_item ON work_item_assignments(work_item_id);
+CREATE INDEX IF NOT EXISTS idx_wia_target ON work_item_assignments(target_type, target_id);
+
+-- work_item_context 工作项共享记忆
+CREATE TABLE IF NOT EXISTS work_item_context (
+    id TEXT PRIMARY KEY,
+    work_item_id TEXT NOT NULL REFERENCES work_items(id),
+    context_type TEXT NOT NULL,
+    content TEXT NOT NULL,
+    author_id TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_wic_work_item ON work_item_context(work_item_id, created_at);
+
+-- work_item_comments 工作项评论（freeform 协作核心交互）
+CREATE TABLE IF NOT EXISTS work_item_comments (
+    id TEXT PRIMARY KEY,
+    work_item_id TEXT NOT NULL,
+    author_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    mentions TEXT,
+    task_id TEXT,
+    task_status TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_wicomments_work_item ON work_item_comments(work_item_id);
 
 -- 默认工作空间和 Agent actors（初始数据）
 INSERT OR IGNORE INTO actors (id, type, name, metadata) VALUES
@@ -348,6 +397,10 @@ CREATE TABLE IF NOT EXISTS remote_agents (
     status TEXT DEFAULT 'active',
     scope TEXT DEFAULT 'global',
     scope_target TEXT DEFAULT '',
+    connection_mode TEXT DEFAULT 'http',
+    capability_tags TEXT,
+    last_heartbeat TIMESTAMP,
+    daemon_session_id TEXT,
     last_health_check TIMESTAMP,
     last_error TEXT,
     workspace_id TEXT,
@@ -537,6 +590,9 @@ CREATE TABLE IF NOT EXISTS expert_teams (
     model TEXT,
     skill_slugs TEXT DEFAULT '[]',
     role_prompt TEXT,
+    member_agents TEXT DEFAULT '[]',
+    is_squad INTEGER DEFAULT 0,
+    leader_strategy TEXT DEFAULT 'capability_match',
     enabled INTEGER DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -567,3 +623,16 @@ CREATE TABLE IF NOT EXISTS agent_configs (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_configs_scope ON agent_configs(workspace_id, scope, scope_target);
 CREATE INDEX IF NOT EXISTS idx_agent_configs_agent ON agent_configs(agent_id);
+
+-- ── Notifications ──────────────────────────────────────
+CREATE TABLE IF NOT EXISTS notifications (
+    id TEXT PRIMARY KEY,
+    recipient_id TEXT NOT NULL,
+    work_item_id TEXT NOT NULL,
+    notification_type TEXT NOT NULL,
+    trigger_actor_id TEXT,
+    content TEXT NOT NULL,
+    is_read INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_notif_recipient ON notifications(recipient_id, is_read, created_at DESC);

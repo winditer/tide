@@ -73,6 +73,45 @@ class WorkflowService:
         logger.info("Workflow created: %s (%s)", wf_id[:8], name)
         return await self.get_workflow(wf_id)
 
+    async def seed_default_workflow(self, workspace_id: str = "default") -> Optional[str]:
+        """启动时 seed 系统默认工作流。幂等：已存在则跳过。返回 workflow_id。"""
+        from backend.services.workflow_defaults import (
+            DEFAULT_WORKFLOW_DEFINITION,
+            DEFAULT_WORKFLOW_NAME,
+            DEFAULT_WORKFLOW_DESCRIPTION,
+        )
+        async with async_session_factory() as session:
+            # 检查是否已存在系统工作流
+            result = await session.execute(
+                text("SELECT id FROM workflows WHERE is_system = 1 AND workspace_id = :ws LIMIT 1"),
+                {"ws": workspace_id},
+            )
+            existing = result.fetchone()
+            if existing:
+                return existing[0]
+
+            # 创建系统工作流
+            wf_id = str(uuid.uuid4())
+            now = self._now_iso()
+            await session.execute(
+                text("""
+                    INSERT INTO workflows
+                        (id, workspace_id, name, description, definition, version, enabled, is_system, created_at, updated_at)
+                    VALUES (:id, :ws, :name, :desc, :definition, 1, 1, 1, :now, :now)
+                """),
+                {
+                    "id": wf_id,
+                    "ws": workspace_id,
+                    "name": DEFAULT_WORKFLOW_NAME,
+                    "desc": DEFAULT_WORKFLOW_DESCRIPTION,
+                    "definition": json.dumps(DEFAULT_WORKFLOW_DEFINITION),
+                    "now": now,
+                },
+            )
+            await session.commit()
+        logger.info("System default workflow seeded: %s", wf_id[:8])
+        return wf_id
+
     async def list_workflows(
         self,
         workspace_id: str = "default",
@@ -91,7 +130,7 @@ class WorkflowService:
                 text(
                     f"""
                     SELECT w.id, w.workspace_id, w.name, w.description, w.definition,
-                           w.version, w.enabled, w.created_by, w.created_at, w.updated_at,
+                           w.version, w.enabled, w.is_system, w.created_by, w.created_at, w.updated_at,
                            COALESCE(u.display_name, u.username, w.created_by) AS created_by_name
                     FROM workflows w
                     LEFT JOIN users u ON w.created_by = u.id
@@ -116,7 +155,7 @@ class WorkflowService:
                 text(
                     """
                     SELECT w.id, w.workspace_id, w.name, w.description, w.definition,
-                           w.version, w.enabled, w.created_by, w.created_at, w.updated_at,
+                           w.version, w.enabled, w.is_system, w.created_by, w.created_at, w.updated_at,
                            COALESCE(u.display_name, u.username, w.created_by) AS created_by_name
                     FROM workflows w
                     LEFT JOIN users u ON w.created_by = u.id
@@ -155,7 +194,10 @@ class WorkflowService:
             params["description"] = description
         if definition_json is not None:
             # 仅在 definition 实际改变时才递增版本号，避免无变化保存导致版本无条件递增。
-            new_def = json.dumps(definition_json)
+            try:
+                new_def = json.dumps(definition_json)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"工作流 definition 无法序列化为 JSON: {exc}") from exc
             current_def_obj = existing.get("definition") or {"nodes": [], "edges": []}
             sets.append("definition = :definition")
             params["definition"] = new_def
@@ -177,6 +219,31 @@ class WorkflowService:
                 params,
             )
             await session.commit()
+        return await self.get_workflow(workflow_id)
+
+    async def set_as_default(self, workflow_id: str) -> Optional[dict]:
+        """设置指定工作流为系统默认，保持全局唯一。
+
+        先清除所有 is_system 标记，再将目标工作流设为 is_system=1。
+        目标工作流不存在时返回 None。
+        """
+        existing = await self.get_workflow(workflow_id)
+        if not existing:
+            return None
+        async with async_session_factory() as session:
+            # 先清除所有 is_system 标记（保持全局唯一）
+            await session.execute(
+                text("UPDATE workflows SET is_system = 0 WHERE is_system = 1")
+            )
+            # 设置新的默认
+            await session.execute(
+                text(
+                    "UPDATE workflows SET is_system = 1, updated_at = :updated_at WHERE id = :wid"
+                ),
+                {"wid": workflow_id, "updated_at": self._now_iso()},
+            )
+            await session.commit()
+        logger.info("System default workflow set: %s", workflow_id[:8])
         return await self.get_workflow(workflow_id)
 
     async def toggle_workflow(self, workflow_id: str) -> Optional[dict]:
@@ -204,6 +271,8 @@ class WorkflowService:
         existing = await self.get_workflow(workflow_id)
         if not existing:
             return False
+        if existing and existing.get("is_system"):
+            raise ValueError("Cannot delete system workflow")
         async with async_session_factory() as session:
             # 先删 node_runs / runs（FK 安全）
             await session.execute(

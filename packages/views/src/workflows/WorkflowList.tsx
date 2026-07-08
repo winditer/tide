@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { Star } from "lucide-react";
 import { Button, Input } from "@tide/ui";
-import { useDeleteWorkflow, useToggleWorkflow, useDuplicateWorkflow, useAuth } from "@tide/core";
+import { useDeleteWorkflow, useToggleWorkflow, useDuplicateWorkflow, useSetDefaultWorkflow, useAuth } from "@tide/core";
 import type { Workflow } from "@tide/core";
 
 function formatTime(iso: string | null) {
@@ -31,7 +32,10 @@ export function WorkflowList({ items }: WorkflowListProps) {
   const del = useDeleteWorkflow();
   const toggle = useToggleWorkflow();
   const dup = useDuplicateWorkflow();
+  const setDefault = useSetDefaultWorkflow();
   const { user } = useAuth();
+
+  const isAdmin = !user || user.role === "admin";
 
   const canManageWorkflow = (workflow: Workflow) => {
     if (!user) return true; // 未登录不限制
@@ -126,7 +130,27 @@ export function WorkflowList({ items }: WorkflowListProps) {
                   onClick={() => router.push(`/workflows/${w.id}`)}
                 >
                   <td className="px-4 py-3 font-semibold text-foreground">
-                    {w.name}
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (!w.is_system && isAdmin) setDefault.mutate(w.id);
+                        }}
+                        disabled={!!w.is_system || !isAdmin || setDefault.isPending}
+                        title={w.is_system ? "系统默认工作流" : isAdmin ? "设为系统默认" : "系统默认工作流由管理员设置"}
+                        className={`-ml-1 rounded-full p-1 transition-colors ${
+                          w.is_system
+                            ? "text-amber-500 cursor-default"
+                            : isAdmin
+                              ? "text-zinc-300 hover:text-amber-400 cursor-pointer"
+                              : "text-zinc-300 cursor-default"
+                        }`}
+                      >
+                        <Star className={`h-4 w-4 ${w.is_system ? "fill-current" : ""}`} />
+                      </button>
+                      <span>{w.name}</span>
+                    </div>
                   </td>
                   <td className="max-w-xs px-4 py-3 truncate text-muted-foreground">
                     {w.description || "—"}

@@ -1,378 +1,198 @@
-// Auto-generated from SCHEDULES.md — keep in sync with the source markdown file.
-export const SCHEDULES_GUIDE = `# 定时调度（Schedules）使用说明
+// Operation-oriented guide for the Schedules feature — focuses on what it does and how to use it.
+export const SCHEDULES_GUIDE = `# 定时调度使用指南
 
-## 一、概述
+## 一、什么是定时调度
 
-定时调度（Schedules）是 Tide 提供的**任务自动化触发能力**，基于 APScheduler 实现，可在指定时间点或按周期自动执行 Agent 任务、Plan 计划、工作流（Workflow）、状态查询或自定义脚本。
+定时调度让你把日常重复的 AI 任务交给系统自动执行，无需每次手动发起。你只需要提前设定"什么时候执行"和"执行什么"，系统就会在约定的时间自动触发对应的 Agent、Plan 或工作流。
 
-调度元数据持久化在 SQLite \`schedules\` 表中，每次执行都会在 \`schedule_runs\` 表生成执行记录，并通过 WebSocket（\`schedules\` 频道）实时广播 \`schedule.run.started\` / \`schedule.run.completed\` 事件。后端服务启动时会自动从数据库恢复所有 \`enabled = 1\` 的调度任务。
+常见使用场景：
 
-典型应用场景：
+- **每日代码巡检**：每个工作日早上自动让 Agent 检查最近提交，输出风险报告；
+- **周期性状态汇总**：每隔几小时汇总项目进度、阻塞任务并推送通知；
+- **一次性定时任务**：在版本发布前的固定时刻自动触发一轮回归测试工作流；
+- **例行运维**：定时执行脚本或调用外部服务做健康检查。
 
-- 每天定时让 Codex / Claude 跑代码检查、生成日报；
-- 每隔几分钟轮询项目/任务状态并推送通知；
-- 在指定时间点触发一次性的工作流，例如发布前的回归任务；
-- 周期性调用外部 webhook 或本地脚本进行运维巡检。
-
-调度任务由两部分配置组成：
-
-- **触发器（trigger）**：决定**何时触发**，由 \`trigger_type\` + \`trigger_config\` 描述；
-- **任务（task）**：决定**触发后执行什么**，由 \`task_type\` + \`task_config\` 描述。
+一句话概括：**把"定时闹钟"和"要做的事"绑在一起，系统到点自动帮你完成。**
 
 ---
 
-## 二、触发类型（trigger_type）
+## 二、如何创建定时任务
 
-\`trigger_type\` 取值受限于：\`cron\` | \`interval\` | \`date\`（在 \`ScheduleCreate\` 中校验）。
+进入左侧菜单的「定时调度」页面，点击右上角的「新建定时任务」按钮，按以下步骤填写：
 
-### 1. cron — Cron 表达式
+### 步骤 1：填写基本信息
 
-按标准 Cron 表达式触发，最常用，支持任意周期组合。\`trigger_config\` 必填字段：
+- **任务名称**：给这个定时任务起一个易识别的名字，例如"每日代码检查"；
+- **描述**（可选）：补充说明这个任务的用途，方便团队协作时理解。
 
-- \`cron\`：5 段（\`分 时 日 月 周\`）或 6 段（\`秒 分 时 日 月 周\`）Cron 表达式；
-- \`timezone\`：时区字符串，建议使用 \`Asia/Shanghai\`，前端默认值即为该时区。
+### 步骤 2：选择项目
 
-格式示例：
+从项目下拉列表中选择这个定时任务要关联的项目。选定后，任务默认会在该项目的工作目录下执行，Agent 也能读取到项目上下文。
 
-\`\`\`json
-{
-  "cron": "0 9 * * 1-5",
-  "timezone": "Asia/Shanghai"
-}
-\`\`\`
+### 步骤 3：配置执行时间
 
-常见用法：
+选择触发方式，并填写对应的时间规则（详见下一节「执行时间配置说明」）：
 
-| Cron 表达式      | 含义                       |
-|------------------|----------------------------|
-| \`0 9 * * *\`      | 每天上午 9:00              |
-| \`0 9 * * 1-5\`    | 工作日（周一~周五）上午 9:00 |
-| \`*/30 * * * *\`   | 每 30 分钟一次             |
-| \`0 */2 * * *\`    | 每 2 小时整点              |
-| \`0 0 1 * *\`      | 每月 1 号 0 点             |
+- **Cron 定时**：按周期反复执行，最常用；
+- **固定间隔**：每隔固定的一段时间执行一次；
+- **指定时间**：在某个具体时刻只执行一次。
 
-> 提示：未传 \`timezone\` 时后端默认使用 \`UTC\`，如未设置极易导致执行时间偏移，**强烈建议显式传入时区**。
+### 步骤 4：选择执行方式与 Agent
 
-### 2. interval — 固定间隔
+选择到点后要"做什么"：
 
-按固定时间间隔重复执行。\`trigger_config\` 支持的字段：\`weeks\`、\`days\`、\`hours\`、\`minutes\`、\`seconds\`，至少有一项 > 0。
+- **执行 Agent 任务**：派给单个 Agent（如 Codex、Claude、Qoder）完成一次对话任务；
+- **执行 Plan 计划**：触发一份多步骤 / 可并行的任务编排；
+- **执行工作流**：触发一条已配置好的工作流（适合多 Agent 协同、条件路由的复杂流程）；
+- **状态查询**：定时巡检项目 / 任务状态并生成报告；
+- **自定义**：执行脚本命令或回调外部服务。
 
-格式示例：
+选择 Agent 类型任务时，需从下拉列表中指定要使用的 Agent，并可选择具体模型。
 
-\`\`\`json
-{
-  "hours": 1,
-  "minutes": 30
-}
-\`\`\`
+### 步骤 5：填写执行内容
 
-常见用法：
+在提示词（Prompt）输入框中，用自然语言描述你希望 Agent 完成的具体工作，例如：
 
-\`\`\`json
-// 每 30 分钟执行一次
-{ "minutes": 30 }
-\`\`\`
+> 请检查 main 分支最近 24 小时的变更，输出潜在风险与改进建议，用 Markdown 格式整理。
 
-\`\`\`json
-// 每 2 小时执行一次
-{ "hours": 2 }
-\`\`\`
+提示词写得越清晰具体，执行结果越符合预期。
 
-\`\`\`json
-// 每天执行一次（24 小时间隔）
-{ "hours": 24 }
-\`\`\`
+### 步骤 6：保存
 
-> 提示：当所有间隔字段都未传时，后端会回退为默认 \`seconds=3600\`（即 1 小时）。前端表单仅暴露 \`hours\` 与 \`minutes\`，更细的粒度需通过 API 直接传参。
-
-### 3. date — 指定时间（一次性）
-
-在指定时间点触发**一次**，触发完成后任务即结束。\`trigger_config\` 必填：
-
-- \`run_at\`：ISO 8601 格式时间字符串，建议带时区偏移。
-
-格式示例：
-
-\`\`\`json
-{
-  "run_at": "2025-06-15T14:30:00"
-}
-\`\`\`
-
-带时区的推荐写法：
-
-\`\`\`json
-{
-  "run_at": "2026-06-10T09:00:00+08:00"
-}
-\`\`\`
-
-常见用法：
-
-- 在版本发布前的固定时刻触发回归测试工作流；
-- 安排一次性的数据迁移、报表生成任务；
-- 手动配合 \`trigger\` 接口模拟"延后 N 分钟执行"。
+点击「保存」后，定时任务立即生效并进入启用状态，系统会按你设定的时间自动触发。你可以在列表中看到它，以及下一次预计执行的时间。
 
 ---
 
-## 三、任务类型（task_type）
+## 三、执行时间配置说明
 
-\`task_type\` 取值受限于：\`agent\` | \`plan\` | \`workflow\` | \`status\` | \`custom\`。每种类型的 \`task_config\` 字段不同。
+### 1. Cron 定时（最常用）
 
-### 1. agent — 执行 Agent 任务
+Cron 表达式用几个数字描述"什么时候执行"，格式为五段：\`分 时 日 月 周\`。星号 \`*\` 表示"任意 / 每个"。
 
-调用 \`task_service.create_task()\` 创建一条单独的 Agent 对话任务。常用字段：
+常用时间模式举例：
 
-- \`prompt\`：传给 Agent 的提示词（必填，未传时回退为 \`"Scheduled task"\`）；
-- \`agent_id\`：Agent 标识，默认 \`codex\`，可选 \`claude\`、\`qoder\` 等；
-- \`model\`：模型名（可选）；
-- \`cwd\`：执行目录（可选，未填则使用调度所属 workspace 的默认目录）。
+| 想要的效果               | Cron 表达式    |
+|--------------------------|----------------|
+| 每天上午 9:00            | \`0 9 * * *\`    |
+| 工作日（周一~周五）9:00  | \`0 9 * * 1-5\`  |
+| 每 30 分钟一次           | \`*/30 * * * *\` |
+| 每 2 小时整点            | \`0 */2 * * *\`  |
+| 每周一上午 10:00         | \`0 10 * * 1\`   |
+| 每月 1 号 0 点           | \`0 0 1 * *\`    |
 
-\`\`\`json
-{
-  "agent_id": "codex",
-  "prompt": "请检查最近一次提交是否引入了潜在 bug，并输出报告"
-}
-\`\`\`
+**时区提醒**：创建时请确认时区设置为 \`Asia/Shanghai\`（前端默认已选好），否则执行时间可能出现偏差。
 
-### 2. plan — 执行 Plan 计划
+### 2. 固定间隔
 
-通过 \`plan_service.create_plan()\` 触发一份 Plan（多步骤/可并行的任务编排）。\`task_config\` 字段：
+不想记 Cron 表达式时，可以直接填"每隔多久执行一次"，例如每 30 分钟、每 2 小时。表单提供小时和分钟两个输入框，至少填一个大于 0 即可。
 
-- \`definition\`：完整 Plan 定义对象（包含 \`tasks\` 数组与 \`max_parallel\`）；
-- 若未提供 \`definition\`，后端会用以下字段**自动包一层单任务 Plan**：
-  - \`prompt\`、\`agent_id\`、\`max_parallel\`、\`cwd\`、\`model\`。
+适合：无需卡在整点、只要求"周期性重复"的巡检类任务。
 
-\`\`\`json
-{
-  "plan_id": "xxx",
-  "definition": {
-    "max_parallel": 2,
-    "tasks": [
-      { "prompt": "任务 A", "agent_id": "codex" },
-      { "prompt": "任务 B", "agent_id": "claude" }
-    ]
-  }
-}
-\`\`\`
+### 3. 指定时间（一次性）
 
-最简写法（自动包一层单任务）：
+选择一个具体的日期和时间，系统只在那一刻触发一次，执行完就结束。
 
-\`\`\`json
-{
-  "prompt": "执行例行检查",
-  "agent_id": "codex"
-}
-\`\`\`
-
-### 3. workflow — 执行工作流
-
-通过 \`workflow_engine.start_run()\` 触发一次 DAG 工作流执行，常用于多 Agent 协同或需要条件路由的复杂流程。\`task_config\` 字段：
-
-- \`workflow_id\`：**必填**，要触发的 Workflow ID；
-- \`input_context\`：传给工作流的初始上下文对象（可选）。
-
-\`\`\`json
-{
-  "workflow_id": "xxx",
-  "input_context": {
-    "branch": "main",
-    "report_to": "lark"
-  }
-}
-\`\`\`
-
-> 触发器类型默认会被记录为 \`"schedule"\`，便于在 Workflow 运行历史中筛选。
-
-### 4. status — 状态查询
-
-用于**定时巡检项目/任务状态**并生成报告。当前实现复用 Agent 任务通道，把 \`prompt\` 投递给指定 Agent，由 Agent 完成查询与报告生成。\`task_config\` 字段：
-
-- \`query\`：查询类型语义化标识（如 \`project_summary\`、\`task_health\` 等，由调用方约定）；
-- \`project_id\`：关联项目 ID；
-- \`prompt\`、\`agent_id\`、\`model\`、\`cwd\`：与 \`agent\` 类型一致，可定制查询逻辑。
-
-\`\`\`json
-{
-  "query": "project_summary",
-  "project_id": "xxx",
-  "agent_id": "codex",
-  "prompt": "汇总该项目本周的任务完成情况，并输出 Markdown 报告"
-}
-\`\`\`
-
-### 5. custom — 自定义
-
-灵活的兜底类型，支持自定义脚本命令或 webhook 回调。当前后端实现也是复用 Agent 通道（把 \`prompt\` 派发给指定 Agent），并允许通过 \`script\` / \`webhook_url\` 等字段携带自定义参数，由 Agent 或下游适配器执行。
-
-\`\`\`json
-{
-  "script": "python check.py"
-}
-\`\`\`
-
-或：
-
-\`\`\`json
-{
-  "webhook_url": "https://example.com/api/notify"
-}
-\`\`\`
-
-也可结合 \`prompt\` + \`agent_id\` 让 Agent 自己执行该 \`script\` 或调用该 \`webhook_url\`：
-
-\`\`\`json
-{
-  "agent_id": "codex",
-  "prompt": "请执行命令: python check.py，并把输出 POST 到 https://example.com/api/notify",
-  "script": "python check.py",
-  "webhook_url": "https://example.com/api/notify"
-}
-\`\`\`
+适合：发布前回归、临时的数据迁移或报表生成等一次性安排。
 
 ---
 
-## 四、常见配置范例
+## 四、如何查看执行历史
 
-### 范例 1：每天早上 9 点用 codex 执行代码检查
+在定时任务列表中点击某个任务，进入详情，即可看到它的「执行历史」：
 
-\`\`\`json
-{
-  "name": "每日代码检查",
-  "description": "每个工作日 9 点对 main 分支进行静态检查",
-  "trigger_type": "cron",
-  "trigger_config": {
-    "cron": "0 9 * * 1-5",
-    "timezone": "Asia/Shanghai"
-  },
-  "task_type": "agent",
-  "task_config": {
-    "agent_id": "codex",
-    "prompt": "请检查 main 分支最近 24 小时的变更，输出潜在风险与建议",
-    "cwd": "/Users/haifeng/Documents/tide"
-  }
-}
-\`\`\`
+- 每一次执行的**触发时间**和**完成时间**；
+- 每次执行的**状态**（成功 / 失败 / 进行中）；
+- 执行耗时；
+- 关联生成的任务，可点击进去查看 Agent 的完整输出。
 
-### 范例 2：每隔 2 小时查询项目状态
-
-\`\`\`json
-{
-  "name": "项目状态巡检",
-  "trigger_type": "interval",
-  "trigger_config": {
-    "hours": 2
-  },
-  "task_type": "status",
-  "task_config": {
-    "query": "project_summary",
-    "project_id": "proj-001",
-    "agent_id": "codex",
-    "prompt": "查询项目 proj-001 当前任务状态，列出阻塞任务并给出建议"
-  }
-}
-\`\`\`
-
-### 范例 3：指定时间触发一次性工作流
-
-\`\`\`json
-{
-  "name": "发布前回归",
-  "trigger_type": "date",
-  "trigger_config": {
-    "run_at": "2026-06-15T14:30:00+08:00"
-  },
-  "task_type": "workflow",
-  "task_config": {
-    "workflow_id": "wf-release-regression",
-    "input_context": {
-      "version": "v1.2.0",
-      "branch": "release/1.2"
-    }
-  }
-}
-\`\`\`
-
-### 范例 4：每 30 分钟回调 webhook
-
-\`\`\`json
-{
-  "name": "心跳通知",
-  "trigger_type": "interval",
-  "trigger_config": { "minutes": 30 },
-  "task_type": "custom",
-  "task_config": {
-    "agent_id": "codex",
-    "prompt": "请向 https://example.com/api/heartbeat 发送一次 POST 心跳",
-    "webhook_url": "https://example.com/api/heartbeat"
-  }
-}
-\`\`\`
+执行历史默认展示最近若干条记录，方便你快速确认任务是否按时、按预期跑通。
 
 ---
 
-## 五、API 接口
+## 五、如何查看执行结果
 
-所有接口前缀为 \`/api/schedules\`。
+想了解某次定时执行"具体做了什么"：
 
-| 方法     | 路径                              | 说明                                  |
-|----------|-----------------------------------|---------------------------------------|
-| \`POST\`   | \`/api/schedules\`                  | **创建**调度（body: \`ScheduleCreate\`）|
-| \`GET\`    | \`/api/schedules?workspace_id=...\` | **列表**查询，按 \`workspace_id\` 过滤  |
-| \`GET\`    | \`/api/schedules/{schedule_id}\`    | 查询**详情**                          |
-| \`PUT\`    | \`/api/schedules/{schedule_id}\`    | **更新**调度（body: \`ScheduleUpdate\`）|
-| \`DELETE\` | \`/api/schedules/{schedule_id}\`    | **删除**调度（同时移除 APScheduler job）|
-| \`POST\`   | \`/api/schedules/{schedule_id}/toggle\`  | **启停切换** \`enabled\` 字段       |
-| \`POST\`   | \`/api/schedules/{schedule_id}/trigger\` | **手动触发**一次（异步执行）       |
-| \`GET\`    | \`/api/schedules/{schedule_id}/runs?limit=20\` | 查询**执行历史**（最多 100 条）|
+1. 在执行历史中找到对应的那一条记录；
+2. 点击进入，即可查看该次执行关联生成的任务详情；
+3. 在任务详情里能看到 Agent 的完整对话过程与最终产出（如生成的报告、代码检查结论等）。
 
-### 创建调度示例
+如果某次执行状态为**失败**，详情中会显示错误信息，帮助你定位是提示词问题、Agent 配置问题，还是执行环境问题。
 
-\`\`\`bash
-curl -X POST http://localhost:8000/api/schedules \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "name": "每日代码检查",
-    "trigger_type": "cron",
-    "trigger_config": {"cron": "0 9 * * 1-5", "timezone": "Asia/Shanghai"},
-    "task_type": "agent",
-    "task_config": {"agent_id": "codex", "prompt": "执行代码检查"},
-    "workspace_id": "default"
-  }'
-\`\`\`
+---
 
-### 手动触发示例
+## 六、如何暂停 / 启用 / 删除定时任务
 
-\`\`\`bash
-curl -X POST http://localhost:8000/api/schedules/{schedule_id}/trigger
-\`\`\`
+在定时任务列表中，每个任务都提供了管理操作：
 
-### 查询执行历史示例
+- **暂停 / 启用**：点击开关即可切换任务状态。暂停后系统不再按时触发，但保留全部配置；重新启用后立即恢复定时执行。适合临时停用而不想删除配置的场景；
+- **手动触发一次**：不想等到下一个执行时间时，可点击「立即执行」手动跑一次，用于验证配置是否正确；
+- **编辑**：修改名称、时间规则、执行内容等，保存后按新配置生效；
+- **删除**：彻底移除该定时任务及其定时器。删除后不可恢复，但已产生的历史执行记录仍可查询。
 
-\`\`\`bash
-curl "http://localhost:8000/api/schedules/{schedule_id}/runs?limit=20"
-\`\`\`
+---
 
-返回示例：
+## 七、常见任务案例
 
-\`\`\`json
-{
-  "items": [
-    {
-      "id": "run-uuid",
-      "schedule_id": "sched-uuid",
-      "task_id": "task-uuid",
-      "status": "completed",
-      "trigger_type": "cron",
-      "started_at": "2026-06-10T01:00:00Z",
-      "completed_at": "2026-06-10T01:00:12Z",
-      "result": "{\\"task_id\\": \\"task-uuid\\"}",
-      "error": null
-    }
-  ],
-  "total": 1
-}
-\`\`\`
+### 案例 1：每日代码质量检查
+**场景**：每天早上 9 点对项目代码进行安全扫描和代码质量检查
+- **执行时间**：每天 09:00（Cron: \`0 9 * * *\`）
+- **选择项目**：目标代码仓库
+- **执行内容**：「检查项目中是否存在硬编码的密钥、未处理的安全漏洞、以及不符合编码规范的代码，生成检查报告」
+- **预期效果**：每天上班前自动产出安全报告，团队可及时修复问题
 
-> 实时事件可订阅 WebSocket \`schedules\` 频道，接收 \`schedule.run.started\` 与 \`schedule.run.completed\` 消息，前端列表/详情会自动刷新执行状态。
+### 案例 2：每周项目进度报告
+**场景**：每周五下午生成本周的工作总结报告
+- **执行时间**：每周五 17:00（Cron: \`0 17 * * 5\`）
+- **执行内容**：「整理本周已完成的工作项、进行中的任务和待处理的问题，生成周报 Markdown 文档」
+- **预期效果**：自动汇总一周工作，减少手动写周报的时间
+
+### 案例 3：定时数据同步
+**场景**：每隔 6 小时从外部系统同步数据到项目文档
+- **执行时间**：每 6 小时（Cron: \`0 */6 * * *\`）
+- **执行内容**：「从指定的 API 获取最新数据，更新项目中的配置文件和文档」
+- **预期效果**：保持项目数据与外部系统的同步
+
+### 案例 4：每日站会准备
+**场景**：每天早上自动整理待讨论的议题
+- **执行时间**：每天 08:30（Cron: \`30 8 * * 1-5\`，工作日）
+- **执行内容**：「查看所有处于阻塞状态的工作项和昨天新增的 Bug，整理成站会讨论清单」
+- **预期效果**：站会前自动准备议题，提高会议效率
+
+### 案例 5：月度技术债务清理
+**场景**：每月初提醒并列出需要处理的技术债务
+- **执行时间**：每月 1 号 10:00（Cron: \`0 10 1 * *\`）
+- **执行内容**：「扫描项目中标记为 TODO、FIXME、HACK 的代码注释，按严重程度排序，生成技术债务清单」
+- **预期效果**：定期回顾技术债务，避免积累过多
+
+---
+
+## 八、最佳实践
+
+### 执行频率建议
+
+- **不要过于频繁**：巡检类任务建议间隔在 30 分钟以上，避免频繁触发造成资源浪费和结果堆积；
+- **错峰安排**：多个定时任务尽量避开同一时刻集中触发，减少相互排队等待；
+- **一次性任务用"指定时间"**：只需跑一次的任务不要用 Cron 反复触发。
+
+### 提示词编写
+
+- 描述清晰、目标单一，让 Agent 明确知道要产出什么；
+- 明确要求输出格式（如 Markdown 报告），便于后续查看和归档；
+- 涉及具体分支、目录、范围时在提示词中写清楚，避免 Agent 误解。
+
+### 错误处理
+
+- 新建任务后，先用「立即执行」手动跑一次，确认配置无误再依赖定时；
+- 定期查看执行历史，关注是否有连续失败的记录；
+- 若任务频繁失败，先检查提示词是否清晰、Agent 与项目是否配置正确、执行目录是否存在。
+
+### 时区与时间
+
+- 始终确认时区为 \`Asia/Shanghai\`，避免执行时间偏移；
+- 关键任务（如发布前回归）建议同时保留一个手动触发入口作为兜底。
+
+---
+
+> 定时调度让重复性工作自动化运转起来。合理规划触发时间、写好执行内容、定期回看执行历史，就能让它成为团队稳定可靠的"自动助手"。
 `;

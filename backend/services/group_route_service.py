@@ -12,6 +12,8 @@ import tempfile
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
+from backend.runtime.cli_env import build_subprocess_env, which as cli_which
+
 logger = logging.getLogger("tide.group_route")
 
 # Agent CLI 执行超时（秒）— 从环境变量读取，默认 30s
@@ -237,9 +239,9 @@ class GroupRouteService:
             cmd.extend(["exec", "--json", "--skip-git-repo-check", "-C", cwd])
             cmd.append(prompt)
 
-        # 检查 CLI binary 是否可用
+        # 检查 CLI binary 是否可用（使用增强 PATH，覆盖 ~/.local/bin 等用户级安装目录）
         bin_name = cmd[0]
-        if not shutil.which(bin_name):
+        if not cli_which(bin_name):
             raise RuntimeError(f"Agent CLI not found: {bin_name}")
 
         logger.info("[group_route] agent_id=%s cwd=%s cmd[0]=%s", agent_id, cwd, bin_name)
@@ -247,10 +249,13 @@ class GroupRouteService:
         # 使用临时目录作为 CLI home，防止 session 文件污染真实会话目录
         tmp_home = tempfile.mkdtemp(prefix="tide-route-")
         try:
-            env = os.environ.copy()
-            env["CODEX_HOME"] = tmp_home
-            env["CLAUDE_HOME"] = tmp_home
-            env["QODER_HOME"] = tmp_home
+            env = build_subprocess_env(
+                {
+                    "CODEX_HOME": tmp_home,
+                    "CLAUDE_HOME": tmp_home,
+                    "QODER_HOME": tmp_home,
+                }
+            )
 
             proc = await asyncio.create_subprocess_exec(
                 *cmd,

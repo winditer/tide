@@ -26,6 +26,7 @@ export {
 
 export { Sidebar } from "./layout/Sidebar";
 export { Header } from "./layout/Header";
+export { NotificationBell } from "./layout/NotificationBell";
 
 // Plan views
 export { PlanDAGView } from "./plans/PlanDAGView";
@@ -35,6 +36,8 @@ export { GanttTimeline } from "./plans/GanttTimeline";
 export { DiffViewer } from "./plans/DiffViewer";
 export { PlanCreateForm } from "./plans/PlanCreateForm";
 export { PlanList } from "./plans/PlanList";
+export { PlanGuide } from "./plans/PlanGuide";
+export { PLANS_GUIDE } from "./plans/plans-guide";
 
 export { KanbanBoard } from "./kanban/KanbanBoard";
 export { BoardColumn } from "./kanban/BoardColumn";
@@ -52,6 +55,22 @@ export { ScheduleForm } from "./schedules/ScheduleForm";
 export { ScheduleRunHistory } from "./schedules/ScheduleRunHistory";
 export { ScheduleGuide } from "./schedules/ScheduleGuide";
 export { SCHEDULES_GUIDE } from "./schedules/schedules-guide";
+
+// Rules guide
+export { RulesGuide } from "./rules/RulesGuide";
+export { RULES_GUIDE } from "./rules/rules-guide";
+
+// Remote agents
+export { RemoteAgentGuide } from "./remote-agents/RemoteAgentGuide";
+export { REMOTE_AGENTS_GUIDE } from "./remote-agents/remote-agents-guide";
+
+// Hooks guide
+export { HooksGuide } from "./hooks/HooksGuide";
+export { HOOKS_GUIDE } from "./hooks/hooks-guide";
+
+// Security guide
+export { SecurityGuide } from "./security/SecurityGuide";
+export { SECURITY_GUIDE } from "./security/security-guide";
 
 // Work items
 export { WorkItemBoard, type WorkItemGroupBy } from "./work-items/WorkItemBoard";
@@ -89,6 +108,8 @@ export { RunHistory as WorkflowRunHistory } from "./workflows/RunHistory";
 export { WorkflowList } from "./workflows/WorkflowList";
 export { WorkflowCreateForm } from "./workflows/WorkflowCreateForm";
 export { WorkflowGuide } from "./workflows/WorkflowGuide";
+export { WorkflowModeGuide } from "./workflows/WorkflowModeGuide";
+export { WORKFLOW_MODE_GUIDE } from "./workflows/workflow-mode-guide";
 export { NodeRunList as WorkflowNodeRunList } from "./workflows/NodeRunList";
 export {
   StartNode,
@@ -108,6 +129,7 @@ export { CodeEditor } from "./code-editor/CodeEditor";
 export { FileTabs, type FileTab } from "./code-editor/FileTabs";
 export { DiffViewer as CodeDiffViewer } from "./code-editor/DiffViewer";
 export { ConflictEditor } from "./code-editor/ConflictEditor";
+export { MergeConflictPanel } from "./code-editor/MergeConflictPanel";
 
 // Git audit
 export {

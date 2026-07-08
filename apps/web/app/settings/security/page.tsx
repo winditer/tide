@@ -16,6 +16,7 @@ import {
   toast,
 } from "@tide/ui";
 import { apiClient, useAuth, useWs } from "@tide/core";
+import { SecurityGuide } from "@tide/views";
 import { ProjectScopeSelector } from "@tide/views/components/project-scope-selector";
 import {
   ArrowLeft,
@@ -152,9 +153,12 @@ export default function SecurityPage() {
               自动扫描 Agent 输出中的安全风险
             </p>
           </div>
-          <Button onClick={() => setScanOpen(true)} className="gap-1.5 shrink-0">
-            <ScanLine className="h-4 w-4" /> 扫描
-          </Button>
+          <div className="flex items-center gap-2 shrink-0">
+            <SecurityGuide />
+            <Button onClick={() => setScanOpen(true)} className="gap-1.5">
+              <ScanLine className="h-4 w-4" /> 扫描
+            </Button>
+          </div>
         </div>
       </header>
 

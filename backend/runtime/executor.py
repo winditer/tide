@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import AsyncGenerator, Optional
 
 from backend.runtime.a2a_client import A2AAgentConfig
+from backend.runtime.cli_env import build_subprocess_env
 from backend.runtime.adapters import (
     AGENT_ADAPTERS,
     A2AAdapter,
@@ -23,6 +24,15 @@ from backend.runtime.config import APPROVED_CODEX_APPROVAL_POLICY, APPROVED_CODE
 from backend.runtime.task_runtime import CodexTaskRuntime
 
 logger = logging.getLogger("tide.executor")
+
+
+def _build_subprocess_env() -> dict[str, str]:
+    """构建子进程环境变量：确保 Agent CLI 安装目录在 PATH 中。
+
+    统一委托给 :mod:`backend.runtime.cli_env`，以便 executor、task_service 预检、
+    智能路由等所有 CLI 执行路径共享同一套 PATH 增强逻辑。
+    """
+    return build_subprocess_env()
 
 
 @dataclass
@@ -75,6 +85,8 @@ class AgentExecutor:
                 max_retries=row["max_retries"] or 2,
                 approval_required=bool(row["approval_required"]),
                 approval_policy=row["approval_policy"] or "on-request",
+                connection_mode=(row["connection_mode"] if "connection_mode" in row.keys() else "") or "http",
+                daemon_session_id=(row["daemon_session_id"] if "daemon_session_id" in row.keys() else "") or "",
             )
 
     @staticmethod
@@ -201,6 +213,7 @@ class AgentExecutor:
             proc = await asyncio.create_subprocess_exec(
                 *command,
                 cwd=cwd,
+                env=_build_subprocess_env(),
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
@@ -362,6 +375,7 @@ class AgentExecutor:
                 proc = await asyncio.create_subprocess_exec(
                     *fallback_command,
                     cwd=cwd,
+                    env=_build_subprocess_env(),
                     stdin=asyncio.subprocess.DEVNULL,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.STDOUT,
@@ -559,10 +573,20 @@ class AgentExecutor:
             yield TaskEvent(type="cancelled", content="Task was cancelled")
             raise
         except FileNotFoundError as e:
-            yield TaskEvent(
-                type="failed",
-                content=f"Agent CLI not found: {e}. Make sure {adapter.bin_name} is in PATH.",
-            )
+            # 区分「工作目录不存在」与「CLI 二进制文件找不到」：
+            # worktree 在工作项合并后被清理时，cwd 指向的目录已不存在，
+            # asyncio 子进程会抛出 FileNotFoundError，不应误报为 CLI 缺失。
+            if cwd and not Path(cwd).is_dir():
+                content = (
+                    f"工作目录不存在: {cwd}。工作区可能已被清理，"
+                    "请指定新的工作目录或在项目根目录重试。"
+                )
+            else:
+                content = (
+                    f"Agent CLI not found: {e}. "
+                    f"Make sure {getattr(adapter, 'bin_name', 'agent')} is in PATH."
+                )
+            yield TaskEvent(type="failed", content=content)
         except Exception as e:  # noqa: BLE001
             logger.exception("[executor] task=%s execution error", task_id)
             yield TaskEvent(

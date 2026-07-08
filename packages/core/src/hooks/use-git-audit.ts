@@ -17,6 +17,9 @@ import {
   getRemoteBranches,
   localMergeBranches,
   fetchRemoteBranches,
+  mergeInteractive,
+  commitMerge,
+  abortMerge,
   type GitCommitsParams,
   type GitChangesParams,
   type GitUncommittedResponse,
@@ -246,5 +249,43 @@ export function useFetchRemote(projectId: string | undefined) {
       queryClient.invalidateQueries({ queryKey: ["git-audit", "branches", projectId] });
       queryClient.invalidateQueries({ queryKey: ["git-audit", "remote-branches", projectId] });
     },
+  });
+}
+
+/**
+ * 交互式本地合并 mutation（冲突时返回冲突文件列表）。
+ */
+export function useMergeInteractive(projectId: string | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (params: { source_branch: string; target_branch: string; strategy?: string; delete_source?: boolean }) =>
+      mergeInteractive(projectId!, params),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["git-audit", "branches", projectId] });
+    },
+  });
+}
+
+/**
+ * 冲突解决后提交合并 mutation。
+ */
+export function useCommitMerge(projectId: string | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (params: { message?: string; delete_source?: string }) =>
+      commitMerge(projectId!, params),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["git-audit", "branches", projectId] });
+      queryClient.invalidateQueries({ queryKey: ["git-audit", "remote-branches", projectId] });
+    },
+  });
+}
+
+/**
+ * 放弃当前进行中的合并 mutation。
+ */
+export function useAbortMerge(projectId: string | undefined) {
+  return useMutation({
+    mutationFn: () => abortMerge(projectId!),
   });
 }

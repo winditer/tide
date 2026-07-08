@@ -9,6 +9,10 @@ import type {
   WorkItemArtifact,
   CrossRepoResultsResponse,
   WorkItemAttachment,
+  WorkItemAssignment,
+  WorkItemContextEntry,
+  WorkItemComment,
+  MentionItem,
 } from "../types/work-item";
 
 function buildQuery(params?: Record<string, string | undefined>): string {
@@ -62,6 +66,17 @@ export function updateWorkItem(
 
 export function deleteWorkItem(id: string): Promise<void> {
   return apiClient.del<void>(`/api/work-items/${id}`);
+}
+
+/** Freeform 模式下手动更新工作项状态（用于看板拖拽） */
+export function updateWorkItemStatus(
+  itemId: string,
+  status: string
+): Promise<WorkItem> {
+  return apiClient.patch<WorkItem>(
+    `/api/work-items/${encodeURIComponent(itemId)}/status`,
+    { status }
+  );
 }
 
 // ---------- 流转 ----------
@@ -135,11 +150,12 @@ export function getProjectWorkflow(
 
 export function bindProjectWorkflow(
   projectId: string,
-  workflowId: string
+  workflowId?: string | null,
+  flowMode?: string
 ): Promise<ProjectSettings> {
   return apiClient.put<ProjectSettings>(
     `/api/projects/${encodeURIComponent(projectId)}/workflow`,
-    { workflow_id: workflowId }
+    { workflow_id: workflowId ?? null, flow_mode: flowMode }
   );
 }
 
@@ -147,6 +163,53 @@ export function unbindProjectWorkflow(projectId: string): Promise<void> {
   return apiClient.del<void>(
     `/api/projects/${encodeURIComponent(projectId)}/workflow`
   );
+}
+
+// ---------- freeform 状态列表配置 ----------
+
+export interface FreeformStatusItem {
+  key: string;
+  label: string;
+}
+
+export function getFreeformStatusList(
+  projectId: string
+): Promise<FreeformStatusItem[]> {
+  return apiClient
+    .get<{ status_list: FreeformStatusItem[] }>(
+      `/api/projects/${encodeURIComponent(projectId)}/freeform-status`
+    )
+    .then((r) => r.status_list ?? []);
+}
+
+export function setFreeformStatusList(
+  projectId: string,
+  statusList: FreeformStatusItem[]
+): Promise<FreeformStatusItem[]> {
+  return apiClient
+    .put<{ status_list: FreeformStatusItem[] }>(
+      `/api/projects/${encodeURIComponent(projectId)}/freeform-status`,
+      { status_list: statusList }
+    )
+    .then((r) => r.status_list ?? []);
+}
+
+// ---------- 全局 freeform 状态列表配置（与项目无关） ----------
+
+export function getGlobalFreeformStatus(): Promise<FreeformStatusItem[]> {
+  return apiClient
+    .get<{ status_list: FreeformStatusItem[] }>(`/api/settings/freeform-status`)
+    .then((r) => r.status_list ?? []);
+}
+
+export function setGlobalFreeformStatus(
+  statusList: FreeformStatusItem[]
+): Promise<FreeformStatusItem[]> {
+  return apiClient
+    .put<{ status_list: FreeformStatusItem[] }>(`/api/settings/freeform-status`, {
+      status_list: statusList,
+    })
+    .then((r) => r.status_list ?? []);
 }
 
 // ---------- 附件 (Attachments) ----------
@@ -297,5 +360,89 @@ export function optimizeDescription(
   return apiClient.post<OptimizeDescriptionResponse>(
     "/api/work-items/optimize-description",
     params,
+  );
+}
+
+// ---------- Freeform 分配 & 共享上下文 ----------
+
+export interface AssignWorkItemParams {
+  target_type: "member" | "expert_team" | "squad";
+  target_id: string;
+  role?: string;
+}
+
+/** 获取工作项分配列表 */
+export function getWorkItemAssignments(
+  workItemId: string,
+): Promise<WorkItemAssignment[]> {
+  return apiClient.get<WorkItemAssignment[]>(
+    `/api/work-items/${encodeURIComponent(workItemId)}/assignments`,
+  );
+}
+
+/** 分配工作项给成员/专家团/小队 */
+export function assignWorkItem(
+  workItemId: string,
+  params: AssignWorkItemParams,
+): Promise<WorkItemAssignment> {
+  return apiClient.post<WorkItemAssignment>(
+    `/api/work-items/${encodeURIComponent(workItemId)}/assign`,
+    params,
+  );
+}
+
+/** 更新分配状态（接受 / 进行中 / 完成 / 拒绝） */
+export function updateWorkItemAssignment(
+  workItemId: string,
+  assignmentId: string,
+  data: { status: string; notes?: string },
+): Promise<WorkItemAssignment> {
+  return apiClient.patch<WorkItemAssignment>(
+    `/api/work-items/${encodeURIComponent(workItemId)}/assignments/${encodeURIComponent(
+      assignmentId,
+    )}`,
+    data,
+  );
+}
+
+/** 获取工作项共享上下文流（时间正序） */
+export function getWorkItemContext(
+  workItemId: string,
+): Promise<WorkItemContextEntry[]> {
+  return apiClient.get<WorkItemContextEntry[]>(
+    `/api/work-items/${encodeURIComponent(workItemId)}/context`,
+  );
+}
+
+/** 添加工作项共享上下文条目 */
+export function addWorkItemContext(
+  workItemId: string,
+  data: { context_type: string; content: string },
+): Promise<WorkItemContextEntry> {
+  return apiClient.post<WorkItemContextEntry>(
+    `/api/work-items/${encodeURIComponent(workItemId)}/context`,
+    data,
+  );
+}
+
+// ---------- Freeform 评论协作 ----------
+
+/** 获取工作项评论列表（时间正序） */
+export function getWorkItemComments(
+  workItemId: string,
+): Promise<WorkItemComment[]> {
+  return apiClient.get<WorkItemComment[]>(
+    `/api/work-items/${encodeURIComponent(workItemId)}/comments`,
+  );
+}
+
+/** 创建评论；若 mentions 含专家团/小队则触发 Agent 执行 */
+export function createWorkItemComment(
+  workItemId: string,
+  data: { content: string; mentions?: MentionItem[] },
+): Promise<WorkItemComment> {
+  return apiClient.post<WorkItemComment>(
+    `/api/work-items/${encodeURIComponent(workItemId)}/comments`,
+    data,
   );
 }

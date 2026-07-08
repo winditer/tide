@@ -316,3 +316,49 @@ export async function localMergeBranches(
     params,
   );
 }
+
+/**
+ * 交互式本地合并：冲突时返回冲突文件列表和 cwd，供前端进入冲突解决模式。
+ */
+export async function mergeInteractive(
+  projectId: string,
+  params: {
+    source_branch: string;
+    target_branch: string;
+    strategy?: string;
+    delete_source?: boolean;
+  },
+): Promise<{ ok: boolean; output: string; conflicts: string[]; cwd: string }> {
+  return apiClient.post<{ ok: boolean; output: string; conflicts: string[]; cwd: string }>(
+    `/api/projects/${encodeURIComponent(projectId)}/git/merge-interactive`,
+    params,
+  );
+}
+
+/**
+ * 冲突解决后提交合并。
+ */
+export async function commitMerge(
+  projectId: string,
+  params: {
+    message?: string;
+    delete_source?: string;
+  },
+): Promise<{ ok: boolean; output: string }> {
+  return apiClient.post<{ ok: boolean; output: string }>(
+    `/api/projects/${encodeURIComponent(projectId)}/git/commit-merge`,
+    params,
+  );
+}
+
+/**
+ * 放弃当前进行中的合并。
+ */
+export async function abortMerge(
+  projectId: string,
+): Promise<{ ok: boolean }> {
+  return apiClient.post<{ ok: boolean }>(
+    `/api/projects/${encodeURIComponent(projectId)}/git/abort-merge`,
+    {},
+  );
+}

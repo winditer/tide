@@ -1,12 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { Button, Input, Select, type SelectOptionGroup } from "@tide/ui";
 import {
   useProjects,
   useProjectMembers,
   useProjectGroups,
   useProjectGroup,
+  useProjectWorkflow,
+  useFreeformStatusList,
+  useGlobalFreeformStatusList,
   useVersions,
   type ProjectInfo,
   type WorkItemFilters,
@@ -20,7 +24,7 @@ import {
   type WorkItemGroupBy,
 } from "@tide/views";
 import type { WorkItem } from "@tide/core";
-import { LayoutGrid, List, Search, Sparkles } from "lucide-react";
+import { ChevronDown, LayoutGrid, List, Search, Sparkles } from "lucide-react";
 
 const LAST_SCOPE_STORAGE_KEY = "tide:work-items:last-scope";
 /** 兼容旧版本 localStorage 中仅存项目 id 的 key */
@@ -83,12 +87,26 @@ const STATUS_OPTIONS = [
   { value: "waiting", label: "等待中" },
 ];
 
-export default function WorkItemsPage() {
+/** freeform 模式未自定义状态列时的默认选项（与看板默认 4 列一致） */
+const DEFAULT_FREEFORM_STATUS_OPTIONS = [
+  { value: "unassigned", label: "未分配" },
+  { value: "pending", label: "待接受" },
+  { value: "in_progress", label: "进行中" },
+  { value: "completed", label: "已完成" },
+];
+
+function WorkItemsPageContent() {
+  const searchParams = useSearchParams();
+  const detailId = searchParams.get("detail");
   const { data: projectsData, isLoading: projectsLoading } = useProjects();
   const { data: projectGroupsData } = useProjectGroups();
 
   // 统一归属选择器：编码形式 "project:<id>" / "group:<id>" / "__all__"
   const [scopeValue, setScopeValue] = useState<string>(SCOPE_ALL);
+  // 归属选择器搜索下拉状态
+  const [scopeOpen, setScopeOpen] = useState(false);
+  const [scopeSearch, setScopeSearch] = useState("");
+  const scopeRef = useRef<HTMLDivElement | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [showAIDecompose, setShowAIDecompose] = useState(false);
   const [detailItemId, setDetailItemId] = useState<string | null>(null);
@@ -187,11 +205,44 @@ export default function WorkItemsPage() {
     return map;
   }, [versions]);
 
-  // 归属变更时重置版本/负责人筛选，避免带到另一项目
+  // 归属变更时重置版本/负责人/状态筛选，避免带到另一项目
   useEffect(() => {
     setVersionFilter("");
     setAssigneeFilter("");
+    setStatusFilter("");
   }, [scopeValue]);
+
+  // 检测当前项目流转模式与 freeform 状态列表，用于动态状态筛选选项
+  const { data: projectSettings } = useProjectWorkflow(
+    effectiveProjectId || undefined,
+  );
+  const { data: freeformStatusList } = useFreeformStatusList(
+    effectiveProjectId || undefined,
+  );
+  // 全局 freeform 状态列配置：项目级无配置或全局视图时作为数据源
+  const { data: globalFreeformStatusList } = useGlobalFreeformStatusList();
+  const isFreeform = projectSettings?.flow_mode === "freeform";
+
+  // 动态状态筛选选项，数据获取优先级：
+  //   1. 具体项目 + 工作流模式 → 工作流状态
+  //   2. 具体 freeform 项目 → 项目级配置 → 全局配置 → 硬编码默认
+  //   3. 全局视图（未选具体项目）→ 全局配置 → 硬编码默认
+  const statusOptions = useMemo(() => {
+    if (effectiveProjectId && !isFreeform) return STATUS_OPTIONS;
+    const projectLevel =
+      effectiveProjectId && freeformStatusList && freeformStatusList.length > 0
+        ? freeformStatusList
+        : null;
+    const globalLevel =
+      globalFreeformStatusList && globalFreeformStatusList.length > 0
+        ? globalFreeformStatusList
+        : null;
+    const source = projectLevel ?? globalLevel;
+    const list = source
+      ? source.map((s) => ({ value: s.key, label: s.label }))
+      : DEFAULT_FREEFORM_STATUS_OPTIONS;
+    return [{ value: "", label: "全部状态" }, ...list];
+  }, [effectiveProjectId, isFreeform, freeformStatusList, globalFreeformStatusList]);
 
   // 构建筛选参数：项目组模式自动注入 group_id
   const filters: WorkItemFilters | undefined = useMemo(() => {
@@ -234,6 +285,41 @@ export default function WorkItemsPage() {
     }
     return res;
   }, [projects, groups]);
+
+  // 当前选中项的显示标签
+  const scopeSelectedLabel = useMemo(() => {
+    const all = [
+      ...scopeFlatOptions,
+      ...scopeGroups.flatMap((g) => g.options),
+    ];
+    return all.find((o) => o.value === scopeValue)?.label ?? "全部";
+  }, [scopeFlatOptions, scopeGroups, scopeValue]);
+
+  // 根据搜索词过滤分组选项（不区分大小写）；"全部"始终显示
+  const scopeFilteredGroups = useMemo<SelectOptionGroup[]>(() => {
+    const kw = scopeSearch.trim().toLowerCase();
+    if (!kw) return scopeGroups;
+    return scopeGroups
+      .map((g) => ({
+        label: g.label,
+        options: g.options.filter((o) =>
+          o.label.toLowerCase().includes(kw),
+        ),
+      }))
+      .filter((g) => g.options.length > 0);
+  }, [scopeGroups, scopeSearch]);
+
+  // 点击外部关闭下拉
+  useEffect(() => {
+    if (!scopeOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (scopeRef.current && !scopeRef.current.contains(e.target as Node)) {
+        setScopeOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [scopeOpen]);
 
   // 默认选中：上次选择 > last_active 最新的项目
   useEffect(() => {
@@ -312,6 +398,13 @@ export default function WorkItemsPage() {
     setDetailItemId(item.id);
   };
 
+  // 支持从通知链接跳转：URL 带 ?detail=<id> 时自动打开对应工作项详情
+  useEffect(() => {
+    if (detailId) {
+      setDetailItemId(detailId);
+    }
+  }, [detailId]);
+
   // 是否已选中具体归属（用于决定是否渲染列表/筛选栏）
   const hasScope = scope.kind !== "all" && !!effectiveProjectId;
 
@@ -327,15 +420,91 @@ export default function WorkItemsPage() {
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <Select
-              value={scopeValue}
-              onChange={(e) => setScopeValue(e.target.value)}
-              options={scopeFlatOptions}
-              groups={scopeGroups}
-              className="min-w-[220px]"
-              aria-label="选择项目或项目组"
-              title="选择项目或项目组"
-            />
+            <div className="relative min-w-[220px]" ref={scopeRef}>
+              <button
+                type="button"
+                aria-label="选择项目或项目组"
+                title="选择项目或项目组"
+                onClick={() => {
+                  setScopeOpen((prev) => {
+                    const next = !prev;
+                    if (next) setScopeSearch("");
+                    return next;
+                  });
+                }}
+                className="flex h-9 w-full items-center justify-between gap-2 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors hover:bg-accent/50 focus:outline-none focus:ring-1 focus:ring-ring"
+              >
+                <span className="truncate">{scopeSelectedLabel}</span>
+                <ChevronDown className="h-4 w-4 shrink-0 opacity-50" />
+              </button>
+              {scopeOpen && (
+                <div className="absolute left-0 top-full z-50 mt-1 w-full rounded-md border bg-background shadow-lg">
+                  <div className="p-2">
+                    <div className="relative">
+                      <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                      <Input
+                        autoFocus
+                        value={scopeSearch}
+                        onChange={(e) => setScopeSearch(e.target.value)}
+                        placeholder="搜索项目…"
+                        className="pl-8"
+                      />
+                    </div>
+                  </div>
+                  <div className="max-h-64 overflow-y-auto pb-1">
+                    {scopeFlatOptions.map((opt) => (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => {
+                          setScopeValue(opt.value);
+                          setScopeOpen(false);
+                          setScopeSearch("");
+                        }}
+                        className={`flex w-full items-center px-3 py-1.5 text-left text-sm hover:bg-accent ${
+                          scopeValue === opt.value
+                            ? "bg-accent font-medium"
+                            : ""
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                    {scopeFilteredGroups.map((group) => (
+                      <div key={group.label}>
+                        <div className="px-3 pt-2 pb-1 text-xs font-medium text-muted-foreground">
+                          {group.label}
+                        </div>
+                        {group.options.map((opt) => (
+                          <button
+                            key={opt.value}
+                            type="button"
+                            onClick={() => {
+                              setScopeValue(opt.value);
+                              setScopeOpen(false);
+                              setScopeSearch("");
+                            }}
+                            className={`flex w-full items-center px-3 py-1.5 text-left text-sm hover:bg-accent ${
+                              scopeValue === opt.value
+                                ? "bg-accent font-medium"
+                                : ""
+                            }`}
+                          >
+                            <span className="truncate">{opt.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ))}
+                    {scopeSearch.trim() &&
+                      scopeFilteredGroups.length === 0 && (
+                        <div className="px-3 py-2 text-sm text-muted-foreground">
+                          无匹配结果
+                        </div>
+                      )}
+                  </div>
+                </div>
+              )}
+            </div>
             <Button
               variant="outline"
               disabled={!hasScope}
@@ -370,7 +539,7 @@ export default function WorkItemsPage() {
             <Select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              options={STATUS_OPTIONS}
+              options={statusOptions}
               className="w-32"
             />
             <Select
@@ -507,5 +676,13 @@ export default function WorkItemsPage() {
         />
       )}
     </main>
+  );
+}
+
+export default function WorkItemsPage() {
+  return (
+    <Suspense fallback={null}>
+      <WorkItemsPageContent />
+    </Suspense>
   );
 }

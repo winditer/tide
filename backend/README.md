@@ -137,6 +137,59 @@ cd /path/to/tide && uvicorn backend.main:app --reload --port 8000
 | POST | `/api/work-items/ai-decompose` | AI 分解（multipart/form-data：文本/链接/附件） |
 | POST | `/api/work-items/batch` | 批量创建工作项 |
 
+### Freeform 协作 API
+
+Freeform（自由协作）模式下，工作项不绑定固定工作流 DAG，而是通过
+**分配（assignment）→ 派遣（dispatch）→ 评论（comment）触发 Agent → 共享上下文（context）**
+的方式驱动成员 / 专家团 / 小队（squad）协同。相关端点均挂在 `/api/work-items` 下：
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/work-items/assignments/mine` | 获取当前登录用户的全部分配（可选 `status` 查询过滤） |
+| PATCH | `/api/work-items/{id}/status` | 手动更新工作项状态（仅 freeform 模式，供看板拖拽） |
+| POST | `/api/work-items/{id}/assign` | 分配工作项给 member / expert_team / squad |
+| GET | `/api/work-items/{id}/assignments` | 获取工作项的分配列表 |
+| POST | `/api/work-items/{id}/assignments/{assignment_id}/dispatch` | Squad Leader 派遣任务给成员 |
+| PATCH | `/api/work-items/{id}/assignments/{assignment_id}` | 更新分配状态（accepted / in_progress / completed / declined） |
+| POST | `/api/work-items/{id}/context` | 添加共享上下文条目 |
+| GET | `/api/work-items/{id}/context` | 获取共享上下文流 |
+| POST | `/api/work-items/{id}/comments` | 创建评论；若 @expert_team / @squad 则触发 Agent 执行 |
+| GET | `/api/work-items/{id}/comments` | 获取评论列表 |
+| PATCH | `/api/work-items/{id}/comments/{comment_id}` | 更新评论关联任务状态（内部调用） |
+
+**关键请求体：**
+
+- 分配 `POST .../assign`：
+  ```json
+  {"target_type": "member|expert_team|squad", "target_id": "...", "role": "executor"}
+  ```
+- 派遣 `POST .../dispatch`：
+  ```json
+  {"member_ids": ["user-a", "user-b"], "notes": "可选备注"}
+  ```
+- 更新分配 `PATCH .../assignments/{id}`：
+  ```json
+  {"status": "accepted|in_progress|completed|declined", "notes": "可选"}
+  ```
+  `accepted` 走接受逻辑，`completed` 走完成逻辑（携带 notes），其余状态更新进度。
+- 共享上下文 `POST .../context`：
+  ```json
+  {"context_type": "summary|decision|progress|handover", "content": "..."}
+  ```
+- 评论 `POST .../comments`：
+  ```json
+  {"content": "...", "mentions": [{"type": "expert_team|squad|member", "id": "...", "name": "可选"}]}
+  ```
+  当 `mentions` 含 `expert_team` 或 `squad` 时，后端调用 `no_workflow_service.execute_from_comment`
+  触发 Agent 执行，返回的 comment 会带上 `task_id`；@member 则向被提及用户发站内通知。
+
+**要点：**
+
+- 状态更新 `PATCH .../status` 仅对 `flow_mode == "freeform"` 或 `workflow_id == "__freeform__"`
+  的工作项生效，非 freeform 工作项返回 400；状态置为 `completed` 会写入 `completed_at`。
+- 分配 / 派遣 / 上下文 / 评论创建均要求非 viewer 角色；评论创建强制要求登录用户。
+- 上述写操作会广播 WebSocket 看板更新与站内通知事件，保证多端实时同步。
+
 ### Project Groups 项目组
 
 | 方法 | 路径 | 说明 |
@@ -228,7 +281,8 @@ cd /path/to/tide && uvicorn backend.main:app --reload --port 8000
 
 | 路径 | 说明 |
 |------|------|
-| `/ws` | WebSocket 连接，支持 subscribe/ping |
+| `/ws` | 前端 WebSocket 连接，支持 subscribe/ping |
+| `/ws/daemon` | Daemon 推模式通道：a2a-bridge 主动连入、能力注册、心跳保活与任务反向下发（独立 `DAEMON_TOKEN` 鉴权，详见 `docs/A2A_INTEGRATION.md`） |
 
 消息格式：
 
@@ -263,7 +317,13 @@ cd /path/to/tide && uvicorn backend.main:app --reload --port 8000
 | `project_group_members` | 项目组成员项目 |
 | `project_group_user_members` | 项目组用户成员 |
 | `work_items` | 工作项（含 AI 分解结果） |
-| `expert_teams` | 专家团定义：绑定 Agent + Skills + 角色提示词，支持项目级继承覆盖 |
+| `work_item_assignments` | Freeform 分配记录：target_type(member/expert_team/squad) + role + status + dispatched_to，驱动派遣与验收 |
+| `work_item_context` | 工作项共享记忆：context_type(summary/decision/progress/handover) 的上下文流 |
+| `work_item_comments` | 工作项评论（freeform 协作核心交互）：含 mentions、及触发的 task_id / task_status |
+| `notifications` | 站内通知：recipient_id + work_item_id + notification_type(mentioned/assigned/completed 等) + is_read |
+| `system_settings` | 全局系统配置（key-value 存储，与项目无关） |
+| `expert_teams` | 专家团定义：绑定 Agent + Skills + 角色提示词，支持项目级继承覆盖；新增 `member_agents`（小队成员 Agent 列表）、`is_squad`（是否为小队）、`leader_strategy`（Leader 选派策略）支持 squad 模式 |
+| `remote_agents` | 远程 Agent 注册；新增 `connection_mode`(http/ws)、`capability_tags`、`last_heartbeat`、`daemon_session_id` 支持 Daemon WS 推模式与能力调度 |
 
 数据库文件：`tide.db`（SQLite WAL 模式）
 

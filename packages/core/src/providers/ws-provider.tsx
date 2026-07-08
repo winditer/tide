@@ -12,7 +12,7 @@ import {
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { TaskEvent } from "../types/task";
-import { getAccessToken } from "../stores/auth-store";
+import { getAccessToken, useAuthStore } from "../stores/auth-store";
 
 type WsStatus = "connecting" | "connected" | "disconnected";
 
@@ -87,6 +87,21 @@ function handleWsEvent(event: TaskEvent, queryClient: ReturnType<typeof useQuery
       queryClient.invalidateQueries({ queryKey: ["security-findings"] });
       queryClient.invalidateQueries({ queryKey: ["security-summary"] });
       break;
+    case "work_item.comment_added":
+    case "work_item.comment_updated":
+      if ((event as any).work_item_id) {
+        queryClient.invalidateQueries({
+          queryKey: ["work-items", "comments", (event as any).work_item_id],
+        });
+      }
+      break;
+    case "work_item.blocked":
+    case "work_item.unblocked":
+      queryClient.invalidateQueries({ queryKey: ["work-items"] });
+      break;
+    case "notification.created":
+      queryClient.invalidateQueries({ queryKey: ["notifications"] });
+      break;
     default:
       // Unknown event type — no invalidation
       break;
@@ -150,7 +165,11 @@ export function WsProvider({ children }: { children: ReactNode }) {
       reconnectDelayRef.current = INITIAL_RECONNECT_DELAY;
       startHeartbeat();
       // Subscribe to default channels after connecting
-      ws.send(JSON.stringify({ type: "subscribe", channels: ["tasks", "approvals"] }));
+      const channels = ["tasks", "approvals", "work_items"];
+      // 追加当前用户专属通知频道，用于接收定向通知
+      const userId = useAuthStore.getState().user?.id;
+      if (userId) channels.push(`notifications:${userId}`);
+      ws.send(JSON.stringify({ type: "subscribe", channels }));
     };
 
     ws.onmessage = (event) => {

@@ -579,12 +579,41 @@ async def find_worktree_for_branch(repo_root: Path, branch: str) -> str | None:
     return None
 
 
+async def _auto_commit_dirty(repo_root: Path, outputs: list[str]) -> None:
+    """如果工作目录有未提交改动，自动 add+commit 清理。
+
+    用于 merge/rebase 前避免目标分支残留的脏文件导致
+    "would be overwritten by merge" 类错误。工作目录干净时什么都不做。
+    """
+    is_repo, dirty_files, _ = await git_status_entries(repo_root)
+    if not is_repo or not dirty_files:
+        return
+    logger.info(
+        "[git_merge] %d dirty file(s) detected, auto-committing before merge",
+        len(dirty_files),
+    )
+    # 使用 -A 确保删除的文件也被暂存
+    add_code, add_output = await git_command(repo_root, ["add", "-A"], timeout=30)
+    if add_code != 0:
+        outputs.append(f"Warning: failed to stage dirty files: {add_output}")
+        return
+    # 使用 --no-verify 跳过 git hooks（如 husky），避免 hook 阻断自动提交
+    commit_code, commit_output = await git_command(
+        repo_root,
+        ["commit", "--no-verify", "-m", "Auto: commit dirty working tree before merge"],
+        timeout=30,
+    )
+    if commit_code != 0 and "nothing to commit" not in commit_output.lower():
+        outputs.append(f"Warning: auto-commit before merge failed: {commit_output}")
+
+
 async def git_merge_branch(
     repo_root: Path,
     source_branch: str,
     target_branch: str,
     strategy: str = "merge",
     delete_source: bool = False,
+    no_abort: bool = False,
 ) -> tuple[bool, str, list[str]]:
     """在 ``repo_root`` 中将 ``source_branch`` 合入 ``target_branch``。
 
@@ -632,44 +661,56 @@ async def git_merge_branch(
         return conflicts
 
     async def _ensure_branch_local(branch: str) -> tuple[int, str]:
-        """确保分支在本地存在，若不存在则尝试从远端检出。
+        """确认分支在本地存在（不执行 checkout，避免 worktree 冲突）。
 
         Returns:
-            (return_code, output) — 0 表示成功 checkout 到该分支。
+            (return_code, output) — 0 表示分支在本地已存在。
         """
-        code, output = await git_command(repo_root, ["checkout", branch], timeout=60)
-        if code == 0:
-            return 0, output
-
-        # 检查远端是否有该分支
-        chk_code, chk_output = await git_command(
-            repo_root, ["branch", "-r", "--list", f"origin/{branch}"], timeout=10
+        # 先检查本地是否已存在该分支
+        code, output = await git_command(
+            repo_root, ["rev-parse", "--verify", f"refs/heads/{branch}"], timeout=10
         )
-        if chk_code == 0 and chk_output.strip():
-            # 远端存在，从远端创建本地追踪分支
+        if code == 0:
+            return 0, ""
+
+        # 本地不存在，尝试从远端 fetch 创建
+        chk_code, chk_output = await git_command(
+            repo_root, ["ls-remote", "--heads", "origin", branch], timeout=30
+        )
+        if chk_code == 0 and branch in chk_output:
+            # 远端存在，创建本地追踪分支
             logger.info(
-                "[git_utils] branch '%s' not local, checking out from origin/%s",
+                "[git_utils] branch '%s' not local, fetching from origin/%s",
                 branch, branch,
             )
             code2, output2 = await git_command(
-                repo_root, ["checkout", "-b", branch, f"origin/{branch}"], timeout=60
+                repo_root, ["fetch", "origin", f"{branch}:{branch}"], timeout=60
             )
+            if code2 == 0:
+                return 0, output2
             return code2, output2
 
         # 远端也不存在
-        return code, output
+        return 1, f"Branch '{branch}' not found locally or on remote"
 
     async def _checkout_or_create_branch(branch: str) -> tuple[int, list[str]]:
         """checkout 目标分支，若不存在则先尝试从远端检出，再 fallback 到从 main/master 创建。
 
         Returns:
-            (return_code, output_lines) — 0 表示成功。
+            (return_code, output_lines) — 0 表示成功切换到该分支。
         """
         lines: list[str] = []
-        # 先尝试直接 checkout 或从远端检出
+        # 先确保分支在本地存在
         code, output = await _ensure_branch_local(branch)
         lines.append(output)
         if code == 0:
+            # 分支存在，执行 checkout 切换
+            co_code, co_output = await git_command(
+                repo_root, ["checkout", branch], timeout=60
+            )
+            lines.append(co_output)
+            if co_code != 0:
+                return co_code, lines
             return 0, lines
 
         # 分支本地和远端都不存在，尝试从 main 或 master 自动创建
@@ -706,11 +747,22 @@ async def git_merge_branch(
         return 0, lines
 
     if strategy == "rebase":
-        # 1. checkout source (auto-fetch from remote if needed)
+        # 1. ensure source branch exists locally
         code, output = await _ensure_branch_local(source_branch)
         outputs.append(output)
         if code != 0:
             return False, "\n".join(outputs), []
+
+        # checkout source branch (rebase requires being on source)
+        code, output = await git_command(
+            repo_root, ["checkout", source_branch], timeout=60
+        )
+        outputs.append(output)
+        if code != 0:
+            return False, "\n".join(outputs), []
+
+        # 清理 source 分支残留的脏工作目录，避免 rebase 失败
+        await _auto_commit_dirty(repo_root, outputs)
 
         # 2. rebase target
         code, output = await git_command(
@@ -718,6 +770,15 @@ async def git_merge_branch(
         )
         outputs.append(output)
         if code != 0:
+            if no_abort:
+                conflicts = await git_conflict_files(repo_root)
+                logger.warning(
+                    "[git_utils] rebase conflict (no_abort): source=%s target=%s conflicts=%s",
+                    source_branch,
+                    target_branch,
+                    conflicts,
+                )
+                return False, "\n".join(outputs), conflicts
             conflicts = await _abort_and_collect("rebase")
             logger.warning(
                 "[git_utils] rebase failed: source=%s target=%s conflicts=%s",
@@ -749,18 +810,29 @@ async def git_merge_branch(
             return False, "\n".join(outputs), []
 
         if strategy == "squash":
-            # 先确保 source 分支在本地存在
+            # 先确保 source 分支在本地存在（仅验证，不 checkout）
             src_code, src_output = await _ensure_branch_local(source_branch)
             if src_code != 0:
                 outputs.append(src_output)
                 return False, "\n".join(outputs), []
-            # checkout 回 target
+            # 确保当前在 target 分支上
             await git_command(repo_root, ["checkout", target_branch], timeout=60)
+            # 清理目标分支残留的脏工作目录，避免 merge 被覆盖失败
+            await _auto_commit_dirty(repo_root, outputs)
             code, output = await git_command(
                 repo_root, ["merge", "--squash", source_branch], timeout=300
             )
             outputs.append(output)
             if code != 0:
+                if no_abort:
+                    conflicts = await git_conflict_files(repo_root)
+                    logger.warning(
+                        "[git_utils] squash merge conflict (no_abort): source=%s target=%s conflicts=%s",
+                        source_branch,
+                        target_branch,
+                        conflicts,
+                    )
+                    return False, "\n".join(outputs), conflicts
                 conflicts = await _abort_and_collect("merge")
                 logger.warning(
                     "[git_utils] squash merge failed: source=%s target=%s conflicts=%s",
@@ -787,18 +859,29 @@ async def git_merge_branch(
                 else:
                     return False, "\n".join(outputs), []
         else:  # merge
-            # 先确保 source 分支在本地存在
+            # 先确保 source 分支在本地存在（仅验证，不 checkout）
             src_code, src_output = await _ensure_branch_local(source_branch)
             if src_code != 0:
                 outputs.append(src_output)
                 return False, "\n".join(outputs), []
-            # checkout 回 target
+            # 确保当前在 target 分支上
             await git_command(repo_root, ["checkout", target_branch], timeout=60)
+            # 清理目标分支残留的脏工作目录，避免 merge 被覆盖失败
+            await _auto_commit_dirty(repo_root, outputs)
             code, output = await git_command(
                 repo_root, ["merge", "--no-ff", source_branch], timeout=300
             )
             outputs.append(output)
             if code != 0:
+                if no_abort:
+                    conflicts = await git_conflict_files(repo_root)
+                    logger.warning(
+                        "[git_utils] merge conflict (no_abort): source=%s target=%s conflicts=%s",
+                        source_branch,
+                        target_branch,
+                        conflicts,
+                    )
+                    return False, "\n".join(outputs), conflicts
                 conflicts = await _abort_and_collect("merge")
                 logger.warning(
                     "[git_utils] merge failed: source=%s target=%s conflicts=%s",

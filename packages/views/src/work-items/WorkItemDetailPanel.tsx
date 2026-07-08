@@ -2,9 +2,11 @@
 
 
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
-import { Pencil, Trash2, AlertTriangle, GitMerge, GitBranch, Maximize2, Minimize2, CheckCircle2, ArrowRight, Clock, Image as ImageIcon, X } from "lucide-react";
+import { Pencil, Trash2, AlertTriangle, GitMerge, GitBranch, Maximize2, Minimize2, CheckCircle2, ArrowRight, Clock, Image as ImageIcon, X, Link2, Check } from "lucide-react";
 import { Button, Badge, Input, Select } from "@tide/ui";
 import { AIOptimizeButton } from "./AIOptimizeButton";
+import { CommentThread } from "./CommentThread";
+import { SharedContextPanel } from "./SharedContextPanel";
 import {
   useWorkItem,
   useWorkItemTransitions,
@@ -19,6 +21,8 @@ import {
   parseApprovalDetail,
   useAddArtifact,
   useAuth,
+  useWorkItemContext,
+  useAddWorkItemContext,
   uploadWorkItemAttachments,
   appPath,
   type WorkItem,
@@ -576,8 +580,12 @@ export function WorkItemDetailPanel({
         {/* 产物 Artifacts */}
         <WorkItemArtifactsSection item={item} />
 
-        {/* Transitions */}
-        <div>
+        {item.flow_mode === "freeform" ? (
+          /* Freeform 模式：展示分配与共享上下文，替代工作流节点/流转历史 */
+          <WorkItemFreeformSection item={item} currentUserId={user?.id} />
+        ) : (
+          /* Transitions */
+          <div>
           <div className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
             流转历史
           </div>
@@ -707,9 +715,48 @@ export function WorkItemDetailPanel({
               暂无流转记录
             </div>
           )}
-        </div>
+          </div>
+        )}
       </div>
     </PanelShell>
+  );
+}
+
+interface WorkItemFreeformSectionProps {
+  item: WorkItem;
+  currentUserId?: string;
+}
+
+/**
+ * Freeform 模式下的协作区：评论线程（@mention 触发 Agent） + 共享上下文面板。
+ * 评论替换了原分配面板，成为 freeform 模式的核心交互。
+ */
+function WorkItemFreeformSection({ item, currentUserId }: WorkItemFreeformSectionProps) {
+  const { data: contextEntries } = useWorkItemContext(item.id);
+  const addContextMutation = useAddWorkItemContext();
+
+  const handleAddContext = (contextType: string, content: string) => {
+    addContextMutation.mutate({
+      workItemId: item.id,
+      contextType,
+      content,
+    });
+  };
+
+  return (
+    <div className="space-y-6">
+      <CommentThread
+        workItemId={item.id}
+        projectId={item.project_id}
+        currentUserId={currentUserId}
+      />
+      <SharedContextPanel
+        workItemId={item.id}
+        contextEntries={contextEntries ?? item.context_stream ?? []}
+        currentUserId={currentUserId}
+        onAddContext={handleAddContext}
+      />
+    </div>
   );
 }
 
@@ -1321,6 +1368,16 @@ function PanelShell({
     });
   }, [itemId]);
 
+  const [linkCopied, setLinkCopied] = useState(false);
+  const handleCopyLink = useCallback(() => {
+    if (!itemId) return;
+    const url = `${window.location.origin}${appPath(`/work-items?detail=${itemId}`)}`;
+    navigator.clipboard.writeText(url).then(() => {
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2000);
+    });
+  }, [itemId]);
+
   return (
     <div
       className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-sm animate-in fade-in-0"
@@ -1335,6 +1392,16 @@ function PanelShell({
             工作项详情
           </span>
           <div className="flex items-center gap-1">
+            {itemId && (
+              <button
+                onClick={handleCopyLink}
+                title={linkCopied ? "链接已复制" : "复制链接"}
+                aria-label="复制链接"
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
+              >
+                {linkCopied ? <Check className="h-4 w-4 text-emerald-500" /> : <Link2 className="h-4 w-4" />}
+              </button>
+            )}
             {itemId && (
               <button
                 onClick={handleCopyId}

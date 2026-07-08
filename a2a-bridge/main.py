@@ -16,7 +16,7 @@ from typing import Any, AsyncIterator
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-import config
+import bridge_config as config
 from agent_card import build_agent_card
 from executor import executor
 from git_manager import GitContext, init_git_manager
@@ -55,11 +55,71 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 初始化全局 GitManager（仓库存储目录从配置读取）
     init_git_manager(repos_dir=config.GIT_REPOS_DIR)
     logger.info("git manager initialized: repos_dir=%s", config.GIT_REPOS_DIR)
+
+    # 启动 Daemon WebSocket 客户端（推模式）
+    daemon_client_task = None
+    daemon_ws_client = None
+    if config.DAEMON_ENABLED and config.TIDE_WS_URL:
+        from daemon_client import DaemonWSClient
+
+        # 从 config.AGENTS 组装 agents 信息（每个 CLI Agent 作为独立条目）
+        agents_info = []
+        for agent_name, agent_cfg in getattr(config, "AGENTS", {}).items():
+            model = getattr(agent_cfg, "model", "") if not isinstance(agent_cfg, dict) else agent_cfg.get("model", "")
+            agents_info.append({
+                "agent_id": agent_name,
+                "name": agent_name,
+                "model": model or "",
+                "capabilities": list(getattr(config, "CAPABILITY_TAGS", []) or []),
+            })
+
+        daemon_ws_client = DaemonWSClient(
+            tide_ws_url=config.TIDE_WS_URL,
+            daemon_token=config.DAEMON_TOKEN,
+            daemon_id=config.DAEMON_ID or "",
+            heartbeat_interval=config.HEARTBEAT_INTERVAL,
+            capability_tags=config.CAPABILITY_TAGS,
+            agents=agents_info,
+            name="a2a-bridge",
+            endpoint_url=getattr(config, "PUBLIC_URL", "") or "",
+            max_concurrency=getattr(config, "MAX_CONCURRENCY", 5),
+        )
+        daemon_ws_client.set_executor(executor)
+        daemon_client_task = asyncio.create_task(daemon_ws_client.start())
+        logger.info(
+            "Daemon WS push mode enabled → connecting to %s (daemon_id=%s)",
+            config.TIDE_WS_URL, daemon_ws_client.daemon_id
+        )
+    elif config.DAEMON_ENABLED:
+        logger.warning(
+            "DAEMON_ENABLED=true but TIDE_WS_URL is not set. "
+            "To enable WebSocket push mode, configure:\n"
+            "  TIDE_WS_URL=ws://<tide-backend-host>:<port>/ws/daemon\n"
+            "  DAEMON_TOKEN=<shared-secret>\n"
+            "Falling back to HTTP polling mode."
+        )
+    else:
+        logger.debug(
+            "Daemon WS push mode disabled. Set DAEMON_ENABLED=true and TIDE_WS_URL to enable. "
+            "See .env.example for details."
+        )
+
     try:
         yield
     finally:
         logger.info("shutting down: cancelling active tasks")
         await executor.shutdown()
+        # 停止 Daemon 客户端
+        if daemon_client_task:
+            try:
+                await daemon_ws_client.stop()
+                daemon_client_task.cancel()
+                try:
+                    await daemon_client_task
+                except asyncio.CancelledError:
+                    pass
+            except Exception:
+                logger.exception("daemon_client shutdown error")
 
 
 app = FastAPI(title="Tide A2A Bridge", version="1.0.0", lifespan=lifespan)

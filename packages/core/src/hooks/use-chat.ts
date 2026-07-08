@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createTask } from "../api/tasks";
+import { continueTask } from "../api/tasks";
 import { getTask } from "../api/tasks";
 import { fetchApprovals, approveApproval, rejectApproval } from "../api/approvals";
 import { useWs } from "../providers/ws-provider";
@@ -257,6 +258,8 @@ export interface SendMessageOverrides {
   agentId?: string;
   groupId?: string;
   attachments?: ChatAttachment[];
+  /** 当前任务 ID；与 sessionId 同时存在时触发“真正续聊”（在原任务上继续） */
+  lastTaskId?: string;
 }
 
 export interface UseChatResult {
@@ -665,14 +668,25 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
         : buildContextPrompt(historyForPrompt, trimmed);
 
       try {
-        const task = await createTask({
-          prompt: fullPrompt,
-          agent_id: finalAgentId || undefined,
-          cwd: finalCwd || undefined,
-          session_id: finalSessionId || undefined,
-          group_id: finalGroupId || undefined,
-          attachments: messageAttachments?.map((a) => a.path) ?? [],
-        });
+        let task;
+        // 若传入 lastTaskId 且有 session，说明是续聊场景，
+        // 调用 continue API 在原任务上继续执行，而非新建任务。
+        const lastTaskId = overrides?.lastTaskId;
+        if (lastTaskId && finalSessionId) {
+          task = await continueTask(lastTaskId, {
+            prompt: fullPrompt,
+            attachments: messageAttachments?.map((a) => a.path) ?? [],
+          });
+        } else {
+          task = await createTask({
+            prompt: fullPrompt,
+            agent_id: finalAgentId || undefined,
+            cwd: finalCwd || undefined,
+            session_id: finalSessionId || undefined,
+            group_id: finalGroupId || undefined,
+            attachments: messageAttachments?.map((a) => a.path) ?? [],
+          });
+        }
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantMsg.id
@@ -680,6 +694,7 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
               : m
           )
         );
+        return task;
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : "提交失败";
 
@@ -725,6 +740,7 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
                   : m
               )
             );
+            return task;
           } catch (retryErr) {
             const retryMsg =
               retryErr instanceof Error ? retryErr.message : "提交失败";

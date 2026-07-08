@@ -15,6 +15,7 @@ import {
   toast,
 } from "@tide/ui";
 import { apiClient, useAuth } from "@tide/core";
+import { RulesGuide } from "@tide/views";
 import { ProjectScopeSelector } from "@tide/views/components/project-scope-selector";
 import {
   ArrowLeft,
@@ -255,6 +256,7 @@ export default function SettingsRulesPage() {
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
+            <RulesGuide />
             <Button
               onClick={() => {
                 setEditing(null);

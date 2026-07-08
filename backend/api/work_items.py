@@ -26,7 +26,12 @@ from backend.core.dependencies import (
     get_optional_user,
 )
 from backend.models.schemas import (
+    AssignmentUpdateRequest,
+    WorkItemAssignRequest,
+    WorkItemCommentCreate,
+    WorkItemContextCreate,
     WorkItemCreate,
+    WorkItemDispatchRequest,
     WorkItemResponse,
     WorkItemTransitionRequest,
     WorkItemTransitionResponse,
@@ -239,6 +244,21 @@ async def list_work_items(
     )
 
 
+# ── Freeform: 当前用户的分配视图 ────────────────────────────
+# 注意：此路由必须放在 /{item_id} 动态路由之前，避免 "assignments" 被
+# 误当作 item_id 匹配。
+
+@router.get("/assignments/mine")
+async def get_my_assignments(status: Optional[str] = None, user=Depends(get_optional_user)):
+    """获取当前用户的所有分配。"""
+    from backend.services.no_workflow_service import no_workflow_service
+
+    user_id = user.get("id") if user else None
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return await no_workflow_service.get_my_assignments(user_id, status)
+
+
 @router.get("/{item_id}", response_model=WorkItemResponse)
 async def get_work_item(
     item_id: str,
@@ -267,7 +287,115 @@ async def update_work_item(
     result = await work_item_service.update_work_item(item_id, body)
     if not result:
         raise HTTPException(status_code=404, detail="Work item not found")
+
+    # 负责人变更 → 通知新负责人（不通知自己）
+    try:
+        from backend.services.notification_service import notification_service
+
+        actor_id = current_user.get("id") if current_user else None
+        old_assignee = (existing or {}).get("assignee") if existing else None
+        new_assignee = result.get("assignee")
+        if new_assignee and new_assignee != old_assignee and new_assignee != actor_id:
+            await notification_service.create_notification(
+                recipient_id=new_assignee,
+                work_item_id=item_id,
+                notification_type="assigned",
+                trigger_actor_id=actor_id,
+                content=f"您被指定为工作项「{result.get('title', '')}」的负责人",
+            )
+    except Exception:
+        logger.debug("create assigned notification failed", exc_info=True)
+
     return result
+
+
+@router.patch("/{item_id}/status")
+async def update_work_item_status(
+    item_id: str,
+    body: dict = Body(...),
+    current_user=Depends(get_optional_user),
+):
+    """Freeform 模式下手动更新工作项状态（用于看板拖拽）。"""
+    _ensure_not_viewer(current_user)
+    from sqlalchemy import text
+
+    status = (body.get("status") or "").strip()
+    if not status:
+        raise HTTPException(status_code=400, detail="status is required")
+
+    item = await work_item_service.get_work_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Work item not found")
+    await check_project_write_permission(item.get("project_id"), current_user)
+
+    # 仅 freeform 模式允许直接设置 status
+    is_freeform = (
+        item.get("flow_mode") == "freeform"
+        or item.get("workflow_id") == "__freeform__"
+    )
+    if not is_freeform:
+        raise HTTPException(
+            status_code=400,
+            detail="Only freeform work items support manual status update",
+        )
+
+    async with async_session_factory() as session:
+        if status == "completed":
+            await session.execute(
+                text(
+                    "UPDATE work_items SET status = :s, completed_at = CURRENT_TIMESTAMP, "
+                    "updated_at = CURRENT_TIMESTAMP WHERE id = :id"
+                ),
+                {"s": status, "id": item_id},
+            )
+        else:
+            await session.execute(
+                text(
+                    "UPDATE work_items SET status = :s, completed_at = NULL, "
+                    "updated_at = CURRENT_TIMESTAMP WHERE id = :id"
+                ),
+                {"s": status, "id": item_id},
+            )
+        await session.commit()
+
+    updated = await work_item_service.get_work_item(item_id)
+
+    # 工作项完成 → 通知创建者/负责人（不通知自己）
+    if status == "completed":
+        try:
+            from backend.services.notification_service import notification_service
+
+            async with async_session_factory() as session:
+                row = await session.execute(
+                    text("SELECT assignee, title FROM work_items WHERE id = :id"),
+                    {"id": item_id},
+                )
+                wi = row.fetchone()
+            actor_id = current_user.get("id") if current_user else None
+            if wi and wi[0] and wi[0] != actor_id:
+                await notification_service.create_notification(
+                    recipient_id=wi[0],
+                    work_item_id=item_id,
+                    notification_type="completed",
+                    trigger_actor_id=actor_id,
+                    content=f"工作项「{wi[1]}」已完成",
+                )
+        except Exception:
+            logger.debug("create completed notification failed", exc_info=True)
+
+    # 广播看板更新，确保其他客户端实时同步
+    try:
+        from backend.services.ws_hub import ws_hub
+
+        await ws_hub.broadcast("work_items", {
+            "type": "work_item.updated",
+            "work_item_id": item_id,
+            "project_id": item.get("project_id"),
+        })
+    except Exception:
+        pass
+
+    return updated
 
 
 @router.delete("/{item_id}")
@@ -1070,3 +1198,243 @@ async def batch_create_work_items(
         created.append(result)
 
     return {"created": created, "failed": failed}
+
+
+# ── Freeform Assignment Endpoints ──────────────────────────
+
+
+@router.post("/{item_id}/assign")
+async def assign_work_item(
+    item_id: str,
+    body: WorkItemAssignRequest,
+    user=Depends(get_optional_user),
+):
+    """分配工作项给成员/专家团/小队。"""
+    _ensure_not_viewer(user)
+    from backend.services.no_workflow_service import no_workflow_service
+
+    actor_id = user.get("id", "anonymous") if user else "anonymous"
+
+    try:
+        if body.target_type == "member":
+            result = await no_workflow_service.assign_to_member(
+                item_id, body.target_id, actor_id, body.role
+            )
+        elif body.target_type == "expert_team":
+            result = await no_workflow_service.assign_to_expert_team(
+                item_id, body.target_id, actor_id
+            )
+        elif body.target_type == "squad":
+            result = await no_workflow_service.assign_to_squad(
+                item_id, body.target_id, actor_id
+            )
+        else:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid target_type: {body.target_type}"
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return result
+
+
+@router.post("/{item_id}/assignments/{assignment_id}/dispatch")
+async def dispatch_assignment(
+    item_id: str,
+    assignment_id: str,
+    body: WorkItemDispatchRequest,
+    user=Depends(get_optional_user),
+):
+    """Squad Leader 派遣任务给成员。"""
+    _ensure_not_viewer(user)
+    from backend.services.no_workflow_service import no_workflow_service
+
+    leader_id = user.get("id", "anonymous") if user else "anonymous"
+    try:
+        result = await no_workflow_service.dispatch_to_members(
+            item_id, assignment_id, body.member_ids, leader_id
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"dispatched": result}
+
+
+@router.patch("/{item_id}/assignments/{assignment_id}")
+async def update_assignment(
+    item_id: str,
+    assignment_id: str,
+    body: AssignmentUpdateRequest,
+    user=Depends(get_optional_user),
+):
+    """更新分配状态（接受/进行中/完成/拒绝）。"""
+    _ensure_not_viewer(user)
+    from backend.services.no_workflow_service import no_workflow_service
+
+    actor_id = user.get("id", "anonymous") if user else "anonymous"
+
+    try:
+        if body.status == "accepted":
+            result = await no_workflow_service.accept_assignment(assignment_id, actor_id)
+        elif body.status == "completed":
+            result = await no_workflow_service.complete_assignment(
+                assignment_id, actor_id, body.notes
+            )
+        else:
+            result = await no_workflow_service.update_progress(
+                assignment_id, body.status, body.notes
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return result
+
+
+@router.get("/{item_id}/assignments")
+async def get_assignments(item_id: str, user=Depends(get_optional_user)):
+    """获取工作项的分配列表。"""
+    from backend.services.no_workflow_service import no_workflow_service
+    return await no_workflow_service.get_assignments(item_id)
+
+
+@router.post("/{item_id}/context")
+async def add_work_item_context(
+    item_id: str,
+    body: WorkItemContextCreate,
+    user=Depends(get_optional_user),
+):
+    """添加工作项共享上下文条目。"""
+    _ensure_not_viewer(user)
+    from backend.services.no_workflow_service import no_workflow_service
+
+    author_id = user.get("id", "anonymous") if user else "anonymous"
+    try:
+        result = await no_workflow_service.add_context(
+            item_id, body.context_type, body.content, author_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return result
+
+
+@router.get("/{item_id}/context")
+async def get_work_item_context(item_id: str, user=Depends(get_optional_user)):
+    """获取工作项共享上下文流。"""
+    from backend.services.no_workflow_service import no_workflow_service
+    return await no_workflow_service.get_context_stream(item_id)
+
+
+@router.post("/{item_id}/comments")
+async def create_work_item_comment(
+    item_id: str,
+    body: WorkItemCommentCreate,
+    current_user=Depends(get_current_user),
+):
+    """创建评论。若 mentions 含 expert_team/squad，触发 Agent 执行。"""
+    _ensure_not_viewer(current_user)
+    from backend.services.no_workflow_service import no_workflow_service
+    from backend.services.event_emitter import event_emitter
+
+    author_id = current_user.get("id", "anonymous") if current_user else "anonymous"
+    mentions = [m.dict() for m in (body.mentions or [])]
+
+    # 1. 插入 comment 记录
+    comment = await no_workflow_service.create_comment(
+        work_item_id=item_id,
+        author_id=author_id,
+        content=body.content,
+        mentions=mentions,
+    )
+
+    # 2. 解析 mentions：若有 expert_team/squad 类型 → 触发 Agent 执行
+    task_id = None
+    for mention in mentions:
+        if mention.get("type") in ("expert_team", "squad"):
+            try:
+                task_id = await no_workflow_service.execute_from_comment(
+                    work_item_id=item_id,
+                    comment_id=comment["id"],
+                    mention=mention,
+                    prompt=body.content,
+                )
+            except Exception as exc:
+                logger.warning("execute_from_comment failed: %s", exc)
+            break
+
+    if task_id:
+        comment = await no_workflow_service.get_comment(comment["id"]) or comment
+
+    # 3. 广播 WORK_ITEM_COMMENT_ADDED 事件
+    try:
+        await event_emitter.emit_work_item_comment(item_id, comment)
+    except Exception:
+        pass
+
+    # 3.5 评论 @成员 → 通知被提及的用户（不通知自己）
+    try:
+        from sqlalchemy import text
+
+        member_mentions = [
+            m
+            for m in mentions
+            if m.get("type") == "member" and m.get("id") != author_id
+        ]
+        if member_mentions:
+            from backend.services.notification_service import notification_service
+
+            async with async_session_factory() as session:
+                trow = await session.execute(
+                    text("SELECT title FROM work_items WHERE id = :id"),
+                    {"id": item_id},
+                )
+                title_row = trow.fetchone()
+            wi_title = (title_row[0] if title_row else None) or item_id
+            actor_name = (
+                (
+                    current_user.get("display_name")
+                    or current_user.get("username")
+                    or "某用户"
+                )
+                if current_user
+                else "某用户"
+            )
+            for m in member_mentions:
+                await notification_service.create_notification(
+                    recipient_id=m.get("id"),
+                    work_item_id=item_id,
+                    notification_type="mentioned",
+                    trigger_actor_id=author_id,
+                    content=f"{actor_name} 在工作项「{wi_title}」中提到了您",
+                )
+    except Exception:
+        logger.debug("create mention notification failed", exc_info=True)
+
+    # 4. 返回 comment（含 task_id）
+    return comment
+
+
+@router.get("/{item_id}/comments")
+async def list_work_item_comments(item_id: str, current_user=Depends(get_optional_user)):
+    """获取评论列表。"""
+    from backend.services.no_workflow_service import no_workflow_service
+    return await no_workflow_service.get_comments(item_id)
+
+
+@router.patch("/{item_id}/comments/{comment_id}")
+async def update_comment_task_status(
+    item_id: str,
+    comment_id: str,
+    body: dict = Body(...),
+    current_user=Depends(get_optional_user),
+):
+    """更新评论关联任务状态（内部调用）。"""
+    from backend.services.no_workflow_service import no_workflow_service
+    comment = await no_workflow_service.update_comment_task(
+        comment_id,
+        task_id=body.get("task_id"),
+        task_status=body.get("task_status"),
+    )
+    if not comment:
+        raise HTTPException(status_code=404, detail="Comment not found")
+    return comment

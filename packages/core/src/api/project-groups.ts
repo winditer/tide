@@ -64,6 +64,20 @@ export interface AddGroupMemberInput {
   role?: "primary" | "member" | string;
 }
 
+/** 可添加为项目组用户成员的候选用户。 */
+export interface GroupAvailableUser {
+  id: string;
+  username: string;
+  email: string | null;
+  display_name: string | null;
+  role: string;
+}
+
+export interface ListGroupAvailableUsersResponse {
+  items: GroupAvailableUser[];
+  total: number;
+}
+
 /** 按 session_id 聚合的会话条目（来自 tasks 表）。 */
 export interface GroupConversationItem {
   session_id: string;
@@ -119,6 +133,7 @@ export interface GroupWorkflowBinding {
   group_id: string;
   workflow_id: string | null;
   workflow_name: string | null;
+  flow_mode?: string | null;
 }
 
 function buildQuery(params?: Record<string, string | number | undefined>): string {
@@ -188,6 +203,24 @@ export function removeGroupMember(
     `/api/project-groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(
       projectId,
     )}`,
+  );
+}
+
+/**
+ * 列出可添加为项目组用户成员的候选用户（排除已是该组成员者）。
+ * 权限：项目组 owner 或全局 admin。
+ */
+export function listGroupAvailableUsers(
+  groupId: string,
+  params?: { q?: string; page?: number; page_size?: number },
+): Promise<ListGroupAvailableUsersResponse> {
+  const qs = buildQuery({
+    q: params?.q,
+    page: params?.page,
+    page_size: params?.page_size,
+  });
+  return apiClient.get<ListGroupAvailableUsersResponse>(
+    `/api/project-groups/${encodeURIComponent(groupId)}/users/available${qs}`,
   );
 }
 
@@ -320,11 +353,12 @@ export function getGroupWorkflow(
 
 export function setGroupWorkflow(
   groupId: string,
-  workflowId: string,
+  workflowId?: string | null,
+  flowMode?: string,
 ): Promise<GroupWorkflowBinding> {
   return apiClient.put<GroupWorkflowBinding>(
     `/api/project-groups/${encodeURIComponent(groupId)}/workflow`,
-    { workflow_id: workflowId },
+    { workflow_id: workflowId ?? undefined, flow_mode: flowMode },
   );
 }
 

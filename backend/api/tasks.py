@@ -11,7 +11,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, Query, HTTPException, UploadFile, File, Body
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import text
 
@@ -80,6 +80,13 @@ async def create_task(
             cwd = (primary.get("cwd") or "").strip()
 
     await check_cwd_write_permission(cwd or None, current_user)
+
+    # 推导初始状态：外部来源（Qoder IDE / daemon 上报）可直接携带 status，
+    # 若未传 status 但 completed_at 非空，则视为已完成；其余情况默认 queued。
+    initial_status = (body.status or "").strip().lower()
+    if not initial_status:
+        initial_status = "completed" if (body.completed_at or "").strip() else "queued"
+
     try:
         result = await task_service.create_task(
             workspace_id=body.workspace_id,
@@ -90,6 +97,7 @@ async def create_task(
             attachments=body.attachments,
             session_id=body.session_id or "",
             group_id=group_id,
+            initial_status=initial_status,
         )
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
@@ -305,9 +313,15 @@ async def list_tasks(
 
     # 2) 文件扫描会话
     merged: list[dict] = list(db_items)
+    # 复合去重集合：DB 任务优先（状态更完整），文件源命中任一集合即跳过
     db_session_ids = {
         it.get("session_id") for it in db_items if it.get("session_id")
     }
+    db_task_ids = {
+        it.get("id") for it in db_items if it.get("id")
+    }
+    # 已并入合并列表的文件源标识，避免文件源自身重复（同一 session 多条会话文件）
+    seen_file_session_ids: set = set()
 
     # 文件源只能产出已完成态；status 过滤若不为空且非 "completed"，则不纳入
     # 项目组过滤启用时跳过文件源（文件源无 group 归属信息）
@@ -319,7 +333,11 @@ async def list_tasks(
             if s.get("session_source") != "exec":
                 continue
             sid = s.get("session_id")
+            # 已在 DB 中存在（按 session_id）：DB 记录状态更完整，优先保留 DB，跳过文件源
             if sid and sid in db_session_ids:
+                continue
+            # 文件源自身按 session_id 去重，避免同一会话产生多条
+            if sid and sid in seen_file_session_ids:
                 continue
             # session_id 过滤
             if session_id and sid != session_id:
@@ -335,7 +353,13 @@ async def list_tasks(
                 and encode_project_id(s.get("cwd") or "") not in accessible_pids
             ):
                 continue
-            merged.append(_file_session_to_task(s, workspace_id))
+            file_task = _file_session_to_task(s, workspace_id)
+            # 额外按 task id 去重，防止文件源生成的 id 与 DB 任务重复
+            if file_task.get("id") and file_task["id"] in db_task_ids:
+                continue
+            if sid:
+                seen_file_session_ids.add(sid)
+            merged.append(file_task)
 
     # 3) 排序：按时间倒序
     merged.sort(key=_sort_key, reverse=True)
@@ -459,6 +483,36 @@ async def retry_task(
     result = await task_service.retry_task(raw_id)
     if not result:
         raise HTTPException(status_code=404, detail="Task not found")
+    return result
+
+
+@router.post("/{task_id}/continue")
+async def continue_task(
+    task_id: str,
+    body: dict = Body(...),
+    current_user=Depends(get_optional_user),
+):
+    """在已完成/失败的任务上续聊，复用原有 session_id 在同一任务上继续执行。"""
+    _ensure_not_viewer(current_user)
+    raw_id, _ = _strip_source_prefix(task_id)
+
+    prompt = (body.get("prompt") or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt is required")
+
+    attachments = body.get("attachments") or []
+
+    existing = await task_service.get_task(raw_id)
+    if existing:
+        await check_cwd_write_permission(existing.get("cwd"), current_user)
+
+    result = await task_service.continue_task(
+        task_id=raw_id,
+        prompt=prompt,
+        attachments=attachments,
+    )
+    if not result:
+        raise HTTPException(status_code=404, detail="Task not found or not continuable")
     return result
 
 

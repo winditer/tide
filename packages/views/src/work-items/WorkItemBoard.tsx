@@ -1,14 +1,20 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useEffect, useState } from "react";
 import { DragDropContext, Droppable, type DropResult } from "@hello-pangea/dnd";
 import { Badge } from "@tide/ui";
 import {
   useWorkItemBoard,
   useMoveWorkItem,
+  useUpdateWorkItemStatus,
+  useWorkItems,
+  useFreeformStatusList,
+  useWs,
   type WorkItem,
   type WorkItemBoardColumn,
   type WorkItemFilters,
+  type WorkItemFlowMode,
+  type FreeformStatusItem,
 } from "@tide/core";
 import { useQueryClient } from "@tanstack/react-query";
 import { WorkItemCard } from "./WorkItemCard";
@@ -27,6 +33,8 @@ interface WorkItemBoardProps {
   groupBy?: WorkItemGroupBy;
   /** 自动刷新间隔（毫秒），0 表示关闭自动刷新，未传则使用 hook 默认值 */
   refetchInterval?: number;
+  /** 项目流转模式：为 freeform 时按状态列展示；未传时会根据工作项自动推断 */
+  flowMode?: WorkItemFlowMode;
 }
 
 const CATEGORY_COLORS: Record<string, { ring: string; dot: string; tint: string }> = {
@@ -89,6 +97,7 @@ export function WorkItemBoard({
   versionMap,
   groupBy = "none",
   refetchInterval,
+  flowMode,
 }: WorkItemBoardProps) {
   const { data, isLoading, isError } = useWorkItemBoard(
     projectId,
@@ -98,6 +107,10 @@ export function WorkItemBoard({
   );
   const moveMutation = useMoveWorkItem();
   const queryClient = useQueryClient();
+  // freeform 模式下看板接口不返回列，改用工作项列表数据构建状态列
+  const freeformItemsQuery = useWorkItems(projectId, filters);
+  // freeform 状态列自定义配置（无配置时后端返回默认 4 列）
+  const freeformStatusQuery = useFreeformStatusList(projectId);
 
   const handleDragEnd = useCallback(
     (result: DropResult) => {
@@ -223,6 +236,27 @@ export function WorkItemBoard({
       return { key, label, items };
     });
   }, [groupBy, allItems, versionMap]);
+
+  // freeform 模式判定：优先看板接口返回的 flow_mode（权威来源），
+  // 其次显式传入的 flowMode prop，最后回退到按工作项 flow_mode 推断。
+  const freeformItems = freeformItemsQuery.data ?? [];
+  const isFreeform =
+    flowMode === "freeform" ||
+    data?.flow_mode === "freeform" ||
+    (freeformItems.length > 0 &&
+      freeformItems.every((it) => it.flow_mode === "freeform"));
+
+  if (isFreeform) {
+    return (
+      <FreeformStatusBoard
+        items={freeformItems}
+        isLoading={freeformItemsQuery.isLoading}
+        onCardClick={onCardClick}
+        versionMap={versionMap}
+        statusList={freeformStatusQuery.data}
+      />
+    );
+  }
 
   if (isLoading) {
     return (
@@ -402,6 +436,202 @@ export function WorkItemBoard({
                         versionMap={versionMap}
                       />
                     ))}
+                    {provided.placeholder}
+                  </div>
+                )}
+              </Droppable>
+            </div>
+          );
+        })}
+      </div>
+    </DragDropContext>
+  );
+}
+
+// ============================================================
+// Freeform 状态看板：按 未分配 | 待接受 | 进行中 | 已完成 分列
+// 数据来自工作项列表（而非工作流看板），支持拖拽改变状态
+// ============================================================
+
+interface FreeformStatusBoardProps {
+  items: WorkItem[];
+  isLoading?: boolean;
+  onCardClick?: (item: WorkItem) => void;
+  versionMap?: Record<string, string>;
+  /** 项目自定义状态列；未传或为空时回退到默认 4 列 */
+  statusList?: FreeformStatusItem[];
+}
+
+// 默认 4 列（无自定义配置时使用）
+const DEFAULT_FREEFORM_COLUMNS: { key: string; label: string }[] = [
+  { key: "unassigned", label: "未分配" },
+  { key: "pending", label: "待接受" },
+  { key: "in_progress", label: "进行中" },
+  { key: "completed", label: "已完成" },
+];
+
+// 状态 key 到调色板的映射，未知 key 使用 custom
+const FREEFORM_PALETTE: Record<
+  string,
+  { ring: string; dot: string; tint: string }
+> = {
+  unassigned: CATEGORY_COLORS.todo,
+  pending: CATEGORY_COLORS.review,
+  in_progress: CATEGORY_COLORS.in_progress,
+  completed: CATEGORY_COLORS.done,
+};
+
+/** 根据工作项状态与负责人将其归入唯一状态列 */
+function classifyFreeformItem(item: WorkItem, columnKeys: string[]): string {
+  // 状态值直接匹配某个状态列时优先使用（支持拖拽手动设置的状态）
+  if (item.status && columnKeys.includes(item.status)) return item.status;
+  if (item.status === "completed") return "completed";
+  if (item.status === "in_progress") return "in_progress";
+  if (item.assignee && item.assignee.trim()) return "pending";
+  return "unassigned";
+}
+
+function FreeformStatusBoard({
+  items,
+  isLoading,
+  onCardClick,
+  versionMap,
+  statusList,
+}: FreeformStatusBoardProps) {
+  const { subscribe } = useWs();
+  const [blockedIds, setBlockedIds] = useState<Set<string>>(new Set());
+  const updateStatus = useUpdateWorkItemStatus();
+
+  // 拖拽结束：将工作项状态更新为目标列 key
+  const handleFreeformDragEnd = useCallback(
+    (result: DropResult) => {
+      const { draggableId, destination, source } = result;
+      if (!destination || destination.droppableId === source.droppableId) return;
+      updateStatus.mutate({
+        itemId: draggableId,
+        status: destination.droppableId,
+      });
+    },
+    [updateStatus],
+  );
+
+  // 订阅 work_item.blocked / work_item.unblocked，维护阻塞工作项集合
+  useEffect(() => {
+    const unsub = subscribe((event: unknown) => {
+      const ev = event as { type?: string; work_item_id?: string };
+      if (!ev?.work_item_id) return;
+      if (ev.type === "work_item.blocked") {
+        setBlockedIds((prev) => {
+          const next = new Set(prev);
+          next.add(ev.work_item_id as string);
+          return next;
+        });
+      } else if (ev.type === "work_item.unblocked") {
+        setBlockedIds((prev) => {
+          if (!prev.has(ev.work_item_id as string)) return prev;
+          const next = new Set(prev);
+          next.delete(ev.work_item_id as string);
+          return next;
+        });
+      }
+    });
+    return () => unsub();
+  }, [subscribe]);
+
+  const columns = useMemo(() => {
+    const list =
+      statusList && statusList.length > 0
+        ? statusList
+        : DEFAULT_FREEFORM_COLUMNS;
+    return list.map((c) => ({
+      key: c.key,
+      label: c.label,
+      palette: FREEFORM_PALETTE[c.key] ?? CATEGORY_COLORS.custom,
+    }));
+  }, [statusList]);
+
+  const grouped = useMemo(() => {
+    const columnKeys = columns.map((c) => c.key);
+    const map: Record<string, WorkItem[]> = {};
+    for (const col of columns) map[col.key] = [];
+    for (const it of items) {
+      const key = classifyFreeformItem(it, columnKeys);
+      // 若归类 key 不在自定义列中，归入第一列作为兑底
+      if (map[key]) {
+        map[key].push(it);
+      } else if (columns.length > 0) {
+        map[columns[0].key].push(it);
+      }
+    }
+    return map;
+  }, [items, columns]);
+
+  if (isLoading) {
+    return (
+      <div className="py-16 text-center text-sm text-muted-foreground">
+        加载看板中…
+      </div>
+    );
+  }
+
+  return (
+    <DragDropContext onDragEnd={handleFreeformDragEnd}>
+      <div className="flex gap-5 overflow-x-auto pb-4">
+        {columns.map((column) => {
+          const colItems = grouped[column.key] ?? [];
+          const isDone = column.key === "completed";
+          return (
+            <div
+              key={column.key}
+              className={`flex flex-1 min-w-[220px] flex-col rounded-xl border ${column.palette.ring} ${column.palette.tint} p-3 transition-smooth`}
+            >
+              <div className="mb-3 flex items-center justify-between px-1">
+                <h3 className="flex items-center gap-2 text-sm font-semibold tracking-tight text-foreground">
+                  <span
+                    aria-hidden
+                    className={`inline-block h-2 w-2 rounded-full ${column.palette.dot}`}
+                  />
+                  <span>{column.label}</span>
+                  <span className="text-xs font-normal text-muted-foreground">
+                    ({colItems.length})
+                  </span>
+                </h3>
+                <Badge
+                  variant="secondary"
+                  className="rounded-full bg-background/80 px-2 text-[11px] font-medium"
+                >
+                  {colItems.length}
+                </Badge>
+              </div>
+
+              <Droppable droppableId={column.key}>
+                {(provided, snapshot) => (
+                  <div
+                    ref={provided.innerRef}
+                    {...provided.droppableProps}
+                    className={`flex min-h-[160px] flex-1 flex-col gap-3 rounded-lg p-1 transition-smooth ${
+                      snapshot.isDraggingOver
+                        ? "bg-emerald-50/60 ring-1 ring-emerald-300/60"
+                        : ""
+                    }`}
+                  >
+                    {colItems.map((item, index) => (
+                      <WorkItemCard
+                        key={item.id}
+                        item={item}
+                        index={index}
+                        onClick={onCardClick}
+                        completed={isDone}
+                        versionMap={versionMap}
+                        draggable={true}
+                        blocked={blockedIds.has(item.id)}
+                      />
+                    ))}
+                    {colItems.length === 0 && (
+                      <div className="py-3 text-center text-[10px] text-muted-foreground/60">
+                        —
+                      </div>
+                    )}
                     {provided.placeholder}
                   </div>
                 )}

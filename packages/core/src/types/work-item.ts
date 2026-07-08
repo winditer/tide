@@ -26,6 +26,67 @@ export type WorkItemStatus =
   | "stopped"
   | "waiting";
 
+/** 工作项流转模式：默认工作流 / 自定义工作流 / 自由协作（无工作流） */
+export type WorkItemFlowMode =
+  | "default_workflow"
+  | "custom_workflow"
+  | "freeform";
+
+/** freeform 模式下的分配记录 */
+export interface WorkItemAssignment {
+  id: string;
+  target_type: "member" | "expert_team" | "squad";
+  target_id: string;
+  target_name?: string;
+  role: "executor" | "reviewer" | "lead";
+  status: "pending" | "accepted" | "in_progress" | "completed" | "declined";
+  assigned_by: string;
+  dispatched_to?: string[];
+  notes?: string;
+  created_at: string;
+  updated_at?: string;
+}
+
+/** freeform 模式下的共享上下文条目 */
+export interface WorkItemContextEntry {
+  id: string;
+  context_type: "summary" | "decision" | "progress" | "handover";
+  content: string;
+  author_id: string;
+  author_name?: string;
+  created_at: string;
+}
+
+/** @mention 引用项：成员 / 专家团 / 小队 */
+export interface MentionItem {
+  type: "member" | "expert_team" | "squad";
+  id: string;
+  name?: string;
+}
+
+/** 评论关联任务的状态 */
+export type CommentTaskStatus =
+  | "running"
+  | "blocked"
+  | "completed"
+  | "failed"
+  | "stopped"
+  | "rejected"
+  | "cancelled";
+
+/** freeform 模式下的工作项评论 */
+export interface WorkItemComment {
+  id: string;
+  work_item_id: string;
+  author_id: string;
+  author_name?: string;
+  content: string;
+  mentions?: MentionItem[];
+  task_id?: string | null;
+  task_status?: CommentTaskStatus | null;
+  created_at: string;
+}
+
 export interface WorkItem {
   id: string;
   project_id: string;
@@ -46,6 +107,12 @@ export interface WorkItem {
   group_id?: string | null;
   /** 推导状态：待操作、进行中、待审批、已完成、失败、已停止、等待中 */
   status?: WorkItemStatus;
+  /** 流转模式：默认工作流 / 自定义工作流 / 自由协作 */
+  flow_mode?: WorkItemFlowMode;
+  /** freeform 模式下后端可能内联返回的分配列表 */
+  assignments?: WorkItemAssignment[];
+  /** freeform 模式下后端可能内联返回的共享上下文流 */
+  context_stream?: WorkItemContextEntry[];
   started_at?: string;
   completed_at?: string;
   created_at: string;
@@ -90,6 +157,8 @@ export interface ProjectSettings {
   workflow_id?: string;
   default_assignee?: string;
   metadata?: Record<string, any>;
+  /** 流转模式：默认工作流 / 自定义工作流 / 自由协作 */
+  flow_mode?: WorkItemFlowMode;
   updated_at: string;
 }
 
@@ -150,7 +219,9 @@ export interface WorkItemBoardColumn {
 
 export interface WorkItemBoard {
   columns: WorkItemBoardColumn[];
-  workflow: { id: string; name: string };
+  workflow: { id: string; name: string } | null;
+  /** 项目流转模式；freeform 时前端改为按工作项状态分列 */
+  flow_mode?: WorkItemFlowMode;
 }
 
 /** 跨仓库执行结果中单个子任务的汇总 */

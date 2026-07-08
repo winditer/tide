@@ -28,7 +28,7 @@ Repository = "https://github.com/anthropic/tide"
 packages = ["a2a_bridge"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"config.py" = "config.py"
+"bridge_config.py" = "bridge_config.py"
 "main.py" = "main.py"
 "models.py" = "models.py"
 "executor.py" = "executor.py"

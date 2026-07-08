@@ -26,6 +26,9 @@ class ExpertTeamCreate(BaseModel):
     model: Optional[str] = None
     skill_slugs: list[str] = Field(default_factory=list)
     role_prompt: Optional[str] = None
+    member_agents: list[dict] = Field(default_factory=list)
+    is_squad: Optional[int] = 0
+    leader_strategy: Optional[str] = "capability_match"
     enabled: Optional[int] = 1
 
 
@@ -36,6 +39,9 @@ class ExpertTeamUpdate(BaseModel):
     model: Optional[str] = None
     skill_slugs: Optional[list[str]] = None
     role_prompt: Optional[str] = None
+    member_agents: Optional[list[dict]] = None
+    is_squad: Optional[int] = None
+    leader_strategy: Optional[str] = None
     enabled: Optional[int] = None
     project_id: Optional[str] = None
 

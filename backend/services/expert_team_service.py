@@ -48,6 +48,8 @@ def _slugify(value: str) -> str:
 def _row_to_dict(row) -> dict:
     r = dict(row._mapping)
     r["skill_slugs"] = _safe_json_loads(r.get("skill_slugs"), [])
+    if "member_agents" in r:
+        r["member_agents"] = _safe_json_loads(r.get("member_agents"), [])
     return r
 
 
@@ -80,7 +82,8 @@ class ExpertTeamService:
                 text(
                     f"""
                     SELECT id, workspace_id, project_id, name, slug, description,
-                           agent_id, model, skill_slugs, role_prompt, enabled,
+                           agent_id, model, skill_slugs, role_prompt,
+                           member_agents, is_squad, leader_strategy, enabled,
                            created_at, updated_at
                     FROM expert_teams
                     WHERE {where}
@@ -102,7 +105,8 @@ class ExpertTeamService:
                 text(
                     """
                     SELECT id, workspace_id, project_id, name, slug, description,
-                           agent_id, model, skill_slugs, role_prompt, enabled,
+                           agent_id, model, skill_slugs, role_prompt,
+                           member_agents, is_squad, leader_strategy, enabled,
                            created_at, updated_at
                     FROM expert_teams
                     WHERE workspace_id = :workspace_id
@@ -127,7 +131,8 @@ class ExpertTeamService:
                 text(
                     """
                     SELECT id, workspace_id, project_id, name, slug, description,
-                           agent_id, model, skill_slugs, role_prompt, enabled,
+                           agent_id, model, skill_slugs, role_prompt,
+                           member_agents, is_squad, leader_strategy, enabled,
                            created_at, updated_at
                     FROM expert_teams
                     WHERE id = :id
@@ -160,6 +165,135 @@ class ExpertTeamService:
         mapping["skill_slugs"] = _safe_json_loads(mapping.get("skill_slugs"), [])
         return mapping
 
+    async def resolve_squad(
+        self, team_id: str, workspace_id: str
+    ) -> Optional[dict]:
+        """运行时解析：支持 Squad 多 Agent 选择。
+
+        - is_squad=0 的普通专家团：退化为原 resolve_expert_team() 行为
+        - is_squad=1 的 Squad：按 leader_strategy 从 member_agents 中选择一个成员
+
+        返回 dict: {agent_id, model, skill_slugs, role_prompt}（结构与 resolve_expert_team 一致）
+        """
+        async with async_session_factory() as session:
+            result = await session.execute(
+                text(
+                    """
+                    SELECT agent_id, model, skill_slugs, role_prompt,
+                           member_agents, is_squad, leader_strategy
+                    FROM expert_teams
+                    WHERE id = :id AND workspace_id = :workspace_id AND enabled = 1
+                    """
+                ),
+                {"id": team_id, "workspace_id": workspace_id},
+            )
+            row = result.fetchone()
+        if not row:
+            return None
+        mapping = dict(row._mapping)
+        mapping["skill_slugs"] = _safe_json_loads(mapping.get("skill_slugs"), [])
+
+        # 非 Squad 团队：直接返回（兼容原行为）
+        if not mapping.get("is_squad"):
+            return {
+                "agent_id": mapping["agent_id"],
+                "model": mapping.get("model"),
+                "skill_slugs": mapping["skill_slugs"],
+                "role_prompt": mapping.get("role_prompt"),
+            }
+
+        # Squad 模式：从 member_agents 中按策略选择
+        member_agents = _safe_json_loads(mapping.get("member_agents"), [])
+        if not member_agents:
+            # 空成员列表，fallback 到主 agent_id
+            logger.warning("Squad %s has empty member_agents, falling back to primary agent_id", team_id)
+            return {
+                "agent_id": mapping["agent_id"],
+                "model": mapping.get("model"),
+                "skill_slugs": mapping["skill_slugs"],
+                "role_prompt": mapping.get("role_prompt"),
+            }
+
+        # 按策略选择成员
+        selected = self._select_squad_member(member_agents, mapping.get("leader_strategy", "capability_match"))
+
+        return {
+            "agent_id": selected.get("agent_id", mapping["agent_id"]),
+            "model": selected.get("model") or mapping.get("model"),
+            "skill_slugs": selected.get("skill_slugs") or mapping["skill_slugs"],
+            "role_prompt": selected.get("role_prompt") or mapping.get("role_prompt"),
+        }
+
+    def _select_squad_member(self, members: list, strategy: str) -> dict:
+        """根据策略从 Squad 成员中选择一个。
+
+        members: [{agent_id, role, skill_slugs, capability_tags, priority}, ...]
+        strategy: capability_match | round_robin | random
+        """
+        if not members:
+            return {}
+
+        if strategy == "random":
+            import random
+            return random.choice(members)
+        elif strategy == "round_robin":
+            # 简单轮转：基于当前时间戳取模
+            import time
+            idx = int(time.time()) % len(members)
+            return members[idx]
+        else:
+            # capability_match 或未知策略：默认选优先级最高的成员
+            sorted_members = sorted(members, key=lambda m: m.get("priority", 0), reverse=True)
+            return sorted_members[0]
+
+    # ── Squad Dispatch (no-workflow 协作) ───────────────
+
+    async def get_squad_leader_for_dispatch(self, team_id: str) -> Optional[dict]:
+        """解析 squad leader：根据 leader_strategy 选出主调度者。
+
+        Returns:
+            {agent_id, member_info, strategy_used} or None if team not found/not a squad
+        """
+        team = await self.get_expert_team(team_id)
+        if not team:
+            return None
+        if not team.get("is_squad"):
+            return None
+
+        member_agents = team.get("member_agents") or []
+        if not member_agents:
+            logger.warning(
+                "Squad %s has empty member_agents, cannot resolve leader", team_id
+            )
+            return None
+
+        strategy = team.get("leader_strategy") or "capability_match"
+        leader = self._select_squad_member(member_agents, strategy)
+        if not leader:
+            return None
+
+        return {
+            "agent_id": leader.get("agent_id"),
+            "member_info": leader,
+            "strategy_used": strategy,
+        }
+
+    async def get_squad_members(self, team_id: str) -> list:
+        """获取 squad 所有成员列表（含角色和能力标签）。
+
+        Returns:
+            [{agent_id, role, skill_slugs, capability_tags, priority}, ...]
+        """
+        team = await self.get_expert_team(team_id)
+        if not team:
+            return []
+        return team.get("member_agents") or []
+
+    async def validate_member_in_squad(self, team_id: str, member_id: str) -> bool:
+        """验证某成员是否属于指定 squad。"""
+        members = await self.get_squad_members(team_id)
+        return any(m.get("agent_id") == member_id for m in members)
+
     # ── Write ───────────────────────────────────────────
 
     async def create_expert_team(
@@ -182,6 +316,12 @@ class ExpertTeamService:
         else:
             skill_slugs_json = json.dumps([], ensure_ascii=False)
 
+        member_agents = data.get("member_agents") or []
+        if isinstance(member_agents, list):
+            member_agents_json = json.dumps(member_agents, ensure_ascii=False)
+        else:
+            member_agents_json = json.dumps([], ensure_ascii=False)
+
         team_id = str(uuid.uuid4())
         now = _now_iso()
         async with async_session_factory() as session:
@@ -190,10 +330,12 @@ class ExpertTeamService:
                     """
                     INSERT INTO expert_teams
                         (id, workspace_id, project_id, name, slug, description,
-                         agent_id, model, skill_slugs, role_prompt, enabled,
+                         agent_id, model, skill_slugs, role_prompt,
+                         member_agents, is_squad, leader_strategy, enabled,
                          created_at, updated_at)
                     VALUES (:id, :workspace_id, :project_id, :name, :slug, :description,
-                            :agent_id, :model, :skill_slugs, :role_prompt, :enabled,
+                            :agent_id, :model, :skill_slugs, :role_prompt,
+                            :member_agents, :is_squad, :leader_strategy, :enabled,
                             :created_at, :updated_at)
                     """
                 ),
@@ -208,6 +350,9 @@ class ExpertTeamService:
                     "model": data.get("model") or None,
                     "skill_slugs": skill_slugs_json,
                     "role_prompt": data.get("role_prompt"),
+                    "member_agents": member_agents_json,
+                    "is_squad": int(data.get("is_squad", 0) or 0),
+                    "leader_strategy": data.get("leader_strategy") or "capability_match",
                     "enabled": int(data.get("enabled", 1) or 0),
                     "created_at": now,
                     "updated_at": now,
@@ -249,6 +394,19 @@ class ExpertTeamService:
         if "role_prompt" in data:
             sets.append("role_prompt = :role_prompt")
             params["role_prompt"] = data["role_prompt"]
+        if "member_agents" in data:
+            sets.append("member_agents = :member_agents")
+            member_agents = data["member_agents"] or []
+            if isinstance(member_agents, list):
+                params["member_agents"] = json.dumps(member_agents, ensure_ascii=False)
+            else:
+                params["member_agents"] = json.dumps([], ensure_ascii=False)
+        if "is_squad" in data and data["is_squad"] is not None:
+            sets.append("is_squad = :is_squad")
+            params["is_squad"] = int(data["is_squad"])
+        if "leader_strategy" in data and data["leader_strategy"] is not None:
+            sets.append("leader_strategy = :leader_strategy")
+            params["leader_strategy"] = data["leader_strategy"]
         if "enabled" in data and data["enabled"] is not None:
             sets.append("enabled = :enabled")
             params["enabled"] = int(data["enabled"])

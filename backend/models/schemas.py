@@ -17,6 +17,10 @@ class TaskCreate(BaseModel):
     attachments: list[str] = Field(default_factory=list)
     workspace_id: str = "default"
     group_id: Optional[str] = None
+    # 外部来源（如 Qoder IDE / daemon 上报）注册已处于终态的任务时使用；
+    # 不填则默认为 queued 并正常调度执行。
+    status: Optional[str] = None
+    completed_at: Optional[str] = None
 
 
 class TaskUpdate(BaseModel):
@@ -257,6 +261,7 @@ class WorkflowResponse(BaseModel):
     definition: dict = {}
     version: int = 1
     enabled: int = 1
+    is_system: int = 0
     created_by: Optional[str] = None
     created_by_name: Optional[str] = None
     created_at: Optional[datetime] = None
@@ -336,6 +341,8 @@ class WorkItemCreate(BaseModel):
     # 项目组 id：当工作项归属一个跨仓库项目组时填充，
     # 后端在 Agent 节点触发时会注入多仓库上下文。
     group_id: Optional[str] = None
+    # 流转模式：default_workflow | custom_workflow | freeform
+    flow_mode: Optional[str] = None
 
 
 class WorkItemUpdate(BaseModel):
@@ -346,6 +353,40 @@ class WorkItemUpdate(BaseModel):
     tags: Optional[List[str]] = None
     metadata: Optional[dict] = None
     version_id: Optional[str] = None
+
+
+# ── Freeform 分配 & 共享上下文 ──────────────────────────
+
+class WorkItemAssignRequest(BaseModel):
+    target_type: str  # member | expert_team | squad
+    target_id: str
+    role: str = "executor"
+
+
+class WorkItemDispatchRequest(BaseModel):
+    member_ids: list
+    notes: Optional[str] = None
+
+
+class AssignmentUpdateRequest(BaseModel):
+    status: str  # accepted | in_progress | completed | declined
+    notes: Optional[str] = None
+
+
+class WorkItemContextCreate(BaseModel):
+    context_type: str  # summary | decision | progress | handover
+    content: str
+
+
+class MentionItem(BaseModel):
+    type: str  # member | expert_team | squad
+    id: str
+    name: Optional[str] = None
+
+
+class WorkItemCommentCreate(BaseModel):
+    content: str
+    mentions: Optional[List[MentionItem]] = None
 
 
 class WorkItemResponse(BaseModel):
@@ -363,6 +404,7 @@ class WorkItemResponse(BaseModel):
     metadata: Optional[dict] = None
     status: Optional[str] = None
     version_id: Optional[str] = None
+    flow_mode: Optional[str] = None
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
     created_at: Optional[str] = None
@@ -402,6 +444,8 @@ class ProjectSettingsUpdate(BaseModel):
     workflow_id: Optional[str] = None
     default_assignee: Optional[str] = None
     metadata: Optional[dict] = None
+    # 流转模式：default_workflow | custom_workflow | freeform
+    flow_mode: Optional[str] = None
 
 
 class ProjectSettingsResponse(BaseModel):
@@ -409,7 +453,17 @@ class ProjectSettingsResponse(BaseModel):
     workflow_id: Optional[str] = None
     default_assignee: Optional[str] = None
     metadata: Optional[dict] = None
+    flow_mode: Optional[str] = None
     updated_at: Optional[str] = None
+
+
+class FreeformStatusItem(BaseModel):
+    key: str
+    label: str
+
+
+class FreeformStatusListUpdate(BaseModel):
+    status_list: List[FreeformStatusItem]
 
 
 class WorkItemKanbanColumn(BaseModel):
@@ -422,6 +476,9 @@ class WorkItemKanbanColumn(BaseModel):
 class WorkItemKanbanResponse(BaseModel):
     columns: List[WorkItemKanbanColumn] = []
     workflow: Optional[dict] = None
+    # 流转模式：default_workflow | custom_workflow | freeform
+    # freeform 时前端改为按工作项状态分列（未分配/待接受/进行中/已完成）
+    flow_mode: Optional[str] = None
 
 
 # ============ 版本相关模型 ============

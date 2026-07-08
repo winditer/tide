@@ -2,6 +2,9 @@
 
 通过环境变量加载 Bridge 服务的运行配置。所有配置都集中在此处，
 方便在容器或 systemd 启动脚本中通过环境变量覆盖。
+
+注意：本模块以 ``bridge_config`` 命名（而非 ``config``），以避免与
+site-packages 中同名的第三方 ``config`` 包发生导入冲突。
 """
 from __future__ import annotations
 
@@ -111,6 +114,24 @@ GIT_DEFAULT_BRANCH: str = _env_str("GIT_DEFAULT_BRANCH", "main")
 # 是否在任务结束后自动 push
 GIT_AUTO_PUSH: bool = _env_bool("GIT_AUTO_PUSH", True)
 
+# ── Daemon WebSocket 推模式配置 ────────────────────────
+# Bridge 显示名称（用作 Agent 名称前缀，如 dev/codex）
+# 留空则自动使用主机名，再次回退到 daemon_id 前8位
+BRIDGE_NAME: str = os.environ.get("BRIDGE_NAME", "").strip()
+
+# 是否启用 Daemon 推模式（默认关闭，保持向后兼容）
+DAEMON_ENABLED: bool = os.getenv("DAEMON_ENABLED", "false").lower() in ("true", "1", "yes")
+# Tide 后端 daemon WebSocket 端点，例如 "ws://localhost:8000/ws/daemon"
+TIDE_WS_URL: str = os.getenv("TIDE_WS_URL", "")
+# daemon 认证 token
+DAEMON_TOKEN: str = os.getenv("DAEMON_TOKEN", "")
+# daemon 标识，不设则在使用时自动生成 UUID
+DAEMON_ID: str = os.getenv("DAEMON_ID", "")
+# 心跳间隔（秒）
+HEARTBEAT_INTERVAL: int = int(os.getenv("HEARTBEAT_INTERVAL", "15"))
+# 能力标签，逗号分隔
+CAPABILITY_TAGS: list = [t.strip() for t in os.getenv("CAPABILITY_TAGS", "code,review,docs").split(",") if t.strip()]
+
 # ---------------- Agent CLI 配置 ----------------
 _DEFAULT_AGENTS: dict[str, dict[str, Any]] = {
     "codex": {
@@ -154,6 +175,23 @@ def get_agent_config(skill: str | None) -> tuple[str, AgentConfig]:
         first = next(iter(AGENTS.items()))
         return first[0], first[1]
     raise RuntimeError("No agents configured")
+
+
+def resolve_bridge_name(daemon_id: str = "") -> str:
+    """Resolve bridge display name: BRIDGE_NAME > hostname > daemon_id[:8].
+
+    This is the single source of truth for bridge naming logic,
+    used by both daemon_client (WS mode) and agent_card (HTTP mode).
+    """
+    if BRIDGE_NAME:
+        return BRIDGE_NAME
+    import socket
+    hostname = socket.gethostname()
+    if hostname and hostname != "localhost":
+        return hostname
+    if daemon_id:
+        return daemon_id[:8]
+    return ""
 
 
 def list_agents() -> list[str]:

@@ -247,6 +247,9 @@ class ApprovalService:
         # 更新 Lark 卡片
         await self._update_lark_card(task_id)
 
+        # 通知工作项负责人：审批已通过
+        await self._notify_approval_result(approval, True, operator_id)
+
         logger.info(
             "[approval_service] approved id=%s task=%s operator=%s",
             approval_id[:8], task_id[:8], operator_id or "-",
@@ -346,6 +349,9 @@ class ApprovalService:
 
         # 更新 Lark 卡片
         await self._update_lark_card(task_id)
+
+        # 通知工作项负责人：审批已拒绝
+        await self._notify_approval_result(approval, False, operator_id)
 
         logger.info(
             "[approval_service] rejected id=%s task=%s operator=%s",
@@ -499,6 +505,50 @@ class ApprovalService:
         if comment is not None:
             detail["comment"] = comment
         return detail
+
+    async def _notify_approval_result(
+        self, approval: dict, approved: bool, operator_id: Optional[str]
+    ) -> None:
+        """审批完成后通知工作项负责人（失败不影响主流程）。"""
+        try:
+            approval_type = approval.get("type") or ""
+            detail = approval.get("detail")
+            if isinstance(detail, str):
+                try:
+                    detail = json.loads(detail) if detail else {}
+                except (json.JSONDecodeError, TypeError):
+                    detail = {}
+            if not isinstance(detail, dict):
+                detail = {}
+            work_item_id = detail.get("work_item_id")
+            if approval_type == "work_item_transition" and not work_item_id:
+                # work_item_transition 类型复用 task_id 字段存 work_item_id
+                work_item_id = approval.get("task_id")
+            if not work_item_id:
+                return
+            async with async_session_factory() as session:
+                row = await session.execute(
+                    text("SELECT assignee, title FROM work_items WHERE id = :id"),
+                    {"id": work_item_id},
+                )
+                wi = row.fetchone()
+            if not wi:
+                return
+            assignee, title = wi[0], wi[1] or ""
+            if not assignee or assignee == operator_id:
+                return
+            from backend.services.notification_service import notification_service
+
+            action = "通过" if approved else "拒绝"
+            await notification_service.create_notification(
+                recipient_id=assignee,
+                work_item_id=work_item_id,
+                notification_type="approved" if approved else "rejected",
+                trigger_actor_id=operator_id,
+                content=f"工作项「{title}」的审批已被{action}",
+            )
+        except Exception:
+            logger.debug("create approval-result notification failed", exc_info=True)
 
     async def _update_lark_card(self, task_id: str) -> None:
         """更新 Lark 卡片（防御性调用，不阻塞主流程）。"""

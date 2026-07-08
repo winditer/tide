@@ -497,6 +497,9 @@ def parse_codex_json_event(line: str) -> tuple[str, str]:
         # 过滤已知的 CLI 噪声提示
         if "Reading additional input from stdin" in raw or "Reading from stdin" in raw:
             return "skip", ""
+        # 过滤 Codex CLI (Rust) tracing 日志行，避免混入回复内容
+        if re.match(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z\s+(TRACE|DEBUG|INFO|WARN|ERROR)\s+', raw):
+            return "skip", ""
         return "text", raw
 
     typ = obj.get("type")
@@ -958,9 +961,11 @@ class CodexAdapter(AgentAdapter):
         common.extend(["exec"])
         if last_message_file:
             common.extend(["--output-last-message", str(last_message_file)])
-        conv = get_active_conversation(task.session_id, conversation_id=task.conversation_id)
-        if self.is_resumable(conv):
-            return common + ["resume", "--json", "--skip-git-repo-check", conv.session_id, task.prompt]
+        # 简化 resume 逻辑，与 Claude/Qoder 一致：直接检查 session_id
+        if task.session_id:
+            _, raw_sid = split_conversation_key(task.session_id)
+            if raw_sid:
+                return common + ["resume", "--json", "--skip-git-repo-check", raw_sid, task.prompt]
         return common + ["--json", "--skip-git-repo-check", "-C", str(task.cwd), task.prompt]
 
     def parse_events(self, line: str) -> list[tuple[str, str]]:
@@ -1039,7 +1044,11 @@ class ClaudeAdapter(AgentAdapter):
         if typ == "system":
             subtype = obj.get("subtype") or obj.get("event") or "init"
             if subtype not in ("init", "ready"):
-                events.append(("progress", f"Claude 系统事件：{subtype}"))
+                content = extract_claude_text_content(obj.get("content"))
+                # 仅当系统事件带有实际内容时才作为进度输出；
+                # 空内容的控制信号直接跳过，避免占位符 "Claude 系统事件：xxx" 污染任务结果
+                if content:
+                    events.append(("progress", content))
         elif typ == "assistant":
             text = extract_claude_text_content(obj.get("message") or obj.get("content"))
             if text:
@@ -1085,7 +1094,11 @@ def parse_qoder_json_event(line: str) -> list[tuple[str, str]]:
         subtype = obj.get("subtype") or obj.get("event") or "init"
         if subtype not in ("init", "ready"):
             content = extract_claude_text_content(obj.get("content"))
-            events.append(("progress", content or f"Qoder 系统事件：{subtype}"))
+            # 仅当系统事件带有实际内容时才作为进度输出；
+            # 空内容的控制信号（task_progress/task_started 等）直接跳过，
+            # 避免占位符 "Qoder 系统事件：xxx" 反复污染任务结果
+            if content:
+                events.append(("progress", content))
     elif typ == "assistant":
         text = extract_claude_text_content(obj.get("message") or obj.get("content"))
         if text:
@@ -1220,6 +1233,13 @@ class A2AAdapter:
         task_id = str(getattr(runtime, "session_id", "") or "") or None
         context_parts = self._build_context_parts(runtime)
 
+        # ── Daemon WebSocket 推模式：对现有 HTTP 模式的增补 ──
+        # connection_mode == 'ws' 时走 DaemonRegistry 下发；否则照常走 HTTP。
+        if getattr(config, "connection_mode", "http") == "ws":
+            async for evt in self._execute_ws(runtime, config, prompt, context_parts):
+                yield evt
+            return
+
         capabilities = config.capabilities or {}
         supports_streaming = bool(capabilities.get("streaming"))
 
@@ -1314,6 +1334,107 @@ class A2AAdapter:
                         }
         finally:
             await client.close()
+
+    # --------------------------------------------------------------- ws mode
+
+    async def _execute_ws(
+        self,
+        runtime: CodexTaskRuntime,
+        config: A2AAgentConfig,
+        prompt: str,
+        context_parts: list,
+    ) -> AsyncGenerator[dict, None]:
+        """Daemon WebSocket 推模式执行：通过 DaemonRegistry 下发任务并回流事件。"""
+
+        from backend.services.daemon_registry import daemon_registry
+
+        daemon_session_id = str(getattr(config, "daemon_session_id", "") or "")
+        # 任务事件桥接以 task_id 为键，优先使用 runtime.task_id
+        task_id = str(getattr(runtime, "task_id", "") or getattr(runtime, "session_id", "") or "")
+
+        logger.info(
+            "[A2AAdapter] execute(ws) agent_id=%s daemon=%s task_id=%s",
+            config.agent_id,
+            daemon_session_id[:8] if daemon_session_id else "",
+            task_id,
+        )
+
+        queue = await daemon_registry.dispatch_task(
+            daemon_id=daemon_session_id,
+            task_id=task_id,
+            payload={
+                "prompt": prompt,
+                "context_parts": context_parts,
+                "context_id": str(getattr(runtime, "conversation_id", "") or ""),
+                "cwd": str(getattr(runtime, "cwd", "") or ""),
+                "model": str(getattr(runtime, "model", "") or ""),
+            },
+        )
+        if not queue:
+            # Daemon 不在线，快速失败
+            yield {"type": "failed", "error": f"Daemon {daemon_session_id} is not online"}
+            return
+
+        try:
+            while True:
+                if getattr(runtime, "cancel_requested", False) or getattr(runtime, "stop_requested", False):
+                    await daemon_registry.cancel_task(daemon_session_id, task_id)
+                    yield {"type": "failed", "error": "canceled by user"}
+                    return
+
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=3600)
+                except asyncio.TimeoutError:
+                    yield {"type": "failed", "error": "daemon task timeout"}
+                    return
+
+                if not isinstance(event, dict):
+                    continue
+
+                # task_result 为终态信号
+                if event.get("type") == "task_result":
+                    state = str(event.get("state", "") or "")
+                    if state == "failed":
+                        yield {"type": "failed", "error": str(event.get("error", "") or "")}
+                    else:
+                        # 从 artifacts 提取文本结果（Bridge 发送 artifacts 而非 result 字段）
+                        result_text = str(event.get("result", "") or "")
+                        if not result_text:
+                            artifacts = event.get("artifacts") or []
+                            parts_texts = []
+                            for art in artifacts:
+                                if not isinstance(art, dict):
+                                    continue
+                                for part in (art.get("parts") or []):
+                                    # A2A 协议 part 使用 "kind": "text"，旧格式使用 "type": "text"，
+                                    # 同时兼容两种字段以防 Bridge/内部事件格式不一致
+                                    if isinstance(part, dict) and (part.get("kind") == "text" or part.get("type") == "text"):
+                                        t = (part.get("text") or "").strip()
+                                        if t:
+                                            parts_texts.append(t)
+                            result_text = "\n".join(parts_texts)
+                        yield {"type": "completed", "result": result_text}
+                    break
+
+                # task_event：Bridge 通过 WS 直接推送的流式事件（kind=artifact/output/status）
+                # 该格式不被 _map_to_internal_event 识别，需要在此直接处理，否则会被静默丢弃
+                if event.get("type") == "task_event":
+                    kind = str(event.get("kind", "") or "")
+                    content = str(event.get("content", "") or "")
+                    if kind == "artifact" and content:
+                        yield {"type": "output_chunk", "content": content}
+                    elif kind in ("output", "status") and content:
+                        yield {"type": "status_changed", "status": content}
+                    # 空事件跳过
+                    continue
+
+                # 其他事件：映射内部承载的 A2A 事件为 Tide 内部事件
+                a2a_event = event.get("event") or event.get("payload") or event
+                mapped = self._map_to_internal_event(a2a_event)
+                if mapped:
+                    yield mapped
+        finally:
+            await daemon_registry.unregister_task(task_id)
 
     # ------------------------------------------------------------------ map
 

@@ -21,6 +21,9 @@ class WSHub:
         await ws.accept()
         self._all_connections.add(ws)
         self._user_ids[ws] = user_id
+        # 自动将已认证用户订阅到其专属通知频道 notifications:{user_id}
+        if user_id and user_id != "anonymous":
+            self._connections.setdefault(f"notifications:{user_id}", set()).add(ws)
         if channels:
             for ch in channels:
                 self._connections.setdefault(ch, set()).add(ws)

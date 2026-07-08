@@ -27,6 +27,7 @@ import {
   ConfirmDeleteDialog,
   type AgentFormValue,
 } from "./agent-dialogs";
+import { RemoteAgentGuide } from "@tide/views/remote-agents/RemoteAgentGuide";
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -401,6 +402,7 @@ export default function RemoteAgentsPage() {
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
+            <RemoteAgentGuide />
             <Button
               variant="outline"
               onClick={() => void reload()}

@@ -887,6 +887,76 @@ Agent 节点的 `data` 中新增 `routingTrigger` 布尔字段：
 
 ---
 
+## 11A. 自由协作模式（Freeform）
+
+Tide 的工作项执行由 **flow_mode** 决定，共三种模式；`freeform` 是其中一种无工作流、以「分配 + 评论」驱动的轻量协作模式。
+
+### 11A.1 flow_mode 与继承链
+
+| flow_mode | 含义 |
+|-----------|------|
+| `default_workflow` | 未显式绑定工作流时自动使用系统默认工作流（分诊→执行→评审→合并） |
+| `custom_workflow` | 显式绑定自定义工作流按 DAG 编排执行 |
+| `freeform` | 无工作流，工作项由 assignment 派生状态 + 评论式协作驱动 |
+
+**有效模式解析**（`work_item_service.get_effective_flow_mode()`）按优先级继承：
+
+```
+项目级 flow_mode  >  项目组级 flow_mode  >  系统默认
+```
+
+看板渲染 API 与工作项创建流程均依赖该解析，确保项目组设为 freeform 时子项目前端也能正确展示自由协作状态列。`backend/api/projects.py` 在保存项目设置时校验 `flow_mode ∈ {default_workflow, custom_workflow, freeform}`，且非 freeform 模式必须携带 `workflow_id`。
+
+### 11A.2 纯 assignment 派生状态
+
+freeform 工作项不存储流程状态，`work_item_service` 在读取时通过 `_enrich_freeform_status()` / `_derive_freeform_status()` 按分配聚合实时推导（手动拖拽设置的 status 优先）：
+
+| 层级 | 状态 |
+|------|------|
+| assignment 记录级（5 种） | `pending` / `accepted` / `in_progress` / `completed` / `declined` |
+| 工作项派生级（4 种） | 未分配 / 待接受 / 进行中 / 已完成 |
+
+派生规则：无 assignment→未分配；全 pending/declined→待接受；至少一条 accepted/in_progress→进行中；全部 completed→已完成。多分配时按 `pending > accepted > in_progress > completed` 取最高优先级。与看板 freeform 分列语义一致。
+
+### 11A.3 评论式协作与 Agent 触发
+
+freeform 工作项详情以评论区替代分配面板：
+
+```
+POST /api/work-items/{id}/comments  (含 mentions)
+  │  解析 mentions：user / expert_team / squad
+  ├─ expert_team | squad → 触发 Agent CLI 执行
+  │     └─ 注入角色提示词 + 工作项内容 + 共享上下文 → 流式回传
+  │     └─ 完成后自动注入共享上下文 + 通知评论发起人
+  └─ user → 站内通知 @mention 用户
+```
+
+- 执行遇审批/阻塞时看板卡片实时标红，审批/阻塞任务回传评论区处理。
+- 评论与任务展示用户名（非 UUID）并渲染关联任务链接。
+
+### 11A.4 看板状态列与权限
+
+- freeform 看板展示可配置状态列：全局默认列（`work_item_service` 内置）+ 项目级自定义，不依赖工作流节点，切换模式后无需刷新页面即生效。
+- 系统默认工作流全局唯一，仅 admin 可编辑/星标切换。
+- 全局 freeform 状态列仅 admin 可管理（`PUT /api/settings/freeform-status`）；项目级状态列由项目 admin/owner 管理。
+
+### 11A.5 API 路由
+
+| 路由 | 方法 | 说明 |
+|------|------|------|
+| `/api/work-items/{id}` | PATCH | 手动更新状态（仅 freeform / `workflow_id == __freeform__` 允许） |
+| `/api/work-items/{id}/assign` | POST | 创建分配 |
+| `/api/work-items/{id}/assignments` | GET | 分配列表 |
+| `/api/work-items/{id}/assignments/{aid}` | PATCH | 更新分配状态 |
+| `/api/work-items/{id}/assignments/{aid}/dispatch` | POST | 分配派发给 Agent |
+| `/api/work-items/assignments/mine` | GET | 我的分配 |
+| `/api/work-items/{id}/comments` | GET/POST | 评论（含 @mention 触发逻辑） |
+| `/api/work-items/{id}/context` | GET/POST | 共享上下文 |
+| `/api/projects/{project_id}/freeform-status` | GET/PUT | 项目级 freeform 状态列 |
+| `/api/settings/freeform-status` | GET/PUT | 全局 freeform 状态列（PUT 仅 admin） |
+
+---
+
 ## 12. 工作项 AI 分解 与 浮动聊天产物展示
 
 Tide 在工作项营运与交付现场提供两项面向日常需求的能力：工作项的 AI 自动分解与浮动聊天的产物汇总。

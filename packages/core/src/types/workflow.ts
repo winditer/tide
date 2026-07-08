@@ -51,6 +51,7 @@ export interface Workflow {
   definition: WorkflowDefinition;
   version: number;
   enabled: boolean;
+  is_system?: number;
   created_at: string;
   updated_at: string;
   created_by?: string | null;

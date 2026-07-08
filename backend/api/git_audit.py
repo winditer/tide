@@ -19,6 +19,7 @@ from backend.runtime.git_utils import (
     git_command, git_log_files, git_diff_full,
     git_push, git_fetch, git_ensure_remote,
     git_list_remote_branches, git_merge_branch, git_repo_root,
+    git_conflict_files, _git_merge_in_progress,
 )
 from backend.db.engine import async_session_factory
 from pathlib import Path
@@ -1138,6 +1139,18 @@ class GitLocalMergeRequest(BaseModel):
     delete_source: bool = False
 
 
+class GitMergeInteractiveRequest(BaseModel):
+    source_branch: str
+    target_branch: str
+    strategy: str = "merge"
+    delete_source: bool = False
+
+
+class GitCommitMergeRequest(BaseModel):
+    message: str = ""
+    delete_source: str = ""
+
+
 class GitMergeRequestCreate(BaseModel):
     source_branch: str
     target_branch: str
@@ -1474,6 +1487,81 @@ async def git_local_merge(project_id: str, req: GitLocalMergeRequest):
         "output": output[:1000],
         "conflicts": conflicts,
     }
+
+
+@router.post("/{project_id}/git/merge-interactive")
+async def git_merge_interactive(project_id: str, req: GitMergeInteractiveRequest):
+    """交互式合并：冲突时保留 Git 状态不 abort，允许手动解决冲突。"""
+    cwd = _decode_project_path(project_id)
+    repo_root = await git_repo_root(Path(cwd))
+    if not repo_root:
+        raise HTTPException(status_code=400, detail="Not a git repository")
+
+    # 检查是否已有进行中的合并
+    if await _git_merge_in_progress(repo_root):
+        raise HTTPException(status_code=409, detail="已有进行中的合并，请先完成或放弃")
+
+    success, output, conflicts = await git_merge_branch(
+        repo_root, req.source_branch, req.target_branch,
+        req.strategy, req.delete_source, no_abort=True,
+    )
+
+    return {
+        "ok": success,
+        "output": output[:1000],
+        "conflicts": conflicts,
+        "cwd": str(repo_root),
+    }
+
+
+@router.post("/{project_id}/git/commit-merge")
+async def git_commit_merge(project_id: str, req: GitCommitMergeRequest):
+    """冲突全部解决后完成合并提交。"""
+    cwd = _decode_project_path(project_id)
+    repo_root = await git_repo_root(Path(cwd))
+    if not repo_root:
+        raise HTTPException(status_code=400, detail="Not a git repository")
+
+    # 验证 MERGE_HEAD 存在
+    code, _ = await git_command(repo_root, ["rev-parse", "--verify", "MERGE_HEAD"], timeout=5)
+    if code != 0:
+        raise HTTPException(status_code=400, detail="没有进行中的合并")
+
+    # 检查是否还有未解决的冲突
+    remaining = await git_conflict_files(repo_root)
+    if remaining:
+        raise HTTPException(status_code=409, detail=f"仍有 {len(remaining)} 个未解决的冲突文件")
+
+    # git add -A && git commit
+    await git_command(repo_root, ["add", "-A"], timeout=30)
+    msg = req.message or "Merge completed (conflicts resolved)"
+    code, output = await git_command(repo_root, ["commit", "-m", msg], timeout=60)
+    if code != 0:
+        raise HTTPException(status_code=500, detail=f"提交失败: {output[:500]}")
+
+    # 可选：删除源分支
+    if req.delete_source:
+        await git_command(repo_root, ["branch", "-D", req.delete_source], timeout=15)
+
+    return {"ok": True, "output": output[:500]}
+
+
+@router.post("/{project_id}/git/abort-merge")
+async def git_abort_merge(project_id: str):
+    """放弃交互式合并，恢复仓库状态。"""
+    cwd = _decode_project_path(project_id)
+    repo_root = await git_repo_root(Path(cwd))
+    if not repo_root:
+        raise HTTPException(status_code=400, detail="Not a git repository")
+
+    if not await _git_merge_in_progress(repo_root):
+        return {"ok": True, "message": "没有进行中的合并"}
+
+    code, output = await git_command(repo_root, ["merge", "--abort"], timeout=30)
+    if code != 0:
+        raise HTTPException(status_code=500, detail=f"abort 失败: {output[:500]}")
+
+    return {"ok": True}
 
 
 @router.post("/{project_id}/git/merge-request")

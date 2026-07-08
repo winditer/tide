@@ -16,6 +16,7 @@ import {
   toast,
 } from "@tide/ui";
 import { apiClient, useAuth } from "@tide/core";
+import { HooksGuide } from "@tide/views";
 import { ProjectScopeSelector } from "@tide/views/components/project-scope-selector";
 import {
   ArrowLeft,
@@ -162,15 +163,18 @@ export default function HooksPage() {
               在任务和工作流生命周期中自动触发操作
             </p>
           </div>
-          <Button
-            onClick={() => {
-              setEditing(null);
-              setDialogOpen(true);
-            }}
-            className="gap-1.5 shrink-0"
-          >
-            <Plus className="h-4 w-4" /> 新建 Hook
-          </Button>
+          <div className="flex items-center gap-2 shrink-0">
+            <HooksGuide />
+            <Button
+              onClick={() => {
+                setEditing(null);
+                setDialogOpen(true);
+              }}
+              className="gap-1.5"
+            >
+              <Plus className="h-4 w-4" /> 新建 Hook
+            </Button>
+          </div>
         </div>
       </header>
 

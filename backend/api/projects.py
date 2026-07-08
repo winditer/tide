@@ -32,7 +32,11 @@ from sqlalchemy import text
 
 from backend.core.dependencies import get_current_user, get_optional_user
 from backend.db.engine import async_session_factory
-from backend.models.schemas import ProjectSettingsResponse, ProjectSettingsUpdate
+from backend.models.schemas import (
+    FreeformStatusListUpdate,
+    ProjectSettingsResponse,
+    ProjectSettingsUpdate,
+)
 from backend.runtime.config import ensure_user_dir, project_dir
 from backend.runtime.git_utils import git_clone
 from backend.services import project_discovery
@@ -822,15 +826,20 @@ async def set_project_workflow(
     body: ProjectSettingsUpdate,
     current_user=Depends(get_optional_user),
 ):
-    """绑定项目到工作流。"""
+    """绑定项目到工作流 / 设置项目流转模式。"""
     _ensure_not_viewer(current_user)
-    if not body.workflow_id:
+    flow_mode = body.flow_mode
+    valid_modes = {"default_workflow", "custom_workflow", "freeform"}
+    if flow_mode is not None and flow_mode not in valid_modes:
+        raise HTTPException(status_code=400, detail=f"invalid flow_mode: {flow_mode}")
+    # freeform 无需绑定工作流；其余模式仍要求 workflow_id
+    if flow_mode != "freeform" and not body.workflow_id:
         raise HTTPException(status_code=400, detail="workflow_id is required")
     settings = await work_item_service.set_project_workflow(
-        project_id=project_id, workflow_id=body.workflow_id
+        project_id=project_id, workflow_id=body.workflow_id, flow_mode=flow_mode
     )
     if not settings:
-        raise HTTPException(status_code=500, detail="Failed to bind workflow")
+        raise HTTPException(status_code=500, detail="Failed to update project settings")
     return settings
 
 
@@ -843,6 +852,11 @@ async def get_project_workflow(
     settings = await work_item_service.get_project_settings(project_id)
     if not settings:
         raise HTTPException(status_code=404, detail="Project workflow not bound")
+    # flow_mode 采用继承链（项目级 > 项目组级 > 系统默认），
+    # 使项目组设为 freeform 时子项目前端也能识别为 freeform。
+    settings["flow_mode"] = await work_item_service.get_effective_flow_mode(
+        project_id, settings=settings
+    )
     return settings
 
 
@@ -910,6 +924,33 @@ async def get_project_git_config(
     return await work_item_service.get_project_git_config(project_id)
 
 
+# ---------- freeform 状态列表配置 ----------
+
+
+@router.get("/{project_id}/freeform-status")
+async def get_freeform_status(
+    project_id: str,
+    current_user=Depends(get_optional_user),
+):
+    """获取项目的 freeform 状态列表配置，无配置时返回默认值。"""
+    status_list = await work_item_service.get_freeform_status_list(project_id)
+    return {"status_list": status_list}
+
+
+@router.put("/{project_id}/freeform-status")
+async def set_freeform_status(
+    project_id: str,
+    body: FreeformStatusListUpdate,
+    current_user=Depends(get_optional_user),
+):
+    """保存 freeform 状态列表配置到 project_settings.metadata。"""
+    _ensure_not_viewer(current_user)
+    status_list = await work_item_service.set_freeform_status_list(
+        project_id, [it.dict() for it in body.status_list]
+    )
+    return {"status_list": status_list}
+
+
 @router.post("/{project_id}/clone")
 async def trigger_clone(
     project_id: str,
@@ -971,3 +1012,43 @@ async def trigger_clone(
     )
 
     return {"ok": True, "status": "initializing", "message": "已触发克隆，请稍后刷新查看状态"}
+
+
+@router.delete("/{project_id}/clone")
+async def delete_repository(
+    project_id: str,
+    current_user=Depends(get_optional_user),
+):
+    """删除项目的已克隆仓库文件，允许重新克隆。
+
+    - 删除整个项目工作目录
+    - 保留项目注册表记录（允许重新克隆）
+    - 更新项目状态
+    """
+    _ensure_not_viewer(current_user)
+    cwd = _decode_id(project_id)
+    target_dir = Path(cwd)
+
+    # 检查目录存在性
+    if not target_dir.exists() or not (target_dir / ".git").exists():
+        raise HTTPException(
+            status_code=404,
+            detail="项目仓库不存在或未克隆",
+        )
+
+    # 删除整个项目目录
+    import shutil
+    try:
+        shutil.rmtree(target_dir)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"删除仓库失败: {exc}",
+        ) from exc
+
+    # 更新注册表状态为未克隆（不要用 "ready"，那表示已克隆好）
+    _update_project_status(project_id, "not_cloned")
+    # 清除缓存让下次查询时重新发现状态
+    project_discovery.clear_cache()
+
+    return {"ok": True, "message": "仓库已删除，可重新克隆"}

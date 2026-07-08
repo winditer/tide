@@ -84,10 +84,16 @@ def parse_codex_event(obj: dict[str, Any]) -> Optional[ParsedEvent]:
             return ParsedEvent(type=EVENT_MESSAGE, text=text, role="assistant", raw=obj)
         if item_type == "reasoning":
             text = item.get("text") or item.get("summary") or ""
-            return ParsedEvent(type=EVENT_PROGRESS, text=text, metadata={"kind": "reasoning"}, raw=obj)
+            # 仅当有实际 reasoning 文本时才产生进度事件，空内容跳过
+            if text:
+                return ParsedEvent(type=EVENT_PROGRESS, text=text, metadata={"kind": "reasoning"}, raw=obj)
+            return None
         if item_type in ("command_execution", "shell_command"):
             cmd = item.get("command") or ""
             output = item.get("output") or ""
+            # 命令与输出均为空时跳过，避免产生无意义的 "$" 占位符
+            if not cmd and not output:
+                return None
             text = f"$ {cmd}\n{output}".strip()
             ev_type = EVENT_TOOL_USE if t == "item.started" else EVENT_TOOL_RESULT
             return ParsedEvent(type=ev_type, text=text, metadata={"command": cmd}, raw=obj)
@@ -122,7 +128,9 @@ def parse_claude_event(obj: dict[str, Any]) -> Optional[ParsedEvent]:
         sid = obj.get("session_id")
         if sid:
             return ParsedEvent(type=EVENT_SESSION, metadata={"session_id": sid}, raw=obj)
-        return ParsedEvent(type=EVENT_PROGRESS, text=obj.get("subtype") or "system", raw=obj)
+        # 空内容的系统/控制事件不产生可见输出，返回 None 由调用方跳过，
+        # 避免 subtype 占位符污染任务结果
+        return None
     if t == "assistant":
         msg = obj.get("message") or {}
         contents = msg.get("content") or []

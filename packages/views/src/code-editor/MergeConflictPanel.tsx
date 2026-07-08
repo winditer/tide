@@ -27,6 +27,9 @@ interface MergeConflictPanelProps {
   conflictFiles: string[];
   onResolved?: () => void;
   onAbort?: () => void;
+  // 新增：独立模式回调（无 workItemId 时使用）
+  onCommitMerge?: () => Promise<void>;
+  onAbortMerge?: () => Promise<void>;
 }
 
 export function MergeConflictPanel({
@@ -40,6 +43,8 @@ export function MergeConflictPanel({
   conflictFiles,
   onResolved,
   onAbort,
+  onCommitMerge,
+  onAbortMerge,
 }: MergeConflictPanelProps) {
   const [resolutions, setResolutions] = useState<Record<string, FileResolution>>(
     () => {
@@ -125,12 +130,13 @@ export function MergeConflictPanel({
   }, [conflictFiles]);
 
   const handleSubmit = useCallback(async () => {
-    if (!allResolved || !workItemId) return;
+    if (!allResolved) return;
+    if (!workItemId && !onCommitMerge) return;
     setIsSubmitting(true);
     setError(null);
 
     try {
-      // For files that have resolvedContent, submit them
+      // 逐文件提交解决方案（两种模式共用）
       for (const res of Object.values(resolutions)) {
         if (res.resolvedContent) {
           await resolveConflictMutation.mutateAsync({
@@ -142,14 +148,19 @@ export function MergeConflictPanel({
         }
       }
 
-      // Complete the merge
-      await resolveMergeMutation.mutateAsync({
-        workItemId,
-        data: {
-          resolved: true,
-          message: `Resolved ${conflictFiles.length} conflict(s): ${sourceBranch} → ${targetBranch}`,
-        },
-      });
+      if (workItemId) {
+        // 工作项模式：推进工作流
+        await resolveMergeMutation.mutateAsync({
+          workItemId,
+          data: {
+            resolved: true,
+            message: `Resolved ${conflictFiles.length} conflict(s): ${sourceBranch} → ${targetBranch}`,
+          },
+        });
+      } else if (onCommitMerge) {
+        // 独立模式：调用外部提交回调
+        await onCommitMerge();
+      }
 
       onResolved?.();
     } catch (err) {
@@ -161,6 +172,7 @@ export function MergeConflictPanel({
   }, [
     allResolved,
     workItemId,
+    onCommitMerge,
     resolutions,
     resolveConflictMutation,
     resolveMergeMutation,
@@ -173,25 +185,29 @@ export function MergeConflictPanel({
   ]);
 
   const handleAbort = useCallback(async () => {
-    if (!workItemId) return;
+    if (!workItemId && !onAbortMerge) return;
     setIsSubmitting(true);
     setError(null);
 
     try {
-      await resolveMergeMutation.mutateAsync({
-        workItemId,
-        data: {
-          resolved: false,
-          message: `Aborted merge: ${sourceBranch} → ${targetBranch}`,
-        },
-      });
+      if (workItemId) {
+        await resolveMergeMutation.mutateAsync({
+          workItemId,
+          data: {
+            resolved: false,
+            message: `Aborted merge: ${sourceBranch} → ${targetBranch}`,
+          },
+        });
+      } else if (onAbortMerge) {
+        await onAbortMerge();
+      }
       onAbort?.();
     } catch (err) {
       setError(String(err));
     } finally {
       setIsSubmitting(false);
     }
-  }, [workItemId, resolveMergeMutation, sourceBranch, targetBranch, onAbort]);
+  }, [workItemId, onAbortMerge, resolveMergeMutation, sourceBranch, targetBranch, onAbort]);
 
   return (
     <div className="flex flex-col gap-4 rounded-xl border border-amber-200/70 bg-card p-4 shadow-card">

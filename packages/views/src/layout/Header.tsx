@@ -22,6 +22,7 @@ import {
   DropdownMenuSeparator,
 } from "@tide/ui";
 import { useWs, useAuth } from "@tide/core";
+import { NotificationBell } from "./NotificationBell";
 
 interface HeaderProps {
   onMenuClick: () => void;
@@ -66,6 +67,7 @@ export function Header({ onMenuClick, collapsed = false, onToggleCollapse }: Hea
       {/* Right: Connection + Settings + User */}
       <div className="flex items-center gap-3">
         <ConnectionStatus status={status} />
+        <NotificationBell />
         <div className="hidden h-5 w-px bg-border/60 lg:block" />
         <Link
           href="/settings"

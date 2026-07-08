@@ -51,7 +51,7 @@ async def _check_workflow_write_permission(
 
     async with async_session_factory() as session:
         result = await session.execute(
-            text("SELECT created_by FROM workflows WHERE id = :wid"),
+            text("SELECT created_by, is_system FROM workflows WHERE id = :wid"),
             {"wid": workflow_id},
         )
         row = result.fetchone()
@@ -59,7 +59,10 @@ async def _check_workflow_write_permission(
     if not row:
         raise HTTPException(status_code=404, detail="Workflow not found")
 
-    created_by = row[0]
+    created_by, is_system = row[0], row[1]
+    if is_system:
+        raise HTTPException(status_code=403, detail="系统默认工作流仅管理员可编辑")
+
     if created_by is None or created_by != current_user.get("id"):
         raise HTTPException(status_code=403, detail="只能管理自己创建的工作流")
 
@@ -121,13 +124,35 @@ async def update_workflow(
     current_user=Depends(get_optional_user),
 ):
     await _check_workflow_write_permission(workflow_id, current_user)
-    result = await workflow_service.update_workflow(
-        workflow_id=workflow_id,
-        name=body.name,
-        description=body.description,
-        definition_json=body.definition,
-        enabled=body.enabled,
-    )
+    try:
+        result = await workflow_service.update_workflow(
+            workflow_id=workflow_id,
+            name=body.name,
+            description=body.description,
+            definition_json=body.definition,
+            enabled=body.enabled,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"保存工作流失败: {exc}")
+    if not result:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    return result
+
+
+@router.put("/{workflow_id}/set-default", response_model=WorkflowResponse)
+async def set_default_workflow(
+    workflow_id: str,
+    current_user=Depends(get_optional_user),
+):
+    """将指定工作流设为系统默认（仅 admin）。
+
+    全局唯一：设置新默认时自动取消旧默认。
+    """
+    if current_user and current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="仅管理员可设置系统默认工作流")
+    result = await workflow_service.set_as_default(workflow_id)
     if not result:
         raise HTTPException(status_code=404, detail="Workflow not found")
     return result

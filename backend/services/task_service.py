@@ -10,8 +10,8 @@ TaskService — 任务 CRUD + Agent 执行桥接层。
 import asyncio
 import json
 import logging
+import os
 import re
-import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +24,7 @@ from backend.services.event_emitter import event_emitter
 from backend.services.hook_engine import hook_engine
 from backend.services.ws_hub import ws_hub
 from backend.runtime.adapters import AGENT_ADAPTERS
+from backend.runtime.cli_env import which as cli_which
 from backend.runtime.executor import agent_executor, TaskEvent
 from backend.runtime.task_runtime import TASKS, CodexTaskRuntime, LOCK
 
@@ -387,28 +388,47 @@ class TaskService:
         session_id: str = "",
         full_auto: bool = False,
         group_id: Optional[str] = None,
+        initial_status: str = "queued",
     ) -> dict:
-        """创建任务：写 DB + 启动真实 Agent CLI。"""
+        """创建任务：写 DB + 启动真实 Agent CLI。
+
+        ``initial_status`` 用于支持外部来源（如 Qoder IDE / daemon 上报）注册
+        已经处于终态的任务：当其不为 ``"queued"`` 时，仅落库而不调度执行，
+        避免对已完成/失败的外部任务误触发 Agent 启动与审批流程。
+        """
         task_id = str(uuid.uuid4())
         now = self._now_iso()
+
+        # 规范化初始状态：仅允许已知状态，未知值回退为 queued
+        initial_status = (initial_status or "queued").strip().lower()
+        if initial_status not in {"queued", "running", "completed", "failed", "cancelled"}:
+            initial_status = "queued"
 
         # Fallback empty agent_id to default
         if not agent_id:
             agent_id = "codex"
 
-        if agent_id not in AGENT_ADAPTERS:
-            choices = ", ".join(sorted(AGENT_ADAPTERS))
-            raise ValueError(f"Unsupported agent_id: {agent_id!r}. Available agents: {choices}")
+        # 远程 A2A Agent（``a2a:`` 前缀）跳过本地 AGENT_ADAPTERS 校验与 model 规范化，
+        # 由 executor.run_task 内部路由到远程执行。
+        is_remote = agent_id.startswith("a2a:")
 
-        # 校验并规范化 model：'auto' 解析为真实模型名，无效 key 也回退为随机可用模型
-        adapter = AGENT_ADAPTERS[agent_id]
-        model = adapter.normalize_model(model)
+        if not is_remote:
+            if agent_id not in AGENT_ADAPTERS:
+                choices = ", ".join(sorted(AGENT_ADAPTERS))
+                raise ValueError(f"Unsupported agent_id: {agent_id!r}. Available agents: {choices}")
 
-        # 推断 DB 中记录的实际模型名：当 normalize 后为空或等于 agent_id 时，
-        # 使用对应 Agent CLI 的环境变量默认模型，准确反映 CLI 实际运行的模型
-        db_model = model
-        if not db_model or db_model == agent_id:
-            db_model = adapter.default_model or agent_id
+            # 校验并规范化 model：'auto' 解析为真实模型名，无效 key 也回退为随机可用模型
+            adapter = AGENT_ADAPTERS[agent_id]
+            model = adapter.normalize_model(model)
+
+            # 推断 DB 中记录的实际模型名：当 normalize 后为空或等于 agent_id 时，
+            # 使用对应 Agent CLI 的环境变量默认模型，准确反映 CLI 实际运行的模型
+            db_model = model
+            if not db_model or db_model == agent_id:
+                db_model = adapter.default_model or agent_id
+        else:
+            # 远程 Agent：model 直接透传，不做规范化
+            db_model = model
 
         # fallback cwd
         if not cwd:
@@ -422,7 +442,7 @@ class TaskService:
                 text("""
                 INSERT INTO tasks
                     (id, workspace_id, chat_id, session_id, prompt, agent_id, model, cwd, group_id, attachments, status, created_at)
-                VALUES (:id, :workspace_id, :chat_id, :session_id, :prompt, :agent_id, :model, :cwd, :group_id, :attachments, 'queued', :created_at)
+                VALUES (:id, :workspace_id, :chat_id, :session_id, :prompt, :agent_id, :model, :cwd, :group_id, :attachments, :status, :created_at)
                 """),
                 {
                     "id": task_id,
@@ -435,6 +455,7 @@ class TaskService:
                     "cwd": cwd,
                     "group_id": group_id or None,
                     "attachments": attachments_json,
+                    "status": initial_status,
                     "created_at": now,
                 },
             )
@@ -448,7 +469,7 @@ class TaskService:
             prompt=prompt,
             agent_id=agent_id,
             model=model,
-            status="queued",
+            status=initial_status,
             session_id=session_id or "",
             conversation_id=conversation_id or "",
             attachments=attachments or [],
@@ -459,11 +480,15 @@ class TaskService:
         # emit task.created via event_emitter
         await event_emitter.emit_task_created(task_id, workspace_id)
 
-        self._schedule_agent_start(task_id, workspace_id, agent_id, prompt, cwd, model,
-                                    conversation_id=conversation_id or "",
-                                    session_id=session_id or "",
-                                    full_auto=full_auto,
-                                    attachments=attachments)
+        # 仅当任务处于待执行态（queued）时才调度 Agent 启动。
+        # 外部来源注册的终态任务（completed/failed/cancelled）只落库，
+        # 不触发执行与审批流程。
+        if initial_status == "queued":
+            self._schedule_agent_start(task_id, workspace_id, agent_id, prompt, cwd, model,
+                                        conversation_id=conversation_id or "",
+                                        session_id=session_id or "",
+                                        full_auto=full_auto,
+                                        attachments=attachments)
 
         # 查询并返回
         return await self.get_task(task_id)
@@ -484,18 +509,24 @@ class TaskService:
         full_auto: bool = False,
         attachments: Optional[list[str]] = None,
     ) -> None:
-        """启动 Agent；缺少 CLI 时显式失败，不伪造成功结果。"""
-        adapter = AGENT_ADAPTERS.get(agent_id)
-        if adapter is None:
-            asyncio.create_task(
-                self._fail_agent_unavailable(task_id, workspace_id, "")
-            )
-            return
-        if not adapter.bin_name or shutil.which(adapter.bin_name) is None:
-            asyncio.create_task(
-                self._fail_agent_unavailable(task_id, workspace_id, adapter.bin_name)
-            )
-            return
+        """启动 Agent；缺少 CLI 时显式失败，不伪造成功结果。
+
+        远程 A2A Agent（``a2a:`` 前缀）跳过本地 CLI binary 检查，
+        由 executor.run_task 内部路由到远程执行。
+        """
+        is_remote = agent_id.startswith("a2a:")
+        if not is_remote:
+            adapter = AGENT_ADAPTERS.get(agent_id)
+            if adapter is None:
+                asyncio.create_task(
+                    self._fail_agent_unavailable(task_id, workspace_id, "")
+                )
+                return
+            if not adapter.bin_name or cli_which(adapter.bin_name) is None:
+                asyncio.create_task(
+                    self._fail_agent_unavailable(task_id, workspace_id, adapter.bin_name)
+                )
+                return
 
         asyncio.create_task(
             self._run_agent_real(
@@ -920,6 +951,7 @@ class TaskService:
         不允许出现审批中断。判断依据：
         1. work_item_transitions 表中有该 task_id 的记录
         2. tasks 表中该任务的 plan_id 不为空（即为 Plan 子任务）
+        3. 续聊场景：同 session 中有其他任务关联了工作项
         """
         try:
             async with async_session_factory() as session:
@@ -941,7 +973,35 @@ class TaskService:
                     ),
                     {"task_id": task_id},
                 )
-                return result2.fetchone() is not None
+                if result2.fetchone() is not None:
+                    return True
+                # 检查续聊场景：同 session 中是否有其他任务关联工作项
+                result3 = await session.execute(
+                    text(
+                        "SELECT session_id FROM tasks "
+                        "WHERE id = :task_id AND session_id IS NOT NULL AND session_id != ''"
+                    ),
+                    {"task_id": task_id},
+                )
+                session_row = result3.fetchone()
+                if session_row:
+                    session_id = session_row[0]
+                    result4 = await session.execute(
+                        text(
+                            "SELECT 1 FROM tasks t "
+                            "JOIN work_item_transitions wit ON wit.task_id = t.id "
+                            "WHERE t.session_id = :session_id AND t.id != :task_id "
+                            "LIMIT 1"
+                        ),
+                        {"session_id": session_id, "task_id": task_id},
+                    )
+                    if result4.fetchone() is not None:
+                        logger.info(
+                            "[task_service] _is_work_item_task: task=%s inherits work_item link from session=%s",
+                            task_id[:8], session_id[:8],
+                        )
+                        return True
+                return False
         except Exception:
             logger.debug("_is_work_item_task check failed for task=%s", self._short_id(task_id), exc_info=True)
             return False
@@ -1051,6 +1111,139 @@ class TaskService:
         )
 
         return await self.get_task(task_id)
+
+    # ── continue (真正的续聊) ─────────────────────────────
+
+    async def _resolve_project_root_from_task(self, task: dict) -> Optional[str]:
+        """从任务关联信息推导一个真实存在的项目根目录。
+
+        续聊时原始 cwd（worktree 路径）可能已被清理，需要一个可靠的回退路径。
+        按可靠性从高到低尝试：
+        1. 原始 cwd 若是 worktree（``{repo_root}/.tide/worktrees/...``），取 ``.tide`` 之前的 repo_root。
+        2. 任务关联的项目组（group_id）中任一仍存在的项目路径。
+
+        注意：``tasks.workspace_id`` 在本项目中恒为 "default"，不映射文件系统路径，
+        故不作为路径来源；项目路径的真实来源是 cwd 编码值与项目组成员。
+        无法解析时返回 None，由调用方决定安全默认值。
+        """
+        # 策略 1：从 worktree 路径提取 repo_root
+        cwd = task.get("cwd") or ""
+        if cwd:
+            parts = Path(cwd).parts
+            if ".tide" in parts:
+                repo_root = Path(*parts[: parts.index(".tide")])
+                if str(repo_root) and repo_root.is_dir():
+                    return str(repo_root)
+
+        # 策略 2：从关联项目组解析任一仍存在的项目路径
+        group_id = task.get("group_id")
+        if group_id:
+            try:
+                from backend.services.project_group_service import project_group_service
+                projects = await project_group_service.get_group_projects(group_id)
+                for p in projects:
+                    p_cwd = (p.get("cwd") or "").strip()
+                    if p_cwd and Path(p_cwd).is_dir():
+                        return p_cwd
+            except Exception:
+                logger.debug(
+                    "[continue_task] resolve project root via group failed",
+                    exc_info=True,
+                )
+
+        return None
+
+    async def continue_task(
+        self,
+        task_id: str,
+        prompt: str,
+        attachments: Optional[list[str]] = None,
+    ) -> Optional[dict]:
+        """在已完成/失败的任务上续聊：创建新任务并复用原 session_id。
+
+        与旧实现直接 UPDATE 原任务不同，此处创建一条新任务记录，
+        复用原始 session_id，让 CLI agent 通过 --resume 加载历史对话，
+        实现"真正续聊"的同时完整保留原始任务的 prompt/result 等信息。
+        """
+        task = await self.get_task(task_id)
+        if not task:
+            return None
+
+        # 仅允许 completed 或 failed 状态的任务续聊
+        if task.get("status") not in ("completed", "failed"):
+            return None
+
+        session_id = task.get("session_id") or ""
+        workspace_id = task.get("workspace_id") or "default"
+        agent_id = task.get("agent_id") or "codex"
+        cwd = task.get("cwd") or ""
+        model = task.get("model") or ""
+        chat_id = task.get("chat_id") or None
+        group_id = task.get("group_id") or None
+
+        # 验证 cwd 是否存在：worktree 在工作项合并完成后可能已被清理删除，
+        # 若直接继承已失效的 cwd，子进程会因工作目录不存在而误报 "Agent CLI not found"。
+        if not cwd or not Path(cwd).is_dir():
+            fallback_cwd = await self._resolve_project_root_from_task(task)
+            if fallback_cwd:
+                logger.warning(
+                    "[continue_task] task=%s cwd 已失效(%s)，回退到项目目录 %s",
+                    task_id, cwd, fallback_cwd,
+                )
+                cwd = fallback_cwd
+            elif cwd:
+                # 无法解析出有效项目根：绝不回退到 Path.cwd()（后端进程启动目录，本地开发时
+                # 为用户 home，会导致 Agent CLI 扫描整个 home 目录下的无关内容）。保留原始
+                # （已失效）cwd，让子进程在明确的缺失路径上快速失败，而非泄漏扫描无关目录。
+                logger.error(
+                    "[continue_task] task=%s cwd 已失效(%s) 且无法从关联项目/项目组解析出"
+                    "有效项目根，保留原始路径以避免回退到进程工作目录",
+                    task_id, cwd,
+                )
+            else:
+                # 原始 cwd 为空且无法从关联项目解析：仅此绝境下回退到进程工作目录并告警。
+                cwd = str(Path.cwd())
+                logger.warning(
+                    "[continue_task] task=%s 缺少 cwd 且无法从关联项目解析，回退到进程工作目录 %s",
+                    task_id, cwd,
+                )
+
+        # 工作项关联/Plan 子任务须以 full_auto 执行；基于原任务判定并透传给新任务
+        full_auto = await self._is_work_item_task(task_id)
+
+        # 构建续聊上下文：将原始任务的结果摘要注入新 prompt 前面
+        # 即使 CLI --resume 失效降级到新会话，Agent 仍能理解之前的对话
+        original_result = (task.get("result") or "").strip()
+        original_prompt = (task.get("prompt") or "").strip()
+        context_prefix = ""
+        if original_result or original_prompt:
+            context_parts = []
+            if original_prompt:
+                truncated_prompt = original_prompt[:500] + ("..." if len(original_prompt) > 500 else "")
+                context_parts.append(f"[上一轮请求]\n{truncated_prompt}")
+            if original_result:
+                truncated_result = original_result[:1500] + ("..." if len(original_result) > 1500 else "")
+                context_parts.append(f"[上一轮结果]\n{truncated_result}")
+            context_prefix = "\n\n".join(context_parts) + "\n\n---\n\n[续聊请求]\n"
+
+        final_prompt = context_prefix + prompt if context_prefix else prompt
+
+        # 创建新任务而非修改原任务，复用 session_id 实现真正续聊。
+        # 原始任务的 prompt/result/status 保持不变。
+        new_task = await self.create_task(
+            workspace_id=workspace_id,
+            prompt=final_prompt,
+            agent_id=agent_id,
+            model=model,
+            cwd=cwd,
+            attachments=attachments or [],
+            chat_id=chat_id,
+            session_id=session_id,
+            group_id=group_id,
+            full_auto=full_auto,
+        )
+
+        return new_task
 
 
     # ── startup recovery ──────────────────────────────

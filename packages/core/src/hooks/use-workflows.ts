@@ -11,6 +11,7 @@ import {
   deleteWorkflow,
   toggleWorkflow,
   duplicateWorkflow,
+  setDefaultWorkflow,
   runWorkflow,
   fetchWorkflowRuns,
   fetchWorkflowRun,
@@ -103,6 +104,17 @@ export function useDuplicateWorkflow() {
     mutationFn: (id: string) => duplicateWorkflow(id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["workflows"] });
+    },
+  });
+}
+
+export function useSetDefaultWorkflow() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => setDefaultWorkflow(id),
+    onSuccess: (_data, id) => {
+      qc.invalidateQueries({ queryKey: ["workflows"] });
+      qc.invalidateQueries({ queryKey: ["workflow", id] });
     },
   });
 }

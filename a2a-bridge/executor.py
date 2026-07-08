@@ -19,7 +19,7 @@ import shlex
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Optional
 
-import config
+import bridge_config as config
 from git_manager import GitContext, get_git_manager
 from event_parser import (
     EVENT_APPROVAL,
@@ -254,6 +254,7 @@ class CLIExecutor:
                 try:
                     proc = await asyncio.create_subprocess_exec(
                         *argv,
+                        stdin=asyncio.subprocess.DEVNULL,
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE,
                         cwd=cwd,
@@ -429,12 +430,19 @@ class CLIExecutor:
         work_dir: Optional[str] = None,
     ) -> list[str]:
         model = configuration.get("model") or agent_cfg.model
+        # "auto" 或空值不传 -m，让 CLI 使用自己的环境变量配置
+        if model and model.lower() in ("auto", "default", ""):
+            model = ""
         cwd = (
             work_dir
             or configuration.get("workDir")
             or configuration.get("cwd")
             or config.WORK_DIR
         )
+        # 验证 cwd 存在性，不存在则置空（让 CLI 使用 subprocess 的 cwd）
+        if cwd and not os.path.isdir(cwd):
+            logger.warning("_build_argv: cwd %s does not exist, skipping -C", cwd)
+            cwd = ""
         if skill == "codex":
             argv = [agent_cfg.bin]
             if model:
@@ -449,7 +457,12 @@ class CLIExecutor:
             if cwd:
                 argv += ["-C", cwd]
             argv += list(agent_cfg.extra_args)
-            argv += ["--full-auto"] if configuration.get("fullAuto", True) and "--full-auto" not in argv else []
+            # fullAuto: 确保使用宽松权限（--full-auto 已废弃，改用 -a/-s 参数）
+            if configuration.get("fullAuto", True):
+                if not approval:
+                    argv += ["-a", "full-auto"]
+                if not sandbox:
+                    argv += ["-s", "workspace-write"]
             argv += [prompt]
             return argv
         if skill == "claude":

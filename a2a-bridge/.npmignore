@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.env
+.env.*
+*.log
+*.db
+.pytest_cache/
+.ruff_cache/
+scripts/
+tests/
+Dockerfile
+.git/

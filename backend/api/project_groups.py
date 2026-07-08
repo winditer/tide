@@ -631,24 +631,25 @@ async def get_group_commit_diff(
 # ── 工作流绑定 ────────────────────────────
 
 
-async def _read_group_workflow_id(group_id: str) -> Optional[str]:
+async def _read_group_workflow(group_id: str) -> tuple[Optional[str], Optional[str]]:
+    """读取项目组绑定的 (workflow_id, flow_mode)。"""
     async with async_session_factory() as session:
         row = (
             await session.execute(
-                text("SELECT workflow_id FROM project_groups WHERE id = :id"),
+                text("SELECT workflow_id, flow_mode FROM project_groups WHERE id = :id"),
                 {"id": group_id},
             )
         ).fetchone()
     if not row:
-        return None
-    return row[0]
+        return None, None
+    return row[0], row[1]
 
 
 @router.get("/{group_id}/workflow")
 async def get_group_workflow(group_id: str):
-    """查询项目组绑定的工作流。返回绑定信息及工作流名称（若存在）。"""
+    """查询项目组绑定的工作流。返回绑定信息、工作流名称及协作模式。"""
     await _ensure_group_exists(group_id)
-    workflow_id = await _read_group_workflow_id(group_id)
+    workflow_id, flow_mode = await _read_group_workflow(group_id)
     workflow_name: Optional[str] = None
     if workflow_id:
         wf = await workflow_service.get_workflow(workflow_id)
@@ -661,36 +662,66 @@ async def get_group_workflow(group_id: str):
         "group_id": group_id,
         "workflow_id": workflow_id,
         "workflow_name": workflow_name,
+        "flow_mode": flow_mode,
     }
 
 
 @router.put("/{group_id}/workflow")
 async def set_group_workflow(group_id: str, body: dict):
-    """设置项目组绑定的工作流。body: ``{"workflow_id": "xxx"}``。"""
-    await _ensure_group_exists(group_id)
-    workflow_id = (body or {}).get("workflow_id")
-    if not workflow_id or not str(workflow_id).strip():
-        raise HTTPException(status_code=400, detail="workflow_id is required")
-    workflow_id = str(workflow_id).strip()
+    """设置项目组绑定的工作流 / 协作模式。
 
-    wf = await workflow_service.get_workflow(workflow_id)
-    if not wf:
-        raise HTTPException(status_code=404, detail="Workflow not found")
+    body: ``{"workflow_id": "xxx", "flow_mode": "freeform"}``。
+    - flow_mode 可选，传 None 时保留现有值（向后兼容）；
+    - flow_mode='freeform' 时 workflow_id 可选；其余模式仍要求 workflow_id。
+    """
+    await _ensure_group_exists(group_id)
+    body = body or {}
+
+    flow_mode = body.get("flow_mode")
+    valid_modes = {"default_workflow", "custom_workflow", "freeform"}
+    if flow_mode is not None and flow_mode not in valid_modes:
+        raise HTTPException(status_code=400, detail=f"invalid flow_mode: {flow_mode}")
+
+    workflow_id = body.get("workflow_id")
+    workflow_id = (
+        str(workflow_id).strip() if workflow_id and str(workflow_id).strip() else None
+    )
+
+    # freeform 无需绑定工作流；其余模式仍要求 workflow_id
+    if flow_mode != "freeform" and not workflow_id:
+        raise HTTPException(status_code=400, detail="workflow_id is required")
+
+    wf = None
+    if workflow_id:
+        wf = await workflow_service.get_workflow(workflow_id)
+        if not wf:
+            raise HTTPException(status_code=404, detail="Workflow not found")
 
     async with async_session_factory() as session:
-        await session.execute(
-            text(
-                "UPDATE project_groups SET workflow_id = :wf_id, updated_at = CURRENT_TIMESTAMP"
-                " WHERE id = :id"
-            ),
-            {"wf_id": workflow_id, "id": group_id},
-        )
+        if flow_mode is not None:
+            await session.execute(
+                text(
+                    "UPDATE project_groups SET workflow_id = :wf_id, flow_mode = :flow_mode,"
+                    " updated_at = CURRENT_TIMESTAMP WHERE id = :id"
+                ),
+                {"wf_id": workflow_id, "flow_mode": flow_mode, "id": group_id},
+            )
+        else:
+            await session.execute(
+                text(
+                    "UPDATE project_groups SET workflow_id = :wf_id,"
+                    " updated_at = CURRENT_TIMESTAMP WHERE id = :id"
+                ),
+                {"wf_id": workflow_id, "id": group_id},
+            )
         await session.commit()
 
+    _, current_flow_mode = await _read_group_workflow(group_id)
     return {
         "group_id": group_id,
         "workflow_id": workflow_id,
-        "workflow_name": wf.get("name"),
+        "workflow_name": wf.get("name") if wf else None,
+        "flow_mode": current_flow_mode,
     }
 
 
@@ -740,6 +771,60 @@ async def list_group_user_members(
         members = [dict(r._mapping) for r in result.fetchall()]
 
     return {"members": members, "total": len(members)}
+
+
+@router.get("/{group_id}/users/available")
+async def list_available_group_users(
+    group_id: str,
+    q: Optional[str] = Query(None, description="搜索关键词(username/email/display_name)"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: Optional[dict] = Depends(get_optional_user),
+) -> dict:
+    """列出可添加为项目组用户成员的用户（排除已是该组成员的用户）。
+
+    权限：项目组 owner 或全局 admin 可调用。
+    """
+    await _ensure_group_exists(group_id)
+
+    async with async_session_factory() as session:
+        await _ensure_can_manage_group_users(session, group_id, current_user)
+
+        # 获取已有成员的 user_id
+        existing = await session.execute(
+            text("SELECT user_id FROM project_group_user_members WHERE group_id = :gid"),
+            {"gid": group_id},
+        )
+        existing_ids = {row[0] for row in existing.fetchall()}
+
+        # 查询用户表，支持搜索
+        base_query = "SELECT id, username, email, display_name, role FROM users WHERE 1=1"
+        params: dict = {}
+
+        if q:
+            base_query += " AND (username LIKE :q OR email LIKE :q OR display_name LIKE :q)"
+            params["q"] = f"%{q}%"
+
+        base_query += " ORDER BY username ASC"
+        result = await session.execute(text(base_query), params)
+
+        # 排除已有成员并分页
+        all_users = []
+        for row in result.fetchall():
+            if row[0] not in existing_ids:
+                all_users.append({
+                    "id": row[0],
+                    "username": row[1],
+                    "email": row[2],
+                    "display_name": row[3],
+                    "role": row[4],
+                })
+
+        total = len(all_users)
+        offset = (page - 1) * page_size
+        items = all_users[offset : offset + page_size]
+
+    return {"items": items, "total": total}
 
 
 @router.post("/{group_id}/users", status_code=status.HTTP_201_CREATED)

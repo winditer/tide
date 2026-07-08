@@ -55,6 +55,22 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _project_display_name(project_id: str) -> str:
+    """将编码后的 project_id 解码为友好名称（取路径末段）。"""
+    import base64
+    import binascii
+
+    s = project_id or ""
+    pad = "=" * (-len(s) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode((s + pad).encode()).decode("utf-8")
+        if decoded:
+            return decoded.rstrip("/").split("/")[-1] or decoded
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        pass
+    return project_id
+
+
 def _validate_role(role: Optional[str]) -> str:
     if role is None:
         return "member"
@@ -106,10 +122,10 @@ async def _ensure_can_manage(
     if _is_global_admin(current_user):
         return
     project_role = await _get_project_role(session, project_id, current_user["id"])
-    if project_role != "admin":
+    if project_role not in ("admin", "owner"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only project admin or global admin can manage members",
+            detail="Only project admin/owner or global admin can manage members",
         )
 
 
@@ -235,6 +251,25 @@ async def batch_add_members(
         project_id,
         len(skipped),
     )
+
+    # 用户被添加为项目成员 → 通知每个新成员（不通知自己）
+    try:
+        from backend.services.notification_service import notification_service
+
+        actor_id = current_user.get("id") if current_user else None
+        proj_name = _project_display_name(project_id)
+        for uid in added:
+            if uid and uid != actor_id:
+                await notification_service.create_notification(
+                    recipient_id=uid,
+                    work_item_id=project_id,
+                    notification_type="project_added",
+                    trigger_actor_id=actor_id,
+                    content=f"您已被添加到项目「{proj_name}」",
+                )
+    except Exception:
+        logger.debug("create project_added notification failed", exc_info=True)
+
     return {"added": added, "skipped": skipped}
 
 
@@ -330,6 +365,23 @@ async def add_member(
         project_id,
         role,
     )
+
+    # 用户被添加为项目成员 → 通知该用户（不通知自己）
+    try:
+        from backend.services.notification_service import notification_service
+
+        actor_id = current_user.get("id") if current_user else None
+        if body.user_id and body.user_id != actor_id:
+            await notification_service.create_notification(
+                recipient_id=body.user_id,
+                work_item_id=project_id,
+                notification_type="project_added",
+                trigger_actor_id=actor_id,
+                content=f"您已被添加到项目「{_project_display_name(project_id)}」",
+            )
+    except Exception:
+        logger.debug("create project_added notification failed", exc_info=True)
+
     return {
         "member_id": member_id,
         "project_id": project_id,

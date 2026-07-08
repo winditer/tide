@@ -36,6 +36,14 @@ AUTO_EXEC_PREFIX = (
     "如果需要生成文件，直接生成；如果需要修改代码，直接修改。\n\n"
 )
 
+# freeform 模式默认看板状态列表（未自定义时使用）
+DEFAULT_FREEFORM_STATUS_LIST = [
+    {"key": "unassigned", "label": "未分配"},
+    {"key": "pending", "label": "待接受"},
+    {"key": "in_progress", "label": "进行中"},
+    {"key": "completed", "label": "已完成"},
+]
+
 
 def _title_slug(title: str, max_words: int = 6) -> str:
     """从工作项标题中提取简短英文 slug，用于文件命名。
@@ -69,14 +77,14 @@ def _doc_naming_instruction(item_id: str, title: str = "", project_name: str = "
     if project_name:
         full_prefix = f"{prefix}-{project_name}"
         return (
-            f"\n\n【文档命名规范】生成的所有文档文件（如技术方案、测试报告、修改点等）"
+            f"\n\n【文档命名规范】生成的所有文档文件（如技术方案、测试用例、修改点等）"
             f"必须以 `{full_prefix}-` 作为文件名前缀。"
-            f"例如：`{full_prefix}-技术方案.md`、`{full_prefix}-测试报告.md`、`{full_prefix}-修改点.md`。\n"
+            f"例如：`{full_prefix}-技术方案.md`、`{full_prefix}-测试用例.md`、`{full_prefix}-修改点.md`。\n"
         )
     return (
-        f"\n\n【文档命名规范】生成的所有文档文件（如技术方案、测试报告、修改点等）"
+        f"\n\n【文档命名规范】生成的所有文档文件（如技术方案、测试用例、修改点等）"
         f"必须以 `{prefix}-` 作为文件名前缀。"
-        f"例如：`{prefix}-技术方案.md`、`{prefix}-测试报告.md`、`{prefix}-修改点.md`。\n"
+        f"例如：`{prefix}-技术方案.md`、`{prefix}-测试用例.md`、`{prefix}-修改点.md`。\n"
     )
 
 
@@ -297,7 +305,74 @@ class WorkItemService:
                 node_type, bool(item.get("completed_at"))
             )
 
+        # freeform 工作项：状态由分配（assignment）聚合推导，覆盖上面的默认值
+        await self._enrich_freeform_status(items)
+
+        # 清理仅用于推导的中间字段，避免泄露到 API 响应
+        for item in items:
+            item.pop("stored_status", None)
+
         return items
+
+    @staticmethod
+    def _derive_freeform_status(
+        assignment_statuses: List[str], assignee: Optional[str]
+    ) -> str:
+        """根据分配聚合状态推导 freeform 工作项状态。
+
+        与看板 freeform 分列语义一致：
+        - 无分配：有 assignee 视为 pending，否则 unassigned
+        - 存在 accepted/in_progress：in_progress
+        - 全部 completed：completed
+        - 其余（全为 pending/declined）：pending
+        """
+        active = {"accepted", "in_progress"}
+        if not assignment_statuses:
+            return "pending" if (assignee and str(assignee).strip()) else "unassigned"
+        if any(s in active for s in assignment_statuses):
+            return "in_progress"
+        if all(s == "completed" for s in assignment_statuses):
+            return "completed"
+        return "pending"
+
+    async def _enrich_freeform_status(self, items: List[dict]) -> None:
+        """批量为 freeform 工作项按分配聚合重新推导 status。"""
+        freeform_ids = [
+            it["id"] for it in items
+            if it.get("flow_mode") == "freeform" and it.get("id")
+        ]
+        if not freeform_ids:
+            return
+
+        placeholders = ",".join(f":fid{i}" for i in range(len(freeform_ids)))
+        params = {f"fid{i}": v for i, v in enumerate(freeform_ids)}
+
+        assignments_by_item: dict[str, list] = {}
+        async with async_session_factory() as session:
+            result = await session.execute(
+                text(
+                    f"""
+                    SELECT work_item_id, status
+                    FROM work_item_assignments
+                    WHERE work_item_id IN ({placeholders})
+                    """
+                ),
+                params,
+            )
+            for row in result.fetchall():
+                m = row._mapping
+                assignments_by_item.setdefault(m["work_item_id"], []).append(m["status"])
+
+        for item in items:
+            if item.get("flow_mode") != "freeform":
+                continue
+            # 优先使用拖拽显式设置的 status（来自 work_items.status 列）
+            stored = item.get("stored_status")
+            if stored:
+                item["status"] = stored
+                continue
+            statuses = assignments_by_item.get(item["id"], [])
+            item["status"] = self._derive_freeform_status(statuses, item.get("assignee"))
 
     # ── helpers ──────────────────────────────────────────
 
@@ -456,7 +531,8 @@ class WorkItemService:
     # ── workflow loading ─────────────────────────────────
 
     async def _find_default_workflow_id(self) -> Optional[str]:
-        """返回一个可作为默认值的 workflow_id：取最早创建的 enabled 工作流。
+        """返回一个可作为默认值的 workflow_id：优先系统内建(is_system=1)，
+        次选最早创建的 enabled 工作流。利用复合索引单次查询完成。
 
         当项目未绑定工作流（``project_settings`` 缺失）时，作为兜底使用，
         避免普通成员在尚未配置工作流的项目中新建工作项直接报 400。
@@ -465,7 +541,7 @@ class WorkItemService:
             result = await session.execute(
                 text(
                     "SELECT id FROM workflows WHERE enabled = 1"
-                    " ORDER BY created_at ASC LIMIT 1"
+                    " ORDER BY is_system DESC, created_at ASC LIMIT 1"
                 )
             )
             row = result.fetchone()
@@ -537,6 +613,76 @@ class WorkItemService:
         #    工作项时直接 400。仅在系统中存在 enabled 工作流时才自动绑定。
         settings = await self.get_project_settings(project_id)
         workflow_id = settings.get("workflow_id") if settings else None
+
+        # 0. freeform（无工作流）模式：跳过工作流绑定，直接创建工作项
+        #    flow_mode 采用继承链（项目级 > 项目组级 > 系统默认）
+        flow_mode = await self.get_effective_flow_mode(project_id, settings=settings)
+        if flow_mode == "freeform":
+            item_id = str(uuid.uuid4())
+            now = _now_iso()
+            tags_json = json.dumps(tags, ensure_ascii=False) if tags else None
+            metadata_json = json.dumps(metadata, ensure_ascii=False) if metadata else None
+
+            async with async_session_factory() as session:
+                await session.execute(
+                    text("""
+                        INSERT INTO work_items
+                            (id, project_id, workflow_id, current_node_id, title, description,
+                             priority, assignee, tags, source_type, source_id, metadata,
+                             version_id, flow_mode, started_at, created_at, updated_at, group_id)
+                        VALUES (:id, :project_id, :workflow_id, :current_node_id, :title, :description,
+                                :priority, :assignee, :tags, :source_type, :source_id, :metadata,
+                                :version_id, :flow_mode, :started_at, :created_at, :updated_at, :group_id)
+                    """),
+                    {
+                        "id": item_id,
+                        "project_id": project_id,
+                        "workflow_id": "__freeform__",
+                        "current_node_id": "unassigned",
+                        "title": title,
+                        "description": description,
+                        "priority": priority,
+                        "assignee": assignee,
+                        "tags": tags_json,
+                        "source_type": source_type,
+                        "source_id": source_id,
+                        "metadata": metadata_json,
+                        "version_id": version_id,
+                        "flow_mode": "freeform",
+                        "started_at": now,
+                        "created_at": now,
+                        "updated_at": now,
+                        "group_id": group_id,
+                    },
+                )
+                await session.commit()
+
+            # 记录首次 transition
+            await self._record_transition(
+                item_id=item_id,
+                from_node_id=None,
+                to_node_id="unassigned",
+                trigger_type="create",
+                operator="system",
+            )
+
+            item = await self.get_work_item(item_id)
+
+            # 若指定了负责人，通过 NoWorkflowService 创建分配
+            if assignee and item:
+                from backend.services.no_workflow_service import no_workflow_service
+                await no_workflow_service.assign_to_member(item_id, assignee, assignee)
+
+            # WebSocket 广播
+            await ws_hub.broadcast("work_items", {
+                "type": "work_item.created",
+                "work_item_id": item_id,
+                "project_id": project_id,
+                "flow_mode": "freeform",
+            })
+
+            return item or {"id": item_id}
+
         if not workflow_id:
             workflow_id = await self._find_default_workflow_id()
             if not workflow_id:
@@ -628,8 +774,8 @@ class WorkItemService:
                 text("""
                     SELECT id, project_id, workflow_id, current_node_id, title, description,
                            priority, assignee, tags, source_type, source_id, metadata,
-                           version_id, started_at, completed_at, created_at, updated_at,
-                           group_id
+                           version_id, flow_mode, started_at, completed_at, created_at, updated_at,
+                           group_id, status AS stored_status
                     FROM work_items WHERE id = :id
                 """),
                 {"id": item_id},
@@ -642,6 +788,19 @@ class WorkItemService:
         item["metadata"] = _safe_json_loads(item.get("metadata"), None)
         # 推导 status
         await self._enrich_status([item])
+        return item
+
+    async def get_work_item_full(self, item_id: str) -> Optional[dict]:
+        """获取工作项完整详情。对 freeform 模式额外返回 assignments 和 context_stream。"""
+        item = await self.get_work_item(item_id)
+        if not item:
+            return None
+
+        if item.get("flow_mode") == "freeform":
+            from backend.services.no_workflow_service import no_workflow_service
+            item["assignments"] = await no_workflow_service.get_assignments(item_id)
+            item["context_stream"] = await no_workflow_service.get_context_stream(item_id)
+
         return item
 
     async def list_work_items(
@@ -666,11 +825,8 @@ class WorkItemService:
         if group_id:
             conditions.append("group_id = :group_id")
             params["group_id"] = group_id
-        if status:
-            if status == "completed":
-                conditions.append("completed_at IS NOT NULL")
-            elif status == "active":
-                conditions.append("completed_at IS NULL")
+        # 注意：status 为推导字段（工作流按节点、freeform 按分配聚合），
+        # 统一在 _enrich_status 之后于 Python 侧过滤，见下方。
         if search:
             conditions.append("(title LIKE :search OR description LIKE :search)")
             params["search"] = f"%{search}%"
@@ -688,8 +844,8 @@ class WorkItemService:
                 text(f"""
                     SELECT id, project_id, workflow_id, current_node_id, title, description,
                            priority, assignee, tags, source_type, source_id, metadata,
-                           version_id, started_at, completed_at, created_at, updated_at,
-                           group_id
+                           version_id, flow_mode, started_at, completed_at, created_at, updated_at,
+                           group_id, status AS stored_status
                     FROM work_items
                     {where}
                     ORDER BY created_at DESC
@@ -706,9 +862,12 @@ class WorkItemService:
             items.append(item)
         # 批量推导 status
         await self._enrich_status(items)
-        # 状态是推导出来的，需要在 Python 侧过滤
-        if status and status not in ("completed", "active"):
-            items = [it for it in items if it.get("status") == status]
+        # 状态是推导出来的，需要在 Python 侧过滤（兼容工作流与 freeform）
+        if status:
+            if status == "active":
+                items = [it for it in items if it.get("status") != "completed"]
+            else:
+                items = [it for it in items if it.get("status") == status]
         return items
 
     async def update_work_item(self, item_id: str, data) -> Optional[dict]:
@@ -741,6 +900,12 @@ class WorkItemService:
             sets.append("assignee = :assignee")
             # 传空字符串表示取消分配
             params["assignee"] = assignee or None
+            # freeform 模式：assignee 变化时同步 current_node_id 语义状态
+            if existing.get("flow_mode") == "freeform":
+                new_assignee = assignee or None
+                if new_assignee != existing.get("assignee"):
+                    sets.append("current_node_id = :current_node_id")
+                    params["current_node_id"] = "assigned" if new_assignee else "unassigned"
         if tags is not None:
             sets.append("tags = :tags")
             params["tags"] = json.dumps(tags, ensure_ascii=False)
@@ -892,6 +1057,35 @@ class WorkItemService:
             "trigger_type": trigger_type,
             "operator": operator,
         })
+
+        # 7.5 终态通知：工作项完成 / 取消 → 通知负责人
+        try:
+            if item and target_node.get("type") in _TERMINAL_NODE_TYPES:
+                from backend.services.notification_service import notification_service
+
+                _assignee = item.get("assignee")
+                _title = item.get("title") or ""
+                _ttype = target_node.get("type")
+                if _assignee:
+                    if _ttype == "cancel":
+                        if _assignee != operator:
+                            await notification_service.create_notification(
+                                recipient_id=_assignee,
+                                work_item_id=item_id,
+                                notification_type="cancelled",
+                                trigger_actor_id=operator,
+                                content=f"工作项「{_title}」已被取消",
+                            )
+                    elif _ttype in ("end", "close"):
+                        await notification_service.create_notification(
+                            recipient_id=_assignee,
+                            work_item_id=item_id,
+                            notification_type="completed",
+                            trigger_actor_id="system",
+                            content=f"工作项「{_title}」已完成",
+                        )
+        except Exception:
+            logger.debug("create terminal notification failed", exc_info=True)
 
         # 8. 返回 transition
         return transition
@@ -2175,6 +2369,63 @@ class WorkItemService:
             await self._advance_past_node(item, node)
             return
 
+        # 2b. 数据库未收集到分支时，从 Git 仓库直接扫描与工作项相关的分支
+        #     手动拖拽场景下 work_item_transitions 可能缺少 task 关联，导致 DB 收集为空，
+        #     此时依据分支命名约定（tide/wi-{id[:8]}）在实际仓库中查找现存分支。
+        if not branch_records:
+            from backend.runtime.git_utils import safe_git_ref_part
+            short_id = (safe_git_ref_part(item["id"])[:8] if item.get("id") else "")
+            if short_id:
+                # 收集候选仓库路径：主项目 + 项目组内所有项目（项目组多项目场景需逐个查找）
+                candidate_cwds: list[str] = [primary_cwd]
+                group_id = item.get("group_id")
+                if group_id:
+                    try:
+                        from backend.services.project_group_service import project_group_service
+                        group_projects = await project_group_service.get_group_projects(group_id)
+                        for p in group_projects:
+                            gp_cwd = (p.get("cwd") or "").strip()
+                            if gp_cwd and gp_cwd not in candidate_cwds:
+                                candidate_cwds.append(gp_cwd)
+                    except Exception as exc:
+                        logger.warning(
+                            "[work_item] git_merge: failed to load group projects for %s: %s",
+                            group_id, exc,
+                        )
+
+                for repo_cwd in candidate_cwds:
+                    if not repo_cwd:
+                        continue
+                    try:
+                        code, output = await git_command(
+                            Path(repo_cwd),
+                            ["branch", "--list", f"tide/*{short_id}*"],
+                            timeout=10,
+                        )
+                    except Exception as exc:
+                        logger.debug(
+                            "[work_item] git_merge: git branch --list failed in %s: %s",
+                            repo_cwd, exc,
+                        )
+                        continue
+                    if code != 0 or not output.strip():
+                        continue
+                    for line in output.strip().splitlines():
+                        br = line.strip().lstrip("* ").strip()
+                        # 排除目标分支本身与重复分支
+                        if br and br != target_branch and br not in seen_branches:
+                            seen_branches.add(br)
+                            branch_records.append({
+                                "branch": br,
+                                "worktree_path": "",
+                                "type": "git_scan",
+                                "cwd": repo_cwd,
+                            })
+                            logger.info(
+                                "[work_item] git_merge: found branch from git repo scan: %s (cwd=%s)",
+                                br, repo_cwd,
+                            )
+
         # Fallback：如果找不到任何分支
         if not branch_records:
             fallback_branch = data.get("sourceBranch", "")
@@ -2314,26 +2565,16 @@ class WorkItemService:
                     if on_conflict == "manual":
                         should_abort = True
 
-            # 合并成功后清理 worktree
+            # 合并成功后不再自动清理 worktree，保留以支持续聊和文档访问
+            # 用户可通过"清理工作分支"按钮手动清理
             if repo_all_success:
                 for record in repo_branches:
                     wt = record.get("worktree_path", "")
-                    if not wt:
-                        continue
-                    branch_to_clean = record["branch"] if delete_source else ""
-                    if record["type"] == "plan_task":
-                        await cleanup_plan_worktree(
-                            worktree_path=wt,
-                            branch_name=branch_to_clean,
-                            repo_root=repo_root,
+                    if wt:
+                        logger.info(
+                            "[work_item] git_merge: worktree preserved for continuation: branch=%s path=%s",
+                            record["branch"], wt,
                         )
-                    else:
-                        await cleanup_work_item_worktree(
-                            worktree_path=wt,
-                            branch_name=branch_to_clean,
-                            repo_root=repo_root,
-                        )
-                    logger.info("[work_item] git_merge: cleaned worktree for branch=%s path=%s", record["branch"], wt)
 
             all_repo_results.append({
                 "repo": repo_root_str,
@@ -3777,16 +4018,60 @@ class WorkItemService:
             )
             row = row_result.fetchone()
 
+        is_continuation = False
         if not row:
-            logger.info(
-                "No work item transition found for task %s, skipping auto-advance.",
-                task_id[:8],
-            )
-            return
+            # 续聊场景：无直接 transition 记录时，通过 session_id 反查关联的工作项
+            async with async_session_factory() as session:
+                session_result = await session.execute(
+                    text(
+                        "SELECT session_id FROM tasks "
+                        "WHERE id = :task_id AND session_id IS NOT NULL AND session_id != ''"
+                    ),
+                    {"task_id": task_id},
+                )
+                session_row = session_result.fetchone()
+                sibling_row = None
+                if session_row:
+                    # 查找同 session 中关联工作项的兄弟任务
+                    sibling_result = await session.execute(
+                        text("""
+                            SELECT wit.work_item_id, wit.to_node_id
+                            FROM tasks t
+                            JOIN work_item_transitions wit ON wit.task_id = t.id
+                            WHERE t.session_id = :session_id AND t.id != :task_id
+                            ORDER BY wit.created_at DESC
+                            LIMIT 1
+                        """),
+                        {"session_id": session_row[0], "task_id": task_id},
+                    )
+                    sibling_row = sibling_result.fetchone()
 
-        mapping = dict(row._mapping)
-        item_id = mapping["work_item_id"]
-        current_node_id = mapping["to_node_id"]
+            if not session_row:
+                logger.info(
+                    "No work item transition found for task %s, skipping auto-advance.",
+                    task_id[:8],
+                )
+                return
+            if not sibling_row:
+                logger.info(
+                    "No work item transition found for task %s (incl. session siblings), skipping auto-advance.",
+                    task_id[:8],
+                )
+                return
+
+            # 找到关联工作项：续聊任务，仅提取产物，不推进工作项状态
+            is_continuation = True
+            item_id = sibling_row[0]
+            current_node_id = sibling_row[1]
+            logger.info(
+                "[work_item_service] on_work_item_task_completed: task=%s is continuation in session, "
+                "linked to work_item=%s. Extracting artifacts without advancing.",
+                task_id[:8], item_id[:8],
+            )
+        else:
+            mapping = dict(row._mapping)
+            item_id = mapping["work_item_id"]
+            current_node_id = mapping["to_node_id"]
 
         # Agent 完成后在 worktree 中 commit 改动（如果有），并捕获 commit_hash 供产物提取使用
         commit_hash: Optional[str] = None
@@ -3866,6 +4151,14 @@ class WorkItemService:
                     "[work_item] artifact extraction failed for item=%s task=%s: %s",
                     item_id[:8], task_id[:8], exc,
                 )
+
+        # 续聊场景：产物已提取并关联回工作项（含 auto-commit），不推进节点状态
+        if is_continuation:
+            logger.info(
+                "[work_item_service] continuation task %s artifacts linked to work_item %s, skip auto-advance.",
+                task_id[:8], item_id[:8],
+            )
+            return
 
         # Plan 完成时：收集所有子任务的产物文件 + 生成汇总测试报告
         try:
@@ -4113,30 +4406,48 @@ class WorkItemService:
 
     # ── 项目-工作流绑定 ──────────────────────────────────
 
-    async def set_project_workflow(self, project_id: str, workflow_id: str) -> dict:
-        """绑定项目到工作流（UPSERT project_settings）。"""
+    async def set_project_workflow(
+        self,
+        project_id: str,
+        workflow_id: Optional[str] = None,
+        flow_mode: Optional[str] = None,
+    ) -> dict:
+        """绑定项目到工作流（UPSERT project_settings）。
+
+        - workflow_id / flow_mode 均为可选，传 None 时保留现有值（COALESCE），
+          保证向后兼容：仅传 workflow_id 时不会覆盖 flow_mode。
+        - freeform 模式下 workflow_id 可为空。
+        """
         now = _now_iso()
         async with async_session_factory() as session:
             await session.execute(
                 text("""
-                    INSERT INTO project_settings (project_id, workflow_id, updated_at)
-                    VALUES (:project_id, :workflow_id, :updated_at)
+                    INSERT INTO project_settings (project_id, workflow_id, flow_mode, updated_at)
+                    VALUES (:project_id, :workflow_id, :flow_mode, :updated_at)
                     ON CONFLICT(project_id) DO UPDATE SET
-                        workflow_id = :workflow_id,
+                        workflow_id = COALESCE(:workflow_id, project_settings.workflow_id),
+                        flow_mode = COALESCE(:flow_mode, project_settings.flow_mode),
                         updated_at = :updated_at
                 """),
                 {
                     "project_id": project_id,
                     "workflow_id": workflow_id,
+                    "flow_mode": flow_mode,
                     "updated_at": now,
                 },
             )
             await session.commit()
 
-        logger.info("Project %s bound to workflow %s", project_id[:8], workflow_id[:8])
+        logger.info(
+            "Project %s settings updated (workflow=%s, flow_mode=%s)",
+            project_id[:8],
+            (workflow_id or "-")[:8],
+            flow_mode or "-",
+        )
         return await self.get_project_settings(project_id) or {
             "project_id": project_id,
             "workflow_id": workflow_id,
+            "flow_mode": flow_mode,
         }
 
     async def get_project_settings(self, project_id: str) -> Optional[dict]:
@@ -4144,7 +4455,7 @@ class WorkItemService:
         async with async_session_factory() as session:
             result = await session.execute(
                 text("""
-                    SELECT project_id, workflow_id, default_assignee, metadata, updated_at
+                    SELECT project_id, workflow_id, default_assignee, metadata, updated_at, flow_mode
                     FROM project_settings
                     WHERE project_id = :project_id
                 """),
@@ -4156,6 +4467,53 @@ class WorkItemService:
         item = dict(row._mapping)
         item["metadata"] = _safe_json_loads(item.get("metadata"), None)
         return item
+
+    async def _get_project_group_flow_mode(self, project_id: str) -> Optional[str]:
+        """读取 project 所属项目组的 flow_mode（取首个显式设置的组）。
+
+        项目可能属于多个组；仅返回 flow_mode 非空的组，取加入时间最早的一条。
+        无归属组或组未设置 flow_mode 时返回 None。
+        """
+        async with async_session_factory() as session:
+            row = (
+                await session.execute(
+                    text("""
+                        SELECT g.flow_mode
+                        FROM project_group_members m
+                        JOIN project_groups g ON g.id = m.group_id
+                        WHERE m.project_id = :project_id
+                          AND g.flow_mode IS NOT NULL
+                        ORDER BY m.added_at
+                        LIMIT 1
+                    """),
+                    {"project_id": project_id},
+                )
+            ).fetchone()
+        return row[0] if row else None
+
+    async def get_effective_flow_mode(
+        self, project_id: str, settings: Optional[dict] = None
+    ) -> str:
+        """计算工作项的有效 flow_mode，优先级：项目级 > 项目组级 > 系统默认。
+
+        - 项目级显式设置（非默认 default_workflow）时直接采用；
+        - 否则回退到所属项目组的 flow_mode；
+        - 最终回退到系统默认 ``default_workflow``。
+
+        ``settings`` 可选，传入时避免重复查询 project_settings。
+        """
+        if settings is None:
+            settings = await self.get_project_settings(project_id)
+        project_flow_mode = (settings or {}).get("flow_mode")
+        # 项目级显式指定了非默认模式时优先生效
+        if project_flow_mode and project_flow_mode != "default_workflow":
+            return project_flow_mode
+        # 项目级为默认/未设置：回退到项目组
+        group_flow_mode = await self._get_project_group_flow_mode(project_id)
+        if group_flow_mode:
+            return group_flow_mode
+        # 系统默认
+        return project_flow_mode or "default_workflow"
 
     async def remove_project_workflow(self, project_id: str) -> bool:
         """解绑工作流。"""
@@ -4193,6 +4551,103 @@ class WorkItemService:
             )
             await session.commit()
 
+    async def get_freeform_status_list(self, project_id: str) -> list:
+        """获取项目的 freeform 状态列表配置。
+
+        数据获取优先级：项目级配置 → 全局配置 → 硬编码默认。
+        """
+        settings = await self.get_project_settings(project_id)
+        metadata = (settings or {}).get("metadata") or {}
+        if isinstance(metadata, str):
+            metadata = _safe_json_loads(metadata, {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+        status_list = metadata.get("freeform_status_list")
+        if isinstance(status_list, list) and status_list:
+            return status_list
+        # 项目级无配置 → fallback 到全局配置（全局也无则返回硬编码默认）
+        return await self.get_global_freeform_status_list()
+
+    async def set_freeform_status_list(
+        self, project_id: str, status_list: list
+    ) -> list:
+        """保存 freeform 状态列表到 ``project_settings.metadata.freeform_status_list``。
+
+        - 强制保证终态 ``completed`` 始终存在（缺失时自动补全）。
+        - 仅更新 metadata 中的该键，其余字段不受影响。
+        """
+        normalized = [
+            {"key": str(it.get("key", "")).strip(), "label": str(it.get("label", "")).strip()}
+            for it in (status_list or [])
+            if str(it.get("key", "")).strip()
+        ]
+        if not any(it["key"] == "completed" for it in normalized):
+            normalized.append({"key": "completed", "label": "已完成"})
+
+        settings = await self.get_project_settings(project_id)
+        metadata = (settings or {}).get("metadata") or {}
+        if isinstance(metadata, str):
+            metadata = _safe_json_loads(metadata, {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+        metadata["freeform_status_list"] = normalized
+        await self.update_project_metadata(project_id, metadata)
+        return normalized
+
+    # ---------- 全局 freeform 状态列表配置（system_settings） ----------
+
+    _GLOBAL_FREEFORM_STATUS_KEY = "freeform_status_list"
+
+    async def get_global_freeform_status_list(self) -> list:
+        """获取全局 freeform 状态列表配置；未配置时返回默认 4 列。
+
+        数据存储在 ``system_settings`` 表（key=freeform_status_list），
+        与具体项目无关，供未做项目级配置时 fallback 使用。
+        """
+        async with async_session_factory() as session:
+            row = await session.execute(
+                text("SELECT value FROM system_settings WHERE key = :key"),
+                {"key": self._GLOBAL_FREEFORM_STATUS_KEY},
+            )
+            record = row.fetchone()
+        if record and record[0]:
+            parsed = _safe_json_loads(record[0], None)
+            if isinstance(parsed, list) and parsed:
+                return parsed
+        return list(DEFAULT_FREEFORM_STATUS_LIST)
+
+    async def set_global_freeform_status_list(self, status_list: list) -> list:
+        """保存全局 freeform 状态列表到 ``system_settings``。
+
+        - 强制保证终态 ``completed`` 始终存在（缺失时自动补全）。
+        """
+        normalized = [
+            {"key": str(it.get("key", "")).strip(), "label": str(it.get("label", "")).strip()}
+            for it in (status_list or [])
+            if str(it.get("key", "")).strip()
+        ]
+        if not any(it["key"] == "completed" for it in normalized):
+            normalized.append({"key": "completed", "label": "已完成"})
+
+        now = datetime.now(timezone.utc).isoformat()
+        payload = json.dumps(normalized, ensure_ascii=False)
+        async with async_session_factory() as session:
+            await session.execute(
+                text(
+                    "INSERT INTO system_settings (key, value, updated_at)"
+                    " VALUES (:key, :value, :updated_at)"
+                    " ON CONFLICT(key) DO UPDATE SET"
+                    " value = excluded.value, updated_at = excluded.updated_at"
+                ),
+                {
+                    "key": self._GLOBAL_FREEFORM_STATUS_KEY,
+                    "value": payload,
+                    "updated_at": now,
+                },
+            )
+            await session.commit()
+        return normalized
+
     async def get_project_git_config(self, project_id: str) -> dict:
         """快捷获取项目的 Git 仓库配置；未配置返回空 dict。"""
         settings = await self.get_project_settings(project_id)
@@ -4227,8 +4682,15 @@ class WorkItemService:
         6. 返回看板结构
         """
         settings = await self.get_project_settings(project_id)
+        flow_mode = await self.get_effective_flow_mode(project_id, settings=settings)
+
+        # freeform 模式：不绑定工作流，看板改由前端按工作项状态分列。
+        # 直接短路返回空列，避免残留的 workflow_id 仍生成工作流节点列。
+        if flow_mode == "freeform":
+            return {"columns": [], "workflow": None, "flow_mode": "freeform"}
+
         if not settings or not settings.get("workflow_id"):
-            return {"columns": [], "workflow": None}
+            return {"columns": [], "workflow": None, "flow_mode": flow_mode}
 
         workflow_id = settings["workflow_id"]
         definition = await self._load_workflow_definition(workflow_id)
@@ -4287,6 +4749,7 @@ class WorkItemService:
         return {
             "columns": columns,
             "workflow": {"id": workflow_id, "name": workflow_name},
+            "flow_mode": flow_mode,
         }
 
     # ── 内部辅助 ─────────────────────────────────────────

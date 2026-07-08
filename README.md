@@ -2,7 +2,7 @@
 
 > Lark 多智能体桥接 + Web 工作台 — 把 Codex / Claude Code / Qoder 等 Agent CLI 统一在一个 FastAPI 后端中调度，前端 Web 工作台与 Lark 双通道并存。
 
-完整架构说明见 [ARCHITECTURE.md](ARCHITECTURE.md)；开发计划见 [DEVELOPMENT.md](DEVELOPMENT.md)；演进路线见 [ROADMAP.md](ROADMAP.md)。
+完整架构说明见 [ARCHITECTURE.md](docs/ARCHITECTURE.md)；开发计划见 [DEVELOPMENT.md](docs/DEVELOPMENT.md)；演进路线见 [ROADMAP.md](docs/ROADMAP.md)。
 
 > **重要变更（v2.0）**：原单文件脚本 `tide_ws.py` 已废弃，全部能力迁移到 `backend/` 统一后端。详见下文「迁移说明」。
 
@@ -52,6 +52,7 @@ Tide 由两个一体化部分组成：
 - **项目组** — 多仓库聚合、成员管理、跨仓库 Plan 自动生成、聚合视图。
 - **工作项智能路由** — 基于知识图谱与 LLM 分析，自动将项目组工作项路由到最合适的子项目，支持两阶段方案生成 + 路由决策流程。
 - **工作项 AI 分解** — 输入长文本需求 / PRD / 链接 / 附件，LLM 自动拆解为多个合适粒度的工作项，人工校对后批量创建。
+- **自由协作模式（Freeform）** — 项目/项目组可切换为无工作流的自由协作：工作项状态由分配（assignment）实时派生（未分配/待接受/进行中/已完成），支持看板拖拽手动改状态；工作项详情以评论区 @成员/@专家团/@小队 替代分配面板，@专家团/@小队 自动触发 Agent CLI 执行并流式查看，审批/阻塞回传评论区处理，Agent 完成后自动注入共享上下文。
 - **浮动聊天产物展示** — 聊天窗口自动汇总会话中生成的文件/链接产物，支持在线查看（JSON / 代码 / 图片预览）与「在新标签页打开」。
 - **知识图谱** — 自动生成仓库级代码知识图谱（10 类：模块依赖 / API 接口 / 数据库 Schema / 业务概念 / 系统架构 / 技术栈 / 编码风格 / 数据流 / 测试覆盖 / 事件总线），Python 项目静态分析（全部 10 类），非 Python 项目通过 Agent（Codex/Claude/Qoder）驱动分析；生成过程中展示旋转进度图标和实时进度弹窗。
 - **权限认证** — JWT 用户认证、Lark OAuth2 SSO、角色隔离（admin/member/viewer）、项目成员管理。
@@ -357,12 +358,10 @@ tide/
 │   ├── code_collector.py      代码收集器（语言检测、文件树、上下文构建）
 │   └── llm_analyzer.py        Prompt 模板（10 个）与 JSON 提取工具
 ├── tide_ws.py              ⚠️ DEPRECATED — 旧单文件脚本，仅作迁移参考
-├── ARCHITECTURE.md         架构文档
-├── DEVELOPMENT.md          开发指南
-└── ROADMAP.md              路线图
+└── docs/                   项目文档（ARCHITECTURE / DEVELOPMENT / ROADMAP 等）
 ```
 
-后端模块职责详见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+后端模块职责详见 [ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
 ---
 
@@ -373,7 +372,7 @@ tide/
 | Dashboard | `/` | 运行中 / 排队中 / 待审批 / 今日完成统计，最近任务，Agent 状态，快捷输入 |
 | 任务 | `/tasks` `/tasks/[id]` | 创建 / 查看 / 停止 / 重试 / 审批，SSE 输出流 |
 | Plan | `/plans` `/plans/[id]` | DAG 可视化、Gantt 时间线、分文件 Diff、合并总览 |
-| 看板 | `/kanban` | 项目 / 会话 / Agent / 工作流 / 工作项五维看板，支持项目组、拖拽切换状态 |
+| 看板 | `/kanban` | 项目 / 会话 / Agent / 工作流 / 工作项五维看板，支持项目组、拖拽切换状态；自由协作模式下展示可配置状态列 |
 | 定时 | `/schedules` | Cron / Interval / Date 定时任务 |
 | 工作流 | `/workflows` | 多 Agent 协作流程可视化编辑器（React Flow） |
 | 项目 | `/projects` | 项目列表与详情 |
@@ -728,6 +727,94 @@ Header 展示：成员项目数 / 用户成员数 / 创建时间 / 创建者。
 
 ---
 
+## 自由协作模式（Freeform）
+
+除标准的工作流驱动模式外，Tide 支持将项目/项目组切换为**自由协作模式（freeform）**——工作项不绑定工作流，改为以「分配 + 评论」驱动的轻量协作方式，适合探索型、运营型或人机混合的任务。
+
+### 三种协作模式（flow_mode）
+
+| flow_mode | 含义 | 是否需绑定工作流 |
+|-----------|------|-----------------|
+| `default_workflow` | 未显式绑定工作流时自动使用系统默认工作流（分诊→执行→评审→合并） | 使用系统默认 |
+| `custom_workflow` | 显式绑定自定义工作流按 DAG 编排执行 | ✅ 需 `workflow_id` |
+| `freeform` | 自由协作：无工作流，工作项由 assignment 派生状态 + 评论式协作驱动 | ❌ 无需 |
+
+**继承链**：项目级 `flow_mode` > 项目组级 `flow_mode` > 系统默认（由 `get_effective_flow_mode` 解析）。项目组设为 freeform 时，子项目前端也会识别为 freeform。
+
+### 纯 assignment 派生状态
+
+freeform 工作项默认不存储流程状态，而是由 `work_item_assignments` 实时聚合派生（也可通过看板拖拽手动设置，手动状态优先）：
+
+| 派生状态 | 触发条件 |
+|----------|----------|
+| 未分配 | 无任何有效 assignment |
+| 待接受 | 有 assignment 且全为 pending/declined |
+| 进行中 | 至少 1 条 assignment 为 accepted/in_progress |
+| 已完成 | 所有有效 assignment 均为 completed |
+
+> assignment 记录级状态共 5 种：`pending` / `accepted` / `in_progress` / `completed` / `declined`；多分配时按 `pending > accepted > in_progress > completed` 优先级取最高。
+
+### 评论式协作（替代分配面板）
+
+freeform 工作项详情以评论区作为协作中枢：
+
+- **@mention**：支持 @用户、@专家团、@小队。
+- **@专家团 / @小队 触发执行**：自动将角色提示词、工作项内容与共享上下文传入 Agent CLI 执行，可流式查看执行过程。
+- **阻塞标红**：执行遇审批或阻塞时，看板卡片实时标红。
+- **审批内嵌**：审批/阻塞任务回传到评论区处理，无需跳转。
+- **共享上下文注入**：Agent 任务完成后自动将产物注入工作项共享上下文，供后续协作复用。
+- **可读展示**：评论显示用户名（非 UUID），并渲染关联任务链接。
+
+### 看板
+
+- freeform 模式看板展示**可配置状态列**（全局默认 / 项目级自定义），不依赖工作流节点。
+- 支持拖拽变更工作项状态（手动状态优先于派生状态）。
+- admin 可在 Settings 中管理**全局 freeform 状态列**（列名与排序）。
+
+### 站内通知
+
+- 工作项分配 / 完成通知。
+- @mention 用户通知。
+- Agent 任务完成后通知评论发起人。
+- 点击通知直达工作项详情。
+
+### 工作项详情
+
+- 共享上下文（默认收起，可展开编辑）。
+- 复制链接一键分享。
+- 评论显示用户名与任务链接。
+
+### 权限
+
+- 系统默认工作流全局唯一，仅 admin 可编辑（星标切换设置为系统默认）。
+- 全局 freeform 状态列配置仅 admin 可管理；项目级状态列由项目 admin/owner 管理。
+
+### 配置方式
+
+| 层级 | 入口 | 说明 |
+|------|------|------|
+| 项目 | 项目设置 → 工作流模式 | 设置项目的 `flow_mode`（default_workflow / custom_workflow / freeform） |
+| 项目组 | 项目组设置 → 工作流模式 | 设置项目组 `flow_mode`，子项目可继承 |
+| 全局 | Settings（admin） | 设置系统默认工作流、管理全局 freeform 状态列 |
+
+### API 端点参考
+
+| 路由 | 方法 | 说明 |
+|------|------|------|
+| `/api/work-items` | POST/GET | 工作项创建 / 列表（freeform 工作项自动附带派生 status） |
+| `/api/work-items/{id}` | PATCH | 手动更新状态（仅 freeform 工作项允许） |
+| `/api/work-items/{id}/assign` | POST | 创建分配 |
+| `/api/work-items/{id}/assignments` | GET | 列出分配 |
+| `/api/work-items/{id}/assignments/{aid}` | PATCH | 更新分配状态（接受/拒绝/完成等） |
+| `/api/work-items/{id}/assignments/{aid}/dispatch` | POST | 将分配派发给 Agent 执行 |
+| `/api/work-items/assignments/mine` | GET | 我的分配（可按 status 过滤） |
+| `/api/work-items/{id}/comments` | GET/POST | 评论列表 / 创建评论（含 @mention，命中专家团/小队触发 Agent） |
+| `/api/work-items/{id}/context` | GET/POST | 读取 / 设置共享上下文 |
+| `/api/projects/{project_id}/freeform-status` | GET/PUT | 项目级 freeform 状态列配置 |
+| `/api/settings/freeform-status` | GET/PUT | 全局 freeform 状态列配置（PUT 仅 admin） |
+
+---
+
 ## 知识图谱（Knowledge Graph）
 
 知识图谱自动分析仓库代码结构，生成 **10 类**可视化图谱，存放于仓库下 `.knowledge/` 目录。
@@ -895,6 +982,17 @@ docker run -p 8720:8720 --env-file .env tide-a2a-bridge
 ```
 
 > 详见 [`a2a-bridge/README.md`](a2a-bridge/README.md)。
+
+**两种连接模式：**
+
+- **HTTP 拉模式（默认）**：Tide 主动通过 HTTP/A2A 拉取 Bridge，要求 Tide 能直接访问 Bridge 地址。
+- **Daemon WS 推模式（NAT 穿透）**：当 Bridge 部署在 NAT/防火墙后、Tide 无法主动访问时，由 Bridge 主动出网连接 Tide，通过同一条 WebSocket 长连接上报能力并接收任务。
+
+```bash
+a2a-bridge setup --daemon   # 配置 Daemon WS 推模式（需与后端一致的 DAEMON_TOKEN）
+```
+
+> Daemon WS 推模式详见 [`A2A_INTEGRATION.md` 14.8 节](docs/A2A_INTEGRATION.md#148-daemon-websocket-推模式nat-穿透)。
 
 ### 注册远程 Agent
 

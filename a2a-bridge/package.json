@@ -1,0 +1,43 @@
+{
+  "name": "@tide-ai/a2a-bridge",
+  "version": "1.0.2",
+  "description": "A2A Bridge - Agent-to-Agent protocol bridge for Tide. Wraps local CLI Agents as A2A endpoints.",
+  "bin": {
+    "a2a-bridge": "./bin/a2a-bridge.js"
+  },
+  "scripts": {
+    "postinstall": "node lib/postinstall.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "keywords": [
+    "a2a",
+    "agent",
+    "bridge",
+    "tide",
+    "ai"
+  ],
+  "license": "MIT",
+  "files": [
+    "bin/",
+    "lib/",
+    "a2a_bridge/",
+    "pyproject.toml",
+    "requirements.txt",
+    "README.md",
+    "agent_card.py",
+    "bridge_config.py",
+    "daemon_client.py",
+    "event_parser.py",
+    "executor.py",
+    "git_manager.py",
+    "main.py",
+    "models.py"
+  ]
+}

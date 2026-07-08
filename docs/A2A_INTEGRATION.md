@@ -861,6 +861,97 @@ curl -X POST http://<IP>:8720/a2a \
   }'
 ```
 
+### 14.8 Daemon WebSocket 推模式（NAT 穿透）
+
+默认部署下 Tide 以 HTTP/A2A **主动拉取** Bridge（拉模式），要求 Tide 能直接 reach 到 Bridge。当 Bridge 部署在 **NAT/防火墙后**、Tide 无法主动连接时，可启用 Daemon WebSocket **推模式**：由 Bridge 主动出网连接 Tide 后端，上报能力并通过同一条长连接接收任务。
+
+#### 适用场景
+
+- Bridge 所在主机无公网 IP / 在 NAT 或防火墙后，服务端无法主动 reach；
+- 希望 Agent 上下线、能力变更被服务端实时感知；
+- Bridge 只需具备出网能力，无需开放入站端口。
+
+#### 架构（推模式）
+
+```
+A2A Bridge (Daemon) ──WS 主动连接──►  Tide Backend  /ws/daemon
+      ▲ 上行：register / heartbeat / capability_update / task_event / task_result
+      ▼ 下行：registered / heartbeat_ack / task_dispatch / task_cancel
+              （复用同一条 WS 长连接反向下推，无需 HTTP 回连）
+```
+
+#### WS 协议消息
+
+连接：`ws(s)://<tide-host>/ws/daemon?token=<DAEMON_TOKEN>`，使用独立 `DAEMON_TOKEN` 鉴权（与前端 `/ws` 通道完全隔离）。首帧必须为 `register`。
+
+| 方向 | type | 载荷要点 | 说明 |
+|------|------|---------|------|
+| Daemon→服务端 | `register` | `daemon_id, name, agents, skills, capability_tags, max_concurrency` | 连上首帧，上报身份与能力 |
+| 服务端→Daemon | `registered` | `heartbeat_interval` 等 | 确认注册 |
+| Daemon→服务端 | `heartbeat` | `active_tasks, load, status` | 定期保活 + 负载上报 |
+| 服务端→Daemon | `heartbeat_ack` | — | 心跳确认 |
+| Daemon→服务端 | `capability_update` | `skills, capability_tags` | 能力变更推送 |
+| 服务端→Daemon | `task_dispatch` | `task_id, prompt, skill, git, configuration` | 反向派发任务 |
+| 服务端→Daemon | `task_cancel` | `task_id` | 取消运行中任务 |
+| Daemon→服务端 | `task_event` | `task_id, kind, content, state` | 执行增量输出/状态回传 |
+| Daemon→服务端 | `task_result` | `task_id, state, artifacts` | 终态结果回传 |
+
+#### 任务下发与回流链路
+
+1. **调度**：服务端按 skill / capability_tag 与实时 load 选定一个在线 Daemon；
+2. **下发**：`dispatch_task` 创建 `task_id → asyncio.Queue` 桥接管道，通过 WS 发送 `task_dispatch`；
+3. **远端执行**：Daemon 收到后调用本地 executor 执行对应 CLI；
+4. **回传**：Daemon 将流式事件以 `task_event` 逐步回传，终态发 `task_result`；
+5. **路由**：`/ws/daemon` 按 `task_id` 将事件 `route_task_event` 投递到对应队列；
+6. **接入闭环**：当远程 Agent `connection_mode='ws'` 时，Adapter 从队列取事件，复用现有事件映射接入工作流/审批/前端推送，上层无感知传输差异。
+
+取消：服务端发 `task_cancel(task_id)` → Daemon 停本地 CLI。断线：下发时 Daemon 已离线则快速失败/重新调度；连接断开时服务端将其 `status` 置为离线。
+
+#### 服务端注册表（DaemonRegistry）实现要点
+
+`/ws/daemon`（[`backend/api/ws_daemon.py`](../backend/api/ws_daemon.py)）仅负责鉴权与帧路由，状态维护全部交给单例 `daemon_registry`（[`backend/services/daemon_registry.py`](../backend/services/daemon_registry.py)）：
+
+- **鉴权与首帧**：连接携 `?token=<DAEMON_TOKEN>`，与环境变量不符则以 `4001` 关闭；首帧必须为 `register` 且携 `daemon_id`，否则以 `4002/4003` 关闭。
+- **能力持久化**：`register` 后写入 `remote_agents` 表（`connection_mode='ws'`）。若注册带 `agents` 列表，则为每个 agent 创建独立记录（ID 为 `daemon-{daemon_id}-{agent_name}`，显示名 `{bridge_name}/{agent_name}`），并将本次不再包含的旧 agent 置 `offline`；否则回退为单条 `daemon-{daemon_id}` 记录。`ON CONFLICT(id) DO UPDATE` 仅更新 daemon 相关字段，不覆盖手动配置的 `auth_credentials` 等。
+- **心跳与超时**：`on_heartbeat` 更新 `last_heartbeat / active_tasks / load / status`；后台 `_heartbeat_cleanup_loop` 每 15s 扫描，超过 `TIMEOUT=60s`（4×心跳间隔）无心跳则标记为 `offline` 并回写 DB。
+- **任务桥接**：`dispatch_task` 创建 `task_id → asyncio.Queue`（maxsize=100）桥接管道后下发 `task_dispatch`；`route_task_event` 按 `task_id` 将回传事件投递到队列，消费者终态后调 `unregister_task` 清理。
+- **重连容忍**：下发时若目标 Daemon 不在线（如后端热重启后 Bridge 尚未重连），`dispatch_task` 最多等待 10s（每 2s 重试）给重连窗口，超时则返回空。
+- **启动重置**：后端启动时（`DaemonRegistry.start`）将 DB 中所有 `connection_mode='ws'` 的 agent 置 `offline`，等 Bridge 重连注册后恢复 `active`（旧 WebSocket 连接重启后不可能存活）。
+
+#### 配置说明（Bridge 端）
+
+| 环境变量 | 默认值 | 说明 |
+|---------|--------|------|
+| `DAEMON_ENABLED` | `false` | 是否启用 Daemon 推模式（默认关闭，向后兼容） |
+| `TIDE_WS_URL` | (空) | Tide 后端 daemon WS 端点，如 `ws://localhost:8000/ws/daemon` |
+| `DAEMON_TOKEN` | (空) | daemon 鉴权 token，需与后端 `DAEMON_TOKEN` 一致 |
+| `DAEMON_ID` | (空) | daemon 标识，不设则首次使用时自动生成 UUID |
+| `HEARTBEAT_INTERVAL` | `15` | 心跳间隔（秒） |
+| `CAPABILITY_TAGS` | `code,review,docs` | 能力标签，逗号分隔 |
+| `BRIDGE_NAME` | (空) | 显示名称前缀，留空回退主机名、再回退 daemon_id 前 8 位 |
+
+> 后端侧需配置相同的 `DAEMON_TOKEN` 环境变量以通过鉴权。
+
+#### 启用方式
+
+```bash
+# 交互式配置 Daemon 模式（写入 ~/.a2a-bridge/.env）
+a2a-bridge setup --daemon
+
+# 启动（后台守护）
+a2a-bridge start -d
+```
+
+#### HTTP 拉模式 vs WS 推模式
+
+| 维度 | HTTP 拉模式（默认） | WS 推模式（Daemon） |
+|------|------------------|-------------------|
+| 连接方向 | Tide 主动连 Bridge | Bridge 主动连 Tide |
+| NAT 穿透 | 需 Bridge 有可达地址 | ✓ 只需 Bridge 能出网 |
+| 任务下发 | HTTP JSON-RPC (`/a2a`) | WS `task_dispatch` 反向下推 |
+| 能力发现 | 定期拉取 Agent Card | 上线即注册 + 实时心跳 |
+| 适用场景 | Bridge 有公网/内网可达 | Bridge 在 NAT/防火墙后 |
+
 ---
 
 ## 15. 实施记录

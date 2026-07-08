@@ -31,13 +31,17 @@ import {
   useDeleteVersion,
   useFetchRemote,
   useGitBranches,
-  useLocalMerge,
+  useMergeInteractive,
+  useCommitMerge,
+  useAbortMerge,
   useProject,
   useProjectChats,
   useProjectMembers,
   useProjectSessions,
   useProjectTasks,
   useProjectWorkflow,
+  useFreeformStatusList,
+  useSetFreeformStatusList,
   usePullBranch,
   usePushBranch,
   useRemoteBranches,
@@ -52,6 +56,7 @@ import {
   type ProjectTaskSummary,
   type Version,
   type VersionStatus,
+  type FreeformStatusItem,
 } from "@tide/core";
 import {
   Download,
@@ -69,7 +74,7 @@ import {
   Upload,
   UserPlus,
 } from "lucide-react";
-import { KnowledgeGraphCard } from "@tide/views";
+import { KnowledgeGraphCard, MergeConflictPanel, WorkflowModeGuide } from "@tide/views";
 
 type TabKey = "conversations" | "tasks" | "versions" | "members" | "knowledge" | "branches" | "settings";
 
@@ -594,6 +599,9 @@ function SettingsPane({
   onRemove: () => void;
 }) {
   const [selectedWfId, setSelectedWfId] = useState("");
+  const [flowMode, setFlowMode] = useState<
+    "default_workflow" | "custom_workflow" | "freeform"
+  >("default_workflow");
   const workflowsQuery = useWorkflows();
   const projectWfQuery = useProjectWorkflow(projectId);
   const bindMutation = useBindProjectWorkflow();
@@ -602,6 +610,14 @@ function SettingsPane({
   const workflows = workflowsQuery.data ?? [];
   const enabledWorkflows = workflows.filter((w) => w.enabled);
   const currentWorkflow = projectWfQuery.data;
+
+  // 从后端设置同步流转模式（仅在数据加载后初始化一次）
+  useEffect(() => {
+    if (currentWorkflow?.flow_mode) {
+      setFlowMode(currentWorkflow.flow_mode as typeof flowMode);
+    }
+  }, [currentWorkflow?.flow_mode]);
+
   const currentWorkflowName =
     currentWorkflow?.workflow_id
       ? workflows.find((w) => w.id === currentWorkflow.workflow_id)?.name ?? currentWorkflow.workflow_id
@@ -612,9 +628,51 @@ function SettingsPane({
     ...enabledWorkflows.map((wf) => ({ value: wf.id, label: wf.name })),
   ];
 
+  const isFreeform = flowMode === "freeform";
+
+  const FLOW_MODE_OPTIONS: {
+    value: typeof flowMode;
+    label: string;
+    desc: string;
+  }[] = [
+    {
+      value: "default_workflow",
+      label: "默认工作流",
+      desc: "使用系统内建 4 阶段流程",
+    },
+    {
+      value: "custom_workflow",
+      label: "自定义工作流",
+      desc: "绑定自定义工作流",
+    },
+    {
+      value: "freeform",
+      label: "自由协作",
+      desc: "无工作流，直接分配",
+    },
+  ];
+
+  const handleSelectFlowMode = (
+    mode: "default_workflow" | "custom_workflow" | "freeform"
+  ) => {
+    if (mode === flowMode) return;
+    setFlowMode(mode);
+    if (mode === "freeform") {
+      // freeform 无需工作流，立即持久化模式
+      bindMutation.mutate({ projectId, flowMode: mode });
+    } else if (currentWorkflow?.workflow_id) {
+      // 已绑定工作流时，切回工作流模式立即持久化
+      bindMutation.mutate({
+        projectId,
+        workflowId: currentWorkflow.workflow_id,
+        flowMode: mode,
+      });
+    }
+  };
+
   const handleBind = () => {
     if (!selectedWfId) return;
-    bindMutation.mutate({ projectId, workflowId: selectedWfId });
+    bindMutation.mutate({ projectId, workflowId: selectedWfId, flowMode });
   };
 
   const handleUnbind = () => {
@@ -674,7 +732,52 @@ function SettingsPane({
         </div>
       </div>
 
+      {/* Flow Mode Selector */}
+      <div className="bg-card rounded-xl shadow-card p-6 space-y-4">
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <h2 className="text-base font-medium">工作流模式</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              选择项目下工作项的默认流转方式。
+            </p>
+          </div>
+          <WorkflowModeGuide />
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          {FLOW_MODE_OPTIONS.map((opt) => {
+            const active = flowMode === opt.value;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => handleSelectFlowMode(opt.value)}
+                disabled={bindMutation.isPending}
+                className={`rounded-lg border p-3 text-left transition-smooth disabled:opacity-60 ${
+                  active
+                    ? "border-primary bg-primary/5 ring-1 ring-primary"
+                    : "border-border hover:border-primary/50"
+                }`}
+              >
+                <div className="text-sm font-medium">{opt.label}</div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {opt.desc}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+        {isFreeform && (
+          <p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+            工作项可直接分配给成员或专家团，无需经过工作流管线。
+          </p>
+        )}
+      </div>
+
+      {/* Freeform Status List Management */}
+      {isFreeform && <FreeformStatusCard projectId={projectId} />}
+
       {/* Workflow Binding */}
+      {!isFreeform && (
       <div className="bg-card rounded-xl shadow-card p-6 space-y-4">
         <h2 className="text-base font-medium">工作流绑定</h2>
         {currentWorkflow?.workflow_id ? (
@@ -719,6 +822,7 @@ function SettingsPane({
           </Button>
         </div>
       </div>
+      )}
 
       {/* Git Repository Config */}
       <GitConfigCard projectId={projectId} />
@@ -757,6 +861,154 @@ interface GitConfigForm {
   access_token: string;
 }
 
+// ── Freeform Status List Card ───────────────────────────────────
+
+function FreeformStatusCard({ projectId }: { projectId: string }) {
+  const query = useFreeformStatusList(projectId);
+  const saveMutation = useSetFreeformStatusList();
+  const [list, setList] = useState<FreeformStatusItem[]>([]);
+
+  // 后端数据加载后同步到本地可编辑状态
+  useEffect(() => {
+    if (query.data) setList(query.data);
+  }, [query.data]);
+
+  const updateLabel = (index: number, label: string) => {
+    setList((prev) =>
+      prev.map((it, i) => (i === index ? { ...it, label } : it))
+    );
+  };
+
+  const updateKey = (index: number, key: string) => {
+    setList((prev) =>
+      prev.map((it, i) => (i === index ? { ...it, key } : it))
+    );
+  };
+
+  const removeItem = (index: number) => {
+    setList((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const moveItem = (index: number, dir: -1 | 1) => {
+    setList((prev) => {
+      const target = index + dir;
+      if (target < 0 || target >= prev.length) return prev;
+      const next = [...prev];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  };
+
+  const addItem = () => {
+    setList((prev) => [
+      ...prev,
+      { key: `status_${prev.length + 1}`, label: "新状态" },
+    ]);
+  };
+
+  const handleSave = () => {
+    // 校验：key 不能为空且不重复
+    const cleaned = list
+      .map((it) => ({ key: it.key.trim(), label: it.label.trim() }))
+      .filter((it) => it.key);
+    const keys = cleaned.map((it) => it.key);
+    if (new Set(keys).size !== keys.length) {
+      toast({ title: "状态 key 不能重复", variant: "destructive" });
+      return;
+    }
+    if (!cleaned.some((it) => it.key === "completed")) {
+      toast({ title: '必须保留终态列 "completed"', variant: "destructive" });
+      return;
+    }
+    saveMutation.mutate(
+      { projectId, statusList: cleaned },
+      {
+        onSuccess: (data) => {
+          setList(data);
+          toast({ title: "状态列表已保存" });
+        },
+        onError: () => toast({ title: "保存失败", variant: "destructive" }),
+      }
+    );
+  };
+
+  return (
+    <div className="bg-card rounded-xl shadow-card p-6 space-y-4">
+      <div>
+        <h2 className="text-base font-medium">状态列表管理</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          自定义自由协作看板的状态列。终态列 “completed” 必须保留。
+        </p>
+      </div>
+
+      {query.isLoading ? (
+        <div className="py-6 text-center text-sm text-muted-foreground">
+          加载中…
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {list.map((item, index) => (
+            <div key={index} className="flex items-center gap-2">
+              <div className="flex flex-col">
+                <button
+                  type="button"
+                  onClick={() => moveItem(index, -1)}
+                  disabled={index === 0}
+                  className="text-muted-foreground hover:text-foreground disabled:opacity-30"
+                  aria-label="上移"
+                >
+                  ▲
+                </button>
+                <button
+                  type="button"
+                  onClick={() => moveItem(index, 1)}
+                  disabled={index === list.length - 1}
+                  className="text-muted-foreground hover:text-foreground disabled:opacity-30"
+                  aria-label="下移"
+                >
+                  ▼
+                </button>
+              </div>
+              <Input
+                value={item.key}
+                onChange={(e) => updateKey(index, e.target.value)}
+                placeholder="key"
+                className="w-40 font-mono text-xs"
+                disabled={item.key === "completed"}
+              />
+              <Input
+                value={item.label}
+                onChange={(e) => updateLabel(index, e.target.value)}
+                placeholder="显示名称"
+                className="flex-1"
+              />
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => removeItem(index)}
+                disabled={item.key === "completed"}
+                aria-label="删除"
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </div>
+          ))}
+
+          <div className="flex items-center justify-between pt-2">
+            <Button variant="outline" size="sm" onClick={addItem}>
+              <Plus className="mr-1 h-4 w-4" />
+              添加状态
+            </Button>
+            <Button onClick={handleSave} disabled={saveMutation.isPending}>
+              {saveMutation.isPending ? "保存中…" : "保存"}
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const DEFAULT_GIT_CONFIG: GitConfigForm = {
   repo_url: "",
   default_branch: "main",
@@ -778,6 +1030,7 @@ function GitConfigCard({ projectId }: { projectId: string }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [cloning, setCloning] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -877,6 +1130,22 @@ function GitConfigCard({ projectId }: { projectId: string }) {
       });
     } finally {
       setCloning(false);
+    }
+  };
+
+  const handleDeleteRepository = async () => {
+    setDeleting(true);
+    try {
+      await apiClient.del(`/api/projects/${encodeURIComponent(projectId)}/clone`);
+      toast({ title: "仓库已删除", description: "可重新克隆仓库" });
+    } catch (err) {
+      toast({
+        title: "删除失败",
+        description: getApiErrorMessage(err),
+        variant: "destructive",
+      });
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -1010,13 +1279,30 @@ function GitConfigCard({ projectId }: { projectId: string }) {
           )}
 
           <div className="flex items-center justify-between gap-3 pt-2">
-            <Button
-              variant="outline"
-              disabled={cloning || !form.repo_url.trim()}
-              onClick={handleClone}
-            >
-              {cloning ? "克隆中…" : "克隆仓库"}
-            </Button>
+            <div className="flex items-center gap-3">
+              <Button
+                variant="outline"
+                disabled={cloning || !form.repo_url.trim()}
+                onClick={handleClone}
+              >
+                {cloning ? "克隆中…" : "克隆仓库"}
+              </Button>
+              <Button
+                variant="destructive"
+                disabled={deleting}
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "确定删除仓库文件？这将删除整个工作区（包括所有分支和工作目录），此操作不可恢复，但可以重新克隆。",
+                    )
+                  ) {
+                    handleDeleteRepository();
+                  }
+                }}
+              >
+                {deleting ? "删除中…" : "删除仓库"}
+              </Button>
+            </div>
             <div className="flex items-center gap-3">
               <Button
                 variant="outline"
@@ -1053,7 +1339,9 @@ function BranchManagementCard({ projectId }: { projectId: string }) {
 
   const { data: remoteBranchesData } = useRemoteBranches(projectId);
   const remoteBranchSet = new Set(remoteBranchesData?.branches ?? []);
-  const localMerge = useLocalMerge(projectId);
+  const mergeInteractive = useMergeInteractive(projectId);
+  const commitMergeMutation = useCommitMerge(projectId);
+  const abortMergeMutation = useAbortMerge(projectId);
 
   // 合并本地和远端分支，去重，用于本地合并弹窗
   const remoteBranches = remoteBranchesData?.branches ?? [];
@@ -1073,6 +1361,43 @@ function BranchManagementCard({ projectId }: { projectId: string }) {
   const [mergeTarget, setMergeTarget] = useState("");
   const [mergeStrategy, setMergeStrategy] = useState("merge");
   const [deleteSource, setDeleteSource] = useState(false);
+  const [mergeConflictData, setMergeConflictData] = useState<{
+    sourceBranch: string;
+    targetBranch: string;
+    conflicts: string[];
+    cwd: string;
+    deleteSource: boolean;
+  } | null>(null);
+
+  const handleExecuteMerge = async () => {
+    try {
+      const result = await mergeInteractive.mutateAsync({
+        source_branch: mergeSource,
+        target_branch: mergeTarget,
+        strategy: mergeStrategy,
+        delete_source: deleteSource,
+      });
+
+      if (result.ok) {
+        toast({ title: "合并成功", description: result.output?.slice(0, 200) });
+        setMergeDialogOpen(false);
+      } else if (result.conflicts?.length > 0) {
+        // 进入冲突解决模式
+        setMergeConflictData({
+          sourceBranch: mergeSource,
+          targetBranch: mergeTarget,
+          conflicts: result.conflicts,
+          cwd: result.cwd,
+          deleteSource: deleteSource ?? false,
+        });
+        setMergeDialogOpen(false);
+      } else {
+        toast({ title: "合并失败", description: result.output?.slice(0, 200), variant: "destructive" });
+      }
+    } catch (err: any) {
+      toast({ title: "合并失败", description: err?.message || String(err), variant: "destructive" });
+    }
+  };
 
   const handleCreateBranch = () => {
     if (!newBranchName.trim()) return;
@@ -1432,31 +1757,42 @@ function BranchManagementCard({ projectId }: { projectId: string }) {
                 取消
               </Button>
               <Button
-                disabled={localMerge.isPending || !mergeSource || !mergeTarget || mergeSource === mergeTarget}
-                onClick={() => {
-                  localMerge.mutate(
-                    { source_branch: mergeSource, target_branch: mergeTarget, strategy: mergeStrategy, delete_source: deleteSource },
-                    {
-                      onSuccess: (data) => {
-                        if (data.ok) {
-                          toast({ title: "合并成功", description: data.output?.slice(0, 200) });
-                          setMergeDialogOpen(false);
-                        } else {
-                          toast({ title: "合并失败", description: data.conflicts?.length ? `冲突文件: ${data.conflicts.join(", ")}` : data.output?.slice(0, 200), variant: "destructive" });
-                        }
-                      },
-                      onError: (err: any) => {
-                        toast({ title: "合并出错", description: err?.message || "未知错误", variant: "destructive" });
-                      },
-                    }
-                  );
-                }}
+                disabled={mergeInteractive.isPending || !mergeSource || !mergeTarget || mergeSource === mergeTarget}
+                onClick={handleExecuteMerge}
               >
-                {localMerge.isPending ? "合并中…" : "执行合并"}
+                {mergeInteractive.isPending ? "合并中…" : "执行合并"}
               </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
+      )}
+
+      {/* 冲突解决面板（独立模式） */}
+      {mergeConflictData && (
+        <MergeConflictPanel
+          projectId={projectId}
+          cwd={mergeConflictData.cwd}
+          sourceBranch={mergeConflictData.sourceBranch}
+          targetBranch={mergeConflictData.targetBranch}
+          conflictFiles={mergeConflictData.conflicts}
+          onCommitMerge={async () => {
+            await commitMergeMutation.mutateAsync({
+              message: `Merge ${mergeConflictData.sourceBranch} into ${mergeConflictData.targetBranch} (conflicts resolved)`,
+              delete_source: mergeConflictData.deleteSource ? mergeConflictData.sourceBranch : "",
+            });
+          }}
+          onAbortMerge={async () => {
+            await abortMergeMutation.mutateAsync();
+          }}
+          onResolved={() => {
+            toast({ title: "合并完成", description: "冲突已解决并提交" });
+            setMergeConflictData(null);
+          }}
+          onAbort={() => {
+            toast({ title: "合并已放弃" });
+            setMergeConflictData(null);
+          }}
+        />
       )}
     </div>
   );

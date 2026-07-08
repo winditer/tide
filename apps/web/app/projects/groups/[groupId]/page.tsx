@@ -61,7 +61,6 @@ import {
 import {
   useAddGroupMember,
   useAddGroupUserMember,
-  useAdminUsers,
   useAuth,
   useCleanupBranches,
   useCreateBranch,
@@ -70,6 +69,7 @@ import {
   useDeleteGroupWorkflow,
   useDeleteProjectGroup,
   useFetchRemote,
+  useGroupAvailableUsers,
   useGroupBranches,
   useGroupChanges,
   useGroupCommits,
@@ -78,7 +78,9 @@ import {
   useGroupUserMembers,
   useGroupVersions,
   useGroupWorkflow,
-  useLocalMerge,
+  useMergeInteractive,
+  useCommitMerge,
+  useAbortMerge,
   useProjectGroup,
   useProjects,
   usePullBranch,
@@ -101,7 +103,7 @@ import {
   getGroupCommitDiff,
   appPath,
 } from "@tide/core";
-import { KnowledgeGraphCard } from "@tide/views";
+import { KnowledgeGraphCard, MergeConflictPanel } from "@tide/views";
 import { FileTree } from "@tide/views/code-editor";
 
 // ── Types & helpers ────────────────────────────────────────────────────────
@@ -877,7 +879,9 @@ function ProjectBranchCard({
   const pullBranch = usePullBranch(project.project_id);
   const { data: remoteBranchesData } = useRemoteBranches(project.project_id);
   const remoteBranchSet = new Set(remoteBranchesData?.branches ?? []);
-  const localMerge = useLocalMerge(project.project_id);
+  const mergeInteractive = useMergeInteractive(project.project_id);
+  const commitMergeMutation = useCommitMerge(project.project_id);
+  const abortMergeMutation = useAbortMerge(project.project_id);
   const qc = useQueryClient();
 
   // 合并本地和远端分支，去重，用于本地合并弹窗
@@ -893,6 +897,44 @@ function ProjectBranchCard({
   const [mergeTarget, setMergeTarget] = useState("");
   const [mergeStrategy, setMergeStrategy] = useState("merge");
   const [deleteSource, setDeleteSource] = useState(false);
+  const [mergeConflictData, setMergeConflictData] = useState<{
+    sourceBranch: string;
+    targetBranch: string;
+    conflicts: string[];
+    cwd: string;
+    deleteSource: boolean;
+  } | null>(null);
+
+  const handleExecuteMerge = async () => {
+    try {
+      const result = await mergeInteractive.mutateAsync({
+        source_branch: mergeSource,
+        target_branch: mergeTarget,
+        strategy: mergeStrategy,
+        delete_source: deleteSource,
+      });
+
+      if (result.ok) {
+        toast({ title: "合并成功", description: result.output?.slice(0, 200) });
+        setMergeDialogOpen(false);
+        qc.invalidateQueries({ queryKey: ["project-group", groupId, "branches"] });
+      } else if (result.conflicts?.length > 0) {
+        // 进入冲突解决模式
+        setMergeConflictData({
+          sourceBranch: mergeSource,
+          targetBranch: mergeTarget,
+          conflicts: result.conflicts,
+          cwd: result.cwd,
+          deleteSource: deleteSource ?? false,
+        });
+        setMergeDialogOpen(false);
+      } else {
+        toast({ title: "合并失败", description: result.output?.slice(0, 200), variant: "destructive" });
+      }
+    } catch (err: any) {
+      toast({ title: "合并失败", description: err?.message || String(err), variant: "destructive" });
+    }
+  };
 
   const handleCreate = () => {
     if (!newBranchName.trim()) return;
@@ -1128,32 +1170,43 @@ function ProjectBranchCard({
             <DialogFooter>
               <Button variant="outline" onClick={() => setMergeDialogOpen(false)}>取消</Button>
               <Button
-                disabled={localMerge.isPending || !mergeSource || !mergeTarget || mergeSource === mergeTarget}
-                onClick={() => {
-                  localMerge.mutate(
-                    { source_branch: mergeSource, target_branch: mergeTarget, strategy: mergeStrategy, delete_source: deleteSource },
-                    {
-                      onSuccess: (data) => {
-                        if (data.ok) {
-                          toast({ title: "合并成功", description: data.output?.slice(0, 200) });
-                          setMergeDialogOpen(false);
-                          qc.invalidateQueries({ queryKey: ["project-group", groupId, "branches"] });
-                        } else {
-                          toast({ title: "合并失败", description: data.conflicts?.length ? `冲突文件: ${data.conflicts.join(", ")}` : data.output?.slice(0, 200), variant: "destructive" });
-                        }
-                      },
-                      onError: (err: any) => {
-                        toast({ title: "合并出错", description: err?.message || "未知错误", variant: "destructive" });
-                      },
-                    }
-                  );
-                }}
+                disabled={mergeInteractive.isPending || !mergeSource || !mergeTarget || mergeSource === mergeTarget}
+                onClick={handleExecuteMerge}
               >
-                {localMerge.isPending ? "合并中…" : "执行合并"}
+                {mergeInteractive.isPending ? "合并中…" : "执行合并"}
               </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
+      )}
+
+      {/* 冲突解决面板（独立模式） */}
+      {mergeConflictData && (
+        <MergeConflictPanel
+          projectId={project.project_id}
+          cwd={mergeConflictData.cwd}
+          sourceBranch={mergeConflictData.sourceBranch}
+          targetBranch={mergeConflictData.targetBranch}
+          conflictFiles={mergeConflictData.conflicts}
+          onCommitMerge={async () => {
+            await commitMergeMutation.mutateAsync({
+              message: `Merge ${mergeConflictData.sourceBranch} into ${mergeConflictData.targetBranch} (conflicts resolved)`,
+              delete_source: mergeConflictData.deleteSource ? mergeConflictData.sourceBranch : "",
+            });
+            qc.invalidateQueries({ queryKey: ["project-group", groupId, "branches"] });
+          }}
+          onAbortMerge={async () => {
+            await abortMergeMutation.mutateAsync();
+          }}
+          onResolved={() => {
+            toast({ title: "合并完成", description: "冲突已解决并提交" });
+            setMergeConflictData(null);
+          }}
+          onAbort={() => {
+            toast({ title: "合并已放弃" });
+            setMergeConflictData(null);
+          }}
+        />
       )}
     </div>
   );
@@ -1855,7 +1908,9 @@ function AddUserMemberDialog({
 }) {
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
-  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [selectedUserIds, setSelectedUserIds] = useState<Set<string>>(
+    new Set(),
+  );
   const [role, setRole] = useState("member");
   const [error, setError] = useState<string | null>(null);
 
@@ -1870,35 +1925,47 @@ function AddUserMemberDialog({
     if (open) {
       setSearch("");
       setDebounced("");
-      setSelectedUserId(null);
+      setSelectedUserIds(new Set());
       setRole("member");
       setError(null);
     }
   }, [open]);
 
-  const usersQuery = useAdminUsers({
+  const usersQuery = useGroupAvailableUsers(groupId, {
     q: debounced || undefined,
     page: 1,
     page_size: 20,
   });
 
   const candidates = useMemo(() => {
-    const list = usersQuery.data?.users ?? [];
+    const list = usersQuery.data?.items ?? [];
     return list.filter((u) => !excludeIds.has(u.id));
   }, [usersQuery.data, excludeIds]);
 
+  const toggleUser = (id: string) => {
+    setSelectedUserIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
   const submit = async () => {
     setError(null);
-    if (!selectedUserId) {
-      setError("请选择一名用户");
+    if (selectedUserIds.size === 0) {
+      setError("请至少选择一名用户");
       return;
     }
     try {
-      await addMutation.mutateAsync({ user_id: selectedUserId, role });
-      const picked = candidates.find((u) => u.id === selectedUserId);
+      await Promise.all(
+        Array.from(selectedUserIds).map((user_id) =>
+          addMutation.mutateAsync({ user_id, role }),
+        ),
+      );
       toast({
         title: "已添加成员",
-        description: picked?.username ?? selectedUserId,
+        description: `成功添加 ${selectedUserIds.size} 名用户`,
       });
       onClose();
     } catch (err) {
@@ -1954,12 +2021,12 @@ function AddUserMemberDialog({
             ) : (
               <ul className="divide-y divide-border/50">
                 {candidates.map((u) => {
-                  const active = selectedUserId === u.id;
+                  const active = selectedUserIds.has(u.id);
                   return (
                     <li key={u.id}>
                       <button
                         type="button"
-                        onClick={() => setSelectedUserId(u.id)}
+                        onClick={() => toggleUser(u.id)}
                         className={[
                           "flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left transition-smooth",
                           active
@@ -1968,6 +2035,16 @@ function AddUserMemberDialog({
                         ].join(" ")}
                       >
                         <div className="flex min-w-0 items-center gap-2">
+                          <span
+                            className={
+                              "flex h-5 w-5 shrink-0 items-center justify-center rounded-md border text-[10px] " +
+                              (active
+                                ? "border-indigo-500 bg-indigo-500 text-white"
+                                : "border-border bg-background text-muted-foreground")
+                            }
+                          >
+                            {active ? "✓" : ""}
+                          </span>
                           <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500/20 to-indigo-500/5 text-[11px] font-semibold uppercase text-indigo-500">
                             {(u.username || "?").slice(0, 2)}
                           </div>
@@ -2005,8 +2082,16 @@ function AddUserMemberDialog({
                 用户 ID（手动）
               </span>
               <Input
-                value={selectedUserId ?? ""}
-                onChange={(e) => setSelectedUserId(e.target.value || null)}
+                value={
+                  selectedUserIds.size === 1
+                    ? Array.from(selectedUserIds)[0]
+                    : ""
+                }
+                onChange={(e) =>
+                  setSelectedUserIds(
+                    e.target.value ? new Set([e.target.value]) : new Set(),
+                  )
+                }
                 placeholder="粘贴目标用户的 UUID"
                 className="rounded-lg border-border/50 font-mono text-xs"
               />
@@ -2033,14 +2118,17 @@ function AddUserMemberDialog({
         </div>
 
         <DialogFooter>
+          <div className="mr-auto text-xs text-muted-foreground">
+            已选 {selectedUserIds.size} 名用户
+          </div>
           <Button variant="outline" onClick={onClose}>
             取消
           </Button>
           <Button
-            disabled={!selectedUserId || addMutation.isPending}
+            disabled={selectedUserIds.size === 0 || addMutation.isPending}
             onClick={submit}
           >
-            {addMutation.isPending ? "添加中…" : "添加成员"}
+            {addMutation.isPending ? "添加中…" : "添加选中用户"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -2290,6 +2378,9 @@ function SettingsPane({
 
 function WorkflowBindingCard({ groupId, members = [] }: { groupId: string; members?: ProjectGroupMember[] }) {
   const [selectedWfId, setSelectedWfId] = useState("");
+  const [flowMode, setFlowMode] = useState<
+    "default_workflow" | "custom_workflow" | "freeform"
+  >("default_workflow");
   const workflowsQuery = useWorkflows();
   const bindingQuery = useGroupWorkflow(groupId);
   const setMutation = useSetGroupWorkflow();
@@ -2298,6 +2389,13 @@ function WorkflowBindingCard({ groupId, members = [] }: { groupId: string; membe
   const workflows = workflowsQuery.data ?? [];
   const enabledWorkflows = workflows.filter((w) => w.enabled);
   const binding = bindingQuery.data;
+
+  // 从后端设置同步流转模式（仅在数据加载后初始化一次）
+  useEffect(() => {
+    if (binding?.flow_mode) {
+      setFlowMode(binding.flow_mode as typeof flowMode);
+    }
+  }, [binding?.flow_mode]);
 
   const currentWorkflowName = binding?.workflow_id
     ? binding.workflow_name ??
@@ -2310,10 +2408,63 @@ function WorkflowBindingCard({ groupId, members = [] }: { groupId: string; membe
     ...enabledWorkflows.map((wf) => ({ value: wf.id, label: wf.name })),
   ];
 
+  const isFreeform = flowMode === "freeform";
+
+  const FLOW_MODE_OPTIONS: {
+    value: typeof flowMode;
+    label: string;
+    desc: string;
+  }[] = [
+    {
+      value: "default_workflow",
+      label: "默认工作流",
+      desc: "使用系统内建 4 阶段流程",
+    },
+    {
+      value: "custom_workflow",
+      label: "自定义工作流",
+      desc: "绑定自定义工作流",
+    },
+    {
+      value: "freeform",
+      label: "自由协作",
+      desc: "无工作流，直接分配",
+    },
+  ];
+
+  const handleSelectFlowMode = async (
+    mode: "default_workflow" | "custom_workflow" | "freeform"
+  ) => {
+    if (mode === flowMode) return;
+    setFlowMode(mode);
+    try {
+      if (mode === "freeform") {
+        // freeform 无需工作流，立即持久化模式
+        await setMutation.mutateAsync({ groupId, flowMode: mode });
+      } else if (binding?.workflow_id) {
+        // 已绑定工作流时，切回工作流模式立即持久化
+        await setMutation.mutateAsync({
+          groupId,
+          workflowId: binding.workflow_id,
+          flowMode: mode,
+        });
+      } else {
+        // 尚未绑定工作流，仅持久化模式
+        await setMutation.mutateAsync({ groupId, flowMode: mode });
+      }
+    } catch (err) {
+      toast({
+        title: "切换模式失败",
+        description: getApiErrorMessage(err),
+        variant: "destructive",
+      });
+    }
+  };
+
   const handleBind = async () => {
     if (!selectedWfId) return;
     try {
-      await setMutation.mutateAsync({ groupId, workflowId: selectedWfId });
+      await setMutation.mutateAsync({ groupId, workflowId: selectedWfId, flowMode });
       const wf = workflows.find((w) => w.id === selectedWfId);
       toast({ title: "已绑定工作流", description: wf?.name ?? selectedWfId });
       setSelectedWfId("");
@@ -2340,18 +2491,59 @@ function WorkflowBindingCard({ groupId, members = [] }: { groupId: string; membe
   };
 
   return (
-    <div className="bg-card rounded-xl shadow-card p-6 space-y-4">
-      <div className="flex items-start justify-between gap-2">
+    <>
+      {/* Flow Mode Selector */}
+      <div className="bg-card rounded-xl shadow-card p-6 space-y-4">
         <div>
-          <h2 className="flex items-center gap-2 text-base font-medium">
-            <WorkflowIcon className="h-4 w-4 text-muted-foreground" />
-            工作流绑定
-          </h2>
+          <h2 className="text-base font-medium">工作流模式</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            为项目组绑定的工作流可在跨仓库工作项中调用
+            选择项目组下工作项的默认流转方式。
           </p>
         </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          {FLOW_MODE_OPTIONS.map((opt) => {
+            const active = flowMode === opt.value;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => handleSelectFlowMode(opt.value)}
+                disabled={setMutation.isPending}
+                className={`rounded-lg border p-3 text-left transition-smooth disabled:opacity-60 ${
+                  active
+                    ? "border-primary bg-primary/5 ring-1 ring-primary"
+                    : "border-border hover:border-primary/50"
+                }`}
+              >
+                <div className="text-sm font-medium">{opt.label}</div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {opt.desc}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+        {isFreeform && (
+          <p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+            工作项可直接分配给成员或专家团，无需经过工作流管线。
+          </p>
+        )}
       </div>
+
+      {/* Workflow Binding */}
+      {!isFreeform && (
+      <div className="bg-card rounded-xl shadow-card p-6 space-y-4">
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <h2 className="flex items-center gap-2 text-base font-medium">
+              <WorkflowIcon className="h-4 w-4 text-muted-foreground" />
+              工作流绑定
+            </h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              为项目组绑定的工作流可在跨仓库工作项中调用
+            </p>
+          </div>
+        </div>
 
       {bindingQuery.isLoading ? (
         <div className="py-6 text-center text-sm text-muted-foreground">
@@ -2405,7 +2597,9 @@ function WorkflowBindingCard({ groupId, members = [] }: { groupId: string; membe
             : "绑定工作流"}
         </Button>
       </div>
-    </div>
+      </div>
+      )}
+    </>
   );
 }
 
@@ -2629,7 +2823,7 @@ function AddMemberDialog({
   onClose: () => void;
 }) {
   const [search, setSearch] = useState("");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [role, setRole] = useState<"member" | "primary">(
     primaryExists ? "member" : "primary",
   );
@@ -2640,11 +2834,20 @@ function AddMemberDialog({
   useEffect(() => {
     if (open) {
       setSearch("");
-      setSelectedId(null);
+      setSelectedIds(new Set());
       setRole(primaryExists ? "member" : "primary");
       setError(null);
     }
   }, [open, primaryExists]);
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const filtered = useMemo(() => {
     const kw = search.trim().toLowerCase();
@@ -2659,16 +2862,22 @@ function AddMemberDialog({
 
   const submit = async () => {
     setError(null);
-    if (!selectedId) {
-      setError("请选择一个项目");
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) {
+      setError("请至少选择一个项目");
+      return;
+    }
+    if (role === "primary" && ids.length > 1) {
+      setError("Primary 角色一次只能添加一个项目");
       return;
     }
     try {
-      const picked = candidates.find((p) => p.id === selectedId);
-      await addMutation.mutateAsync({ project_id: selectedId, role });
+      await Promise.all(
+        ids.map((id) => addMutation.mutateAsync({ project_id: id, role })),
+      );
       toast({
         title: "已添加成员",
-        description: picked?.name ?? selectedId,
+        description: `成功添加 ${ids.length} 个项目`,
       });
       onClose();
     } catch (err) {
@@ -2684,7 +2893,7 @@ function AddMemberDialog({
             <Plus className="h-4 w-4" /> 添加成员项目
           </DialogTitle>
           <DialogDescription>
-            从已注册的项目中挑选一个加入此项目组。
+            从已注册的项目中挑选一个或多个加入此项目组。
           </DialogDescription>
         </DialogHeader>
 
@@ -2696,7 +2905,11 @@ function AddMemberDialog({
               placeholder="搜索项目名称或路径…"
               className="rounded-lg border-border/50"
             />
-            <RoleToggle value={role} onChange={setRole} />
+            <RoleToggle
+              value={role}
+              onChange={setRole}
+              disablePrimary={primaryExists}
+            />
           </div>
 
           <div className="max-h-72 overflow-y-auto rounded-lg border border-border/60 bg-muted/30">
@@ -2711,11 +2924,11 @@ function AddMemberDialog({
             ) : (
               <ul className="divide-y divide-border/40">
                 {filtered.map((p) => {
-                  const active = selectedId === p.id;
+                  const active = selectedIds.has(p.id);
                   return (
                     <li
                       key={p.id}
-                      onClick={() => setSelectedId(p.id)}
+                      onClick={() => toggleSelect(p.id)}
                       className={
                         "flex cursor-pointer items-center gap-3 px-3 py-2 transition-colors " +
                         (active
@@ -2725,7 +2938,7 @@ function AddMemberDialog({
                     >
                       <span
                         className={
-                          "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[10px] " +
+                          "flex h-5 w-5 shrink-0 items-center justify-center rounded-md border text-[10px] " +
                           (active
                             ? "border-primary bg-primary text-primary-foreground"
                             : "border-border bg-background text-muted-foreground")
@@ -2762,11 +2975,17 @@ function AddMemberDialog({
         </div>
 
         <DialogFooter>
+          <div className="mr-auto text-xs text-muted-foreground">
+            已选 {selectedIds.size} 个项目
+          </div>
           <Button variant="outline" onClick={onClose}>
             取消
           </Button>
-          <Button onClick={submit} disabled={addMutation.isPending}>
-            {addMutation.isPending ? "添加中…" : "添加成员"}
+          <Button
+            onClick={submit}
+            disabled={addMutation.isPending || selectedIds.size === 0}
+          >
+            {addMutation.isPending ? "添加中…" : "添加选中项目"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -2777,27 +2996,35 @@ function AddMemberDialog({
 function RoleToggle({
   value,
   onChange,
+  disablePrimary = false,
 }: {
   value: "member" | "primary";
   onChange: (v: "member" | "primary") => void;
+  disablePrimary?: boolean;
 }) {
   return (
     <div className="flex shrink-0 overflow-hidden rounded-lg border border-border/60 text-xs">
-      {(["member", "primary"] as const).map((opt) => (
-        <button
-          key={opt}
-          type="button"
-          onClick={() => onChange(opt)}
-          className={
-            "px-3 py-1.5 font-medium uppercase tracking-wider transition-colors " +
-            (value === opt
-              ? "bg-foreground text-background"
-              : "bg-background text-muted-foreground hover:text-foreground")
-          }
-        >
-          {opt}
-        </button>
-      ))}
+      {(["member", "primary"] as const).map((opt) => {
+        const disabled = opt === "primary" && disablePrimary;
+        return (
+          <button
+            key={opt}
+            type="button"
+            disabled={disabled}
+            title={disabled ? "已存在 primary 项目，无法再添加" : undefined}
+            onClick={() => !disabled && onChange(opt)}
+            className={
+              "px-3 py-1.5 font-medium uppercase tracking-wider transition-colors " +
+              (disabled ? "cursor-not-allowed opacity-50 " : "") +
+              (value === opt
+                ? "bg-foreground text-background"
+                : "bg-background text-muted-foreground hover:text-foreground")
+            }
+          >
+            {opt}
+          </button>
+        );
+      })}
     </div>
   );
 }

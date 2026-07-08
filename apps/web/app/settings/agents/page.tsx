@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import {
   Badge,
   Button,
@@ -32,6 +31,8 @@ import {
   Server,
   Trash2,
 } from "lucide-react";
+import { RemoteAgentGuide } from "@tide/views/remote-agents/RemoteAgentGuide";
+import { AgentFormDialog } from "../remote-agents/agent-dialogs";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -115,6 +116,8 @@ export default function SettingsAgentsPage() {
   const [deletingAgent, setDeletingAgent] = useState<AgentInfo | null>(null);
   // 删除意图：reset=重置本地 Agent 的配置覆盖；remote=注销远程 Agent
   const [deleteMode, setDeleteMode] = useState<"reset" | "remote">("reset");
+  // 注册远程 Agent 弹窗
+  const [registerOpen, setRegisterOpen] = useState(false);
 
   const isAdmin = user?.role === "admin";
 
@@ -205,17 +208,35 @@ export default function SettingsAgentsPage() {
     });
   }, [agents, configMap]);
 
-  // Filter by search
+  // Filter by scope + search
   const filtered = useMemo(() => {
-    if (!debounced) return mergedAgents;
-    const q = debounced.toLowerCase();
-    return mergedAgents.filter(
-      (a) =>
-        a.id.toLowerCase().includes(q) ||
-        a.displayName.toLowerCase().includes(q) ||
-        (a.displayDescription || "").toLowerCase().includes(q)
-    );
-  }, [mergedAgents, debounced]);
+    let list = mergedAgents;
+
+    // 作用域筛选：全局展示完整注册表；项目/个人仅展示在该作用域下配置过的 Agent。
+    // configMap 已由后端按当前 scope 精确返回，故 a.config 存在即代表匹配当前作用域。
+    if (scope === "project") {
+      list = list.filter(
+        (a) =>
+          !!a.config &&
+          a.config.scope === "project" &&
+          (!projectTarget || a.config.scope_target === projectTarget)
+      );
+    } else if (scope === "personal") {
+      list = list.filter((a) => !!a.config && a.config.scope === "personal");
+    }
+
+    if (debounced) {
+      const q = debounced.toLowerCase();
+      list = list.filter(
+        (a) =>
+          a.id.toLowerCase().includes(q) ||
+          a.displayName.toLowerCase().includes(q) ||
+          (a.displayDescription || "").toLowerCase().includes(q)
+      );
+    }
+
+    return list;
+  }, [mergedAgents, debounced, scope, projectTarget]);
 
   // Check if current scope is editable
   const canEdit = useMemo(() => {
@@ -390,11 +411,17 @@ export default function SettingsAgentsPage() {
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              <Link href="/settings/remote-agents">
-                <Button variant="outline" className="gap-1.5">
-                  <Plus className="h-4 w-4" /> 添加远程 Agent
-                </Button>
-              </Link>
+              <RemoteAgentGuide />
+              <Button
+                variant="outline"
+                onClick={() => void fetchAgents()}
+                className="gap-1.5"
+              >
+                <RotateCcw className="h-4 w-4" /> 刷新
+              </Button>
+              <Button onClick={() => setRegisterOpen(true)} className="gap-1.5">
+                <Plus className="h-4 w-4" /> 注册 Agent
+              </Button>
             </div>
           </div>
         </header>
@@ -478,7 +505,7 @@ export default function SettingsAgentsPage() {
                         className="border-b border-border/30 hover:bg-muted/20 transition-colors"
                       >
                         {/* Type */}
-                        <td className="px-4 py-3">
+                        <td className="px-4 py-3 whitespace-nowrap">
                           <Badge
                             variant={agent.type === "remote" ? "secondary" : "default"}
                             className="gap-1"
@@ -492,24 +519,33 @@ export default function SettingsAgentsPage() {
                           </Badge>
                         </td>
                         {/* Name */}
-                        <td className="px-4 py-3">
-                          <div className="font-medium">
+                        <td className="px-4 py-3 max-w-[200px]">
+                          <div
+                            className="font-medium truncate"
+                            title={cfg?.display_name || agent.name}
+                          >
                             {cfg?.display_name || agent.name}
                           </div>
                           {(cfg?.description || agent.description) && (
-                            <div className="text-xs text-muted-foreground mt-0.5 line-clamp-1">
+                            <div
+                              className="text-xs text-muted-foreground mt-0.5 truncate"
+                              title={cfg?.description || agent.description || undefined}
+                            >
                               {cfg?.description || agent.description}
                             </div>
                           )}
                         </td>
                         {/* ID */}
-                        <td className="px-4 py-3">
-                          <code className="text-xs bg-muted px-1.5 py-0.5 rounded">
+                        <td className="px-4 py-3 max-w-[160px]">
+                          <code
+                            className="text-xs bg-muted px-1.5 py-0.5 rounded inline-block max-w-full truncate align-middle"
+                            title={agent.id}
+                          >
                             {agent.id}
                           </code>
                         </td>
                         {/* Model */}
-                        <td className="px-4 py-3 text-muted-foreground">
+                        <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
                           {cfg?.model_override || agent.model_override || "-"}
                         </td>
                         {/* Status */}
@@ -685,7 +721,7 @@ export default function SettingsAgentsPage() {
                 <span className="font-medium text-foreground">
                   {deletingAgent?.name}
                 </span>
-                ？删除后将从列表中移除，可通过“添加远程 Agent”重新接入。
+                ？删除后将从列表中移除，可通过“注册 Agent”重新接入。
               </p>
             ) : (
               <p className="text-sm text-muted-foreground">
@@ -709,6 +745,43 @@ export default function SettingsAgentsPage() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        {/* Register Remote Agent Dialog */}
+        <AgentFormDialog
+          mode="create"
+          open={registerOpen}
+          onOpenChange={setRegisterOpen}
+          onSubmit={async (value) => {
+            await apiClient.post("/api/remote-agents", {
+              name: value.name,
+              description: value.description || undefined,
+              agent_card_url: value.agent_card_url || undefined,
+              endpoint_url: value.endpoint_url || undefined,
+              auth_type: value.auth_type,
+              auth_credentials: value.auth_credentials || undefined,
+              auth_header_name: value.auth_header_name || undefined,
+              approval_policy: value.approval_policy,
+              timeout_ms: value.timeout_ms,
+              max_retries: value.max_retries,
+              scope: value.scope,
+              scope_target: value.scope_target,
+            });
+            toast({ title: "已注册远程 Agent", description: value.name });
+            setRegisterOpen(false);
+            void fetchAgents();
+            void fetchConfigs();
+          }}
+          discover={async (url) =>
+            apiClient.post<{
+              url: string;
+              name: string | null;
+              description: string | null;
+              endpoint_url: string | null;
+              skills: any[];
+              capabilities: { streaming?: boolean; pushNotifications?: boolean };
+            }>("/api/remote-agents/discover", { url })
+          }
+        />
       </main>
     </TooltipProvider>
   );

@@ -28,10 +28,12 @@ export {
   approveTask,
   rejectTask,
   retryTask,
+  continueTask,
   uploadTaskAttachments,
 } from "./api/tasks";
 export type {
   CreateTaskParams,
+  ContinueTaskParams,
   ListTasksParams,
   ListTasksResponse,
   ApprovalAction,
@@ -216,6 +218,7 @@ export {
   deleteWorkflow,
   toggleWorkflow,
   duplicateWorkflow,
+  setDefaultWorkflow,
   runWorkflow,
   fetchWorkflowRuns,
   fetchWorkflowRun,
@@ -236,6 +239,7 @@ export {
   useDeleteWorkflow,
   useToggleWorkflow,
   useDuplicateWorkflow,
+  useSetDefaultWorkflow,
   useRunWorkflow,
   useWorkflowRuns,
   useWorkflowRun,
@@ -326,6 +330,12 @@ export type {
   WorkItemSourceType,
   WorkItemPriority,
   WorkItemStatus,
+  WorkItemFlowMode,
+  WorkItemAssignment,
+  WorkItemContextEntry,
+  WorkItemComment,
+  MentionItem,
+  CommentTaskStatus,
   ProjectSettings,
   WorkItemBoardColumn,
   WorkItemBoard,
@@ -348,6 +358,10 @@ export {
   getProjectWorkflow,
   bindProjectWorkflow,
   unbindProjectWorkflow,
+  getFreeformStatusList,
+  setFreeformStatusList,
+  getGlobalFreeformStatus,
+  setGlobalFreeformStatus,
   addArtifact,
   removeArtifact,
   uploadWorkItemAttachments,
@@ -355,6 +369,13 @@ export {
   batchCreateWorkItems,
   resolveMerge,
   optimizeDescription,
+  getWorkItemAssignments,
+  assignWorkItem,
+  updateWorkItemAssignment,
+  getWorkItemContext,
+  addWorkItemContext,
+  getWorkItemComments,
+  createWorkItemComment,
   type WorkItemFilters,
   type AIDecomposedItem,
   type AIDecomposeResponse,
@@ -365,6 +386,8 @@ export {
   type OptimizeDescriptionParams,
   type OptimizeDescriptionResponse,
   type UploadWorkItemAttachmentsResponse,
+  type AssignWorkItemParams,
+  type FreeformStatusItem,
 } from "./api/work-items";
 export {
   useWorkItemBoard,
@@ -374,18 +397,50 @@ export {
   useWorkItemCrossRepoResults,
   useCreateWorkItem,
   useUpdateWorkItem,
+  useUpdateWorkItemStatus,
   useDeleteWorkItem,
   useMoveWorkItem,
   useProjectWorkflow,
   useBindProjectWorkflow,
   useUnbindProjectWorkflow,
+  useFreeformStatusList,
+  useSetFreeformStatusList,
+  useGlobalFreeformStatusList,
+  useSetGlobalFreeformStatusList,
   useAddArtifact,
   useRemoveArtifact,
   useAIDecompose,
   useBatchCreateWorkItems,
   useResolveMerge,
   useOptimizeDescription,
+  useWorkItemAssignments,
+  useWorkItemContext,
+  useAssignWorkItem,
+  useUpdateWorkItemAssignment,
+  useAddWorkItemContext,
+  useWorkItemComments,
+  useCreateWorkItemComment,
 } from "./hooks/use-work-items";
+
+// Notifications
+export {
+  getNotifications,
+  getUnreadCount,
+  markNotificationRead,
+  markAllNotificationsRead,
+} from "./api/notifications";
+export type {
+  Notification,
+  NotificationType,
+  NotificationListResponse,
+  UnreadCountResponse,
+} from "./api/notifications";
+export {
+  useNotifications,
+  useUnreadCount,
+  useMarkNotificationRead,
+  useMarkAllRead,
+} from "./hooks/use-notifications";
 
 // Versions
 export type {
@@ -529,6 +584,7 @@ export {
   getGroupCommits,
   getGroupChanges,
   getGroupCommitDiff,
+  listGroupAvailableUsers,
 } from "./api/project-groups";
 export type {
   ProjectGroupSummary,
@@ -546,6 +602,8 @@ export type {
   GroupBranchProject,
   GroupCommitItem,
   GroupChangeProject,
+  GroupAvailableUser,
+  ListGroupAvailableUsersResponse,
 } from "./api/project-groups";
 export {
   useProjectGroups,
@@ -564,6 +622,7 @@ export {
   useGroupBranches,
   useGroupCommits,
   useGroupChanges,
+  useGroupAvailableUsers,
 } from "./hooks/use-project-groups";
 
 // Project group user members (与项目成员对称的项目组用户成员)
@@ -638,6 +697,9 @@ export {
   getRemoteBranches,
   localMergeBranches,
   fetchRemoteBranches,
+  mergeInteractive,
+  commitMerge,
+  abortMerge,
 } from "./api/git-audit";
 export type {
   GitCommit,
@@ -666,6 +728,9 @@ export {
   useRemoteBranches,
   useLocalMerge,
   useFetchRemote,
+  useMergeInteractive,
+  useCommitMerge,
+  useAbortMerge,
 } from "./hooks/use-git-audit";
 
 // Files (code editor)

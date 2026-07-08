@@ -281,7 +281,12 @@ export default function TaskDetailPage({
   const [resultCopied, setResultCopied] = useState(false);
 
   // --- 续聊 Chat input state & logic ---
-  const chat = useChat();
+  // 传入隔离键：每个任务使用独立的 localStorage key（tide.chat.history.<task_id>），
+  // 避免不同任务共享 _global_ 历史导致续聊消息串台。
+  const chat = useChat({
+    projectId: task?.id,
+    agentId: task?.agent_id,
+  });
   const chatRef = useRef(chat);
   chatRef.current = chat;
   const sendingRef = useRef(false);
@@ -299,11 +304,13 @@ export default function TaskDetailPage({
         sessionId: task?.session_id || undefined,
         projectCwd: task?.cwd || undefined,
         agentId: task?.agent_id || undefined,
+        lastTaskId: task?.id,
       });
+      // 续聊已创建新任务，停留在当前页面
     } finally {
       sendingRef.current = false;
     }
-  }, [draftInput, task?.session_id, task?.cwd, task?.agent_id]);
+  }, [draftInput, task?.session_id, task?.cwd, task?.agent_id, task?.id]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {

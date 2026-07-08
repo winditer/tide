@@ -7,6 +7,7 @@ import {
   Button,
 } from "@tide/ui";
 import {
+  appPath,
   useChat,
   useSessionQuery,
   type SessionMessage,
@@ -526,7 +527,7 @@ function RelatedTaskRow({ task }: { task: SessionRelatedTask }) {
   return (
     <li>
       <a
-        href={`/tasks/${task.id}`}
+        href={appPath(`/tasks/${task.id}`)}
         className="block rounded-lg border border-border/50 p-2.5 hover:bg-muted/50 hover:border-border transition-smooth"
       >
         <div className="flex items-start justify-between gap-2">

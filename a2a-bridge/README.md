@@ -29,7 +29,7 @@ a2a-bridge/
 │   ├── __init__.py
 │   ├── __main__.py       # python -m a2a_bridge 入口
 │   └── cli.py            # a2a-bridge 命令（setup/start/stop/status/doctor）
-├── config.py             # 配置管理（环境变量）
+├── bridge_config.py      # 配置管理（环境变量）
 ├── main.py               # FastAPI 应用入口（JSON-RPC + SSE）
 ├── agent_card.py         # /.well-known/agent.json 端点
 ├── executor.py           # 子进程执行器 + 任务生命周期
@@ -81,6 +81,40 @@ JSON-RPC 请求示例：
 
 ---
 
+## 安装
+
+### 方式 1：npx 直接运行（推荐，无需安装）
+
+```bash
+npx @tide-ai/a2a-bridge start
+npx @tide-ai/a2a-bridge setup --daemon
+npx @tide-ai/a2a-bridge doctor
+```
+
+### 方式 2：全局安装
+
+```bash
+npm install -g @tide-ai/a2a-bridge
+a2a-bridge start
+```
+
+如果遇到 EACCES 权限错误：
+```bash
+npm config set prefix ~/.local
+export PATH="$HOME/.local/bin:$PATH"  # 添加到 ~/.zshrc
+npm install -g @tide-ai/a2a-bridge
+```
+
+### 方式 3：Python 直接安装
+
+```bash
+cd a2a-bridge
+pip install -e .
+python3 -m a2a_bridge start
+```
+
+---
+
 ## 3. 快速部署
 
 ### 方式一：一键安装脚本（推荐）
@@ -124,13 +158,70 @@ a2a-bridge start -d    # 后台守护进程
 
 | 命令 | 说明 |
 |------|------|
-| `a2a-bridge setup` | 交互式配置向导，自动探测本地 CLI，可选注册系统服务 |
+| `a2a-bridge setup` | 交互式配置向导（HTTP 模式），自动探测本地 CLI，可选注册系统服务 |
+| `a2a-bridge setup --daemon` | 交互式配置 Daemon WebSocket 推模式 |
 | `a2a-bridge start` | 前台启动（Ctrl+C 停止） |
 | `a2a-bridge start -d` | 后台守护进程，写入 PID 文件 |
 | `a2a-bridge start --log-level debug` | 覆盖日志级别启动 |
 | `a2a-bridge stop` | 通过 PID 文件优雅停止后台进程 |
 | `a2a-bridge status` | 显示运行状态、CLI 探测结果与 Health 接口 |
 | `a2a-bridge doctor` | 诊断 Python / Node / Git / CLI / 配置 是否就绪 |
+
+#### Daemon WebSocket 推模式
+
+适用于 Bridge 部署在 NAT/防火墙后、无法被 Tide 主动 reach 的场景。启用后由 Bridge **主动连接** Tide 后端的 `/ws/daemon` 端点，在同一条 WebSocket 长连接上完成：**能力注册 → 心跳保活 → 任务反向下发 → 流式事件/结果回传**，替代传统 HTTP 拉模式。
+
+**工作机制：**
+
+```
+Bridge 启动（DAEMON_ENABLED=true）
+    │
+    ▼  主动连接 ws(s)://<tide-host>/ws/daemon?token=<DAEMON_TOKEN>
+register（上报 daemon_id / agents / skills / capability_tags / max_concurrency）
+    │
+    ▼  收到 registered（含服务端确认的 heartbeat_interval）
+每 HEARTBEAT_INTERVAL 秒发送 heartbeat（active_tasks / load / status）
+    │
+    ▼  收到 task_dispatch → 调用本地 CLI executor 执行
+task_event 逐步回传流式输出，终态发 task_result
+    │
+    ▼  断线后指数退避 + 随机 jitter 自动重连
+```
+
+**配置字段（写入 `.env`，完整示例见 [`.env.example`](./.env.example)）：**
+
+| 环境变量 | 默认值 | 说明 |
+|---------|--------|------|
+| `DAEMON_ENABLED` | `false` | 是否启用 Daemon 推模式（默认关闭，不影响现有 HTTP 模式） |
+| `TIDE_WS_URL` | (空) | Tide 后端 daemon WS 地址，如 `ws://localhost:8000/ws/daemon` |
+| `DAEMON_TOKEN` | (空) | 鉴权共享密钥，必须与后端 `DAEMON_TOKEN` 一致 |
+| `DAEMON_ID` | (空) | Daemon 标识；留空时优先读取 `~/.a2a-bridge/.daemon_id` 持久化值，首次自动生成 UUID 并回写（避免重启积累多条记录） |
+| `HEARTBEAT_INTERVAL` | `15` | 心跳间隔（秒）；服务端在 `registered` 中可下发不同值 |
+| `CAPABILITY_TAGS` | `code,review,docs` | 能力标签（逗号分隔），供后端调度匹配使用 |
+| `BRIDGE_NAME` | (空) | 显示名称前缀（如 `dev/codex`）；留空回退主机名，再回退 daemon_id 前 8 位 |
+
+> 后端侧需配置**相同的** `DAEMON_TOKEN` 环境变量以通过鉴权。
+
+**使用步骤：**
+
+```bash
+# 1) 交互式配置 Daemon 模式（引导填写上述字段，写入 ~/.a2a-bridge/.env）
+a2a-bridge setup --daemon
+
+# 向导将引导配置：
+# - 启用/禁用 Daemon 模式
+# - Tide 后端 WS 地址（默认 ws://localhost:8000/ws/daemon）
+# - 共享 Token（可自动生成）
+# - Daemon ID、心跳间隔、能力标签
+
+# 2) 启动（后台守护）
+a2a-bridge start -d
+
+# 3) 在 Tide 后端确认已配置相同的 DAEMON_TOKEN，Bridge 上线后
+#    会自动注册为 remote_agents（connection_mode='ws'），无需手动填 Agent Card URL
+```
+
+也可手动编辑 `~/.a2a-bridge/.env`、设置上述字段后重启服务生效。与 HTTP 拉模式的对比及 `/ws/daemon` 完整协议见 [`docs/A2A_INTEGRATION.md`](../docs/A2A_INTEGRATION.md)。
 
 ### 方式二：pip 直接安装
 
@@ -390,7 +481,7 @@ curl -s -X POST http://localhost:8720/a2a \
 - **优雅关闭**：进程收到 SIGTERM 时会 `terminate()` 所有未完成 subprocess，再 5 秒强制 `kill`。
 - **日志**：JSON 行格式，输出到 stdout，由容器/systemd 统一收集。
 - **审批检测**：当 CLI 输出含 `permission required` / `请求批准` / `please approve` 等关键词时，任务自动转为 `input_required` 状态并发送 final SSE 帧。Tide 收到后可通过自身审批系统下发后续动作。
-- **Codex CLI**：默认启用 `--full-auto` 与 `--skip-git-repo-check`，工作流自动化更顺畅。
+- **Codex CLI**：默认启用 `-a full-auto -s workspace-write` 与 `--skip-git-repo-check`，工作流自动化更顺畅。
 - **凭证**：Bridge 不存储 LLM API Key，全部由宿主机/容器环境变量 + CLI 自身的登录态提供。
 
 ---

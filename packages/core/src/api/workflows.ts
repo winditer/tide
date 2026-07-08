@@ -48,6 +48,10 @@ export function duplicateWorkflow(id: string): Promise<Workflow> {
   return apiClient.post<Workflow>(`/api/workflows/${id}/duplicate`);
 }
 
+export function setDefaultWorkflow(id: string): Promise<Workflow> {
+  return apiClient.put<Workflow>(`/api/workflows/${id}/set-default`);
+}
+
 export function runWorkflow(
   id: string,
   body?: RunWorkflowInput

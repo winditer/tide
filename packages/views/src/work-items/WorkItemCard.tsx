@@ -59,6 +59,8 @@ interface WorkItemCardProps {
   versionMap?: Record<string, string>;
   /** 是否禁用拖拽（如泳道分组模式下） */
   draggable?: boolean;
+  /** 是否处于阻塞状态（Agent 任务等待审批），标红提示 */
+  blocked?: boolean;
 }
 
 export function WorkItemCard({
@@ -68,6 +70,7 @@ export function WorkItemCard({
   completed = false,
   versionMap,
   draggable = true,
+  blocked = false,
 }: WorkItemCardProps) {
   const priorityCfg = PRIORITY_CONFIG[item.priority] ?? PRIORITY_CONFIG[0];
   const priorityBorder =
@@ -115,8 +118,16 @@ export function WorkItemCard({
         !isCompleted && !isStale && onClick && !isDragging
           ? "hover:border-primary/30"
           : "",
+        blocked && !isCompleted ? "ring-2 ring-red-500" : "",
       )}
     >
+      {/* 阻塞徽章 */}
+      {blocked && !isCompleted && (
+        <span className="absolute -left-1 -top-1 z-10 inline-flex items-center gap-1 rounded-full bg-red-500 px-1.5 py-0.5 text-[9px] font-semibold text-white shadow">
+          <span className="h-1 w-1 rounded-full bg-white" />
+          阻塞
+        </span>
+      )}
       {/* Status Badge */}
       {item.status && !isCompleted && (
         <span

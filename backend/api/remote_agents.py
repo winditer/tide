@@ -10,6 +10,7 @@ import logging
 import re
 import uuid
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any, Optional
 
 import httpx
@@ -127,6 +128,35 @@ def _extract_skills_json(card: dict[str, Any]) -> str:
         return "[]"
 
 
+def _extract_agents(card: dict[str, Any]) -> list[dict[str, Any]]:
+    """解析 Agent Card 中的 A2A 扩展字段 ``agents``。
+
+    返回规范化后的子 Agent 列表（每项含 name/description/capabilities）。
+    若 card 中无 agents 字段或格式不合法，返回空列表（向后兼容）。
+    """
+    raw = card.get("agents")
+    if not isinstance(raw, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or item.get("id") or "").strip()
+        if not name:
+            continue
+        caps = item.get("capabilities") or []
+        if not isinstance(caps, list):
+            caps = []
+        result.append(
+            {
+                "name": name,
+                "description": item.get("description"),
+                "capabilities": caps,
+            }
+        )
+    return result
+
+
 def _row_to_dict(row) -> dict[str, Any]:
     """SQLAlchemy Row → dict，并把 JSON 字段反序列化。"""
     data = dict(row._mapping)
@@ -157,6 +187,7 @@ _SELECT_COLUMNS = (
     "auth_header_name, capabilities_streaming, capabilities_push_notifications, "
     "skills_json, approval_required, approval_policy, timeout_ms, max_retries, "
     "status, scope, scope_target, last_health_check, last_error, workspace_id, created_by, "
+    "connection_mode, daemon_session_id, "
     "created_at, updated_at"
 )
 
@@ -205,6 +236,102 @@ async def _upsert_actor(agent_id: str, name: str) -> None:
     logger.error("upsert actors permanently failed for %s", agent_id)
 
 
+_INSERT_AGENT_SQL = text(
+    """
+    INSERT INTO remote_agents (
+        id, name, description, agent_card_url, agent_card_json,
+        endpoint_url, auth_type, auth_credentials, auth_header_name,
+        capabilities_streaming, capabilities_push_notifications,
+        skills_json, capability_tags, approval_policy, timeout_ms, max_retries,
+        scope, scope_target,
+        created_by, created_at, updated_at
+    ) VALUES (
+        :id, :name, :description, :agent_card_url, :agent_card_json,
+        :endpoint_url, :auth_type, :auth_credentials, :auth_header_name,
+        :capabilities_streaming, :capabilities_push_notifications,
+        :skills_json, :capability_tags, :approval_policy, :timeout_ms, :max_retries,
+        :scope, :scope_target,
+        :created_by, :created_at, :updated_at
+    )
+    """
+)
+
+
+_UPSERT_AGENT_SQL = text(
+    """
+    INSERT INTO remote_agents (
+        id, name, description, agent_card_url, agent_card_json,
+        endpoint_url, auth_type, auth_credentials, auth_header_name,
+        capabilities_streaming, capabilities_push_notifications,
+        skills_json, capability_tags, approval_policy, timeout_ms, max_retries,
+        scope, scope_target,
+        created_by, created_at, updated_at
+    ) VALUES (
+        :id, :name, :description, :agent_card_url, :agent_card_json,
+        :endpoint_url, :auth_type, :auth_credentials, :auth_header_name,
+        :capabilities_streaming, :capabilities_push_notifications,
+        :skills_json, :capability_tags, :approval_policy, :timeout_ms, :max_retries,
+        :scope, :scope_target,
+        :created_by, :created_at, :updated_at
+    )
+    ON CONFLICT(id) DO UPDATE SET
+        name = :name,
+        description = :description,
+        agent_card_url = :agent_card_url,
+        agent_card_json = :agent_card_json,
+        endpoint_url = :endpoint_url,
+        capabilities_streaming = :capabilities_streaming,
+        capabilities_push_notifications = :capabilities_push_notifications,
+        skills_json = :skills_json,
+        capability_tags = :capability_tags,
+        status = 'active',
+        last_error = NULL,
+        updated_at = :updated_at
+    """
+)
+
+
+def _build_agent_params(
+    *,
+    agent_id: str,
+    name: str,
+    description: Optional[str],
+    body: "RemoteAgentCreate",
+    card_json: Optional[str],
+    endpoint_url: str,
+    streaming: bool,
+    push: bool,
+    skills_json: str,
+    capability_tags: str,
+    created_by: Optional[str],
+    now: str,
+) -> dict[str, Any]:
+    """构造写入 remote_agents 的参数字典（单条与拆分场景共用）。"""
+    return {
+        "id": agent_id,
+        "name": name,
+        "description": description,
+        "agent_card_url": body.agent_card_url or "",
+        "agent_card_json": card_json,
+        "endpoint_url": endpoint_url,
+        "auth_type": body.auth_type or "bearer",
+        "auth_credentials": body.auth_credentials,
+        "auth_header_name": body.auth_header_name,
+        "capabilities_streaming": 1 if streaming else 0,
+        "capabilities_push_notifications": 1 if push else 0,
+        "skills_json": skills_json,
+        "capability_tags": capability_tags,
+        "approval_policy": body.approval_policy or "on-request",
+        "timeout_ms": body.timeout_ms if body.timeout_ms is not None else 300000,
+        "max_retries": body.max_retries if body.max_retries is not None else 2,
+        "scope": body.scope or "global",
+        "scope_target": body.scope_target or "",
+        "created_by": created_by,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -227,6 +354,7 @@ async def discover_agent_card(
         "description": card.get("description"),
         "endpoint_url": card.get("url") or card.get("endpoint"),
         "skills": card.get("skills") or [],
+        "agents": _extract_agents(card),
         "capabilities": {"streaming": streaming, "pushNotifications": push},
     }
 
@@ -246,6 +374,7 @@ async def create_remote_agent(
 
     agent_id = f"a2a:{_slugify(body.name)}"
 
+    card: Optional[dict[str, Any]] = None
     card_json: Optional[str] = None
     streaming = False
     push = False
@@ -270,53 +399,42 @@ async def create_remote_agent(
     now = datetime.now(timezone.utc).isoformat()
     created_by = current_user.get("id") if current_user else None
 
-    params = {
-        "id": agent_id,
-        "name": body.name,
-        "description": description,
-        "agent_card_url": body.agent_card_url or "",
-        "agent_card_json": card_json,
-        "endpoint_url": endpoint_url,
-        "auth_type": body.auth_type or "bearer",
-        "auth_credentials": body.auth_credentials,
-        "auth_header_name": body.auth_header_name,
-        "capabilities_streaming": 1 if streaming else 0,
-        "capabilities_push_notifications": 1 if push else 0,
-        "skills_json": skills_json,
-        "approval_policy": body.approval_policy or "on-request",
-        "timeout_ms": body.timeout_ms if body.timeout_ms is not None else 300000,
-        "max_retries": body.max_retries if body.max_retries is not None else 2,
-        "scope": body.scope or "global",
-        "scope_target": body.scope_target or "",
-        "created_by": created_by,
-        "created_at": now,
-        "updated_at": now,
-    }
+    # 当 Agent Card 暴露了 A2A 扩展的 agents 列表时（仅发现/自动拉取场景），
+    # 为每个具体 Agent 创建独立记录；否则保持单条记录（向后兼容、手动创建）。
+    sub_agents = _extract_agents(card) if card else []
+
+    if sub_agents:
+        return await _create_split_agents(
+            parent_id=agent_id,
+            body=body,
+            card_json=card_json,
+            endpoint_url=endpoint_url,
+            streaming=streaming,
+            push=push,
+            skills_json=skills_json,
+            sub_agents=sub_agents,
+            created_by=created_by,
+            now=now,
+        )
+
+    params = _build_agent_params(
+        agent_id=agent_id,
+        name=body.name,
+        description=description,
+        body=body,
+        card_json=card_json,
+        endpoint_url=endpoint_url,
+        streaming=streaming,
+        push=push,
+        skills_json=skills_json,
+        capability_tags="[]",
+        created_by=created_by,
+        now=now,
+    )
 
     try:
         async with async_session_factory() as session:
-            await session.execute(
-                text(
-                    """
-                    INSERT INTO remote_agents (
-                        id, name, description, agent_card_url, agent_card_json,
-                        endpoint_url, auth_type, auth_credentials, auth_header_name,
-                        capabilities_streaming, capabilities_push_notifications,
-                        skills_json, approval_policy, timeout_ms, max_retries,
-                        scope, scope_target,
-                        created_by, created_at, updated_at
-                    ) VALUES (
-                        :id, :name, :description, :agent_card_url, :agent_card_json,
-                        :endpoint_url, :auth_type, :auth_credentials, :auth_header_name,
-                        :capabilities_streaming, :capabilities_push_notifications,
-                        :skills_json, :approval_policy, :timeout_ms, :max_retries,
-                        :scope, :scope_target,
-                        :created_by, :created_at, :updated_at
-                    )
-                    """
-                ),
-                params,
-            )
+            await session.execute(_INSERT_AGENT_SQL, params)
             await session.commit()
     except Exception as exc:  # noqa: BLE001
         msg = str(exc).lower()
@@ -334,6 +452,57 @@ async def create_remote_agent(
     if not created:
         raise HTTPException(status_code=500, detail="Remote agent created but not retrievable")
     return created
+
+
+async def _create_split_agents(
+    *,
+    parent_id: str,
+    body: RemoteAgentCreate,
+    card_json: Optional[str],
+    endpoint_url: str,
+    streaming: bool,
+    push: bool,
+    skills_json: str,
+    sub_agents: list[dict[str, Any]],
+    created_by: Optional[str],
+    now: str,
+) -> dict[str, Any]:
+    """为 Agent Card 中声明的每个子 Agent 创建独立的 remote_agents 记录。
+
+    - ID 为 ``{parent_id}-{agent_name}``；
+    - name 为具体 agent 名；endpoint_url / agent_card_url / auth / scope 等继承父级配置；
+    - agent 级 capabilities 写入 capability_tags。
+    已存在的同 ID 记录采用 upsert 语义更新，保证重复发现幂等。
+    """
+    created_ids: list[str] = []
+    async with async_session_factory() as session:
+        for sub in sub_agents:
+            sub_name = sub["name"]
+            child_id = f"{parent_id}-{_slugify(sub_name)}"
+            capability_tags = json.dumps(sub.get("capabilities") or [], ensure_ascii=False)
+            params = _build_agent_params(
+                agent_id=child_id,
+                name=sub_name,
+                description=sub.get("description") or body.description,
+                body=body,
+                card_json=card_json,
+                endpoint_url=endpoint_url,
+                streaming=streaming,
+                push=push,
+                skills_json=skills_json,
+                capability_tags=capability_tags,
+                created_by=created_by,
+                now=now,
+            )
+            await session.execute(_UPSERT_AGENT_SQL, params)
+            created_ids.append(child_id)
+        await session.commit()
+
+    for child_id, sub in zip(created_ids, sub_agents):
+        await _upsert_actor(child_id, sub["name"])
+
+    items = [row for cid in created_ids if (row := await _get_agent_row(cid))]
+    return {"items": items, "total": len(items)}
 
 
 @router.get("")
@@ -521,6 +690,22 @@ async def refresh_remote_agent(
     now = datetime.now(timezone.utc).isoformat()
     new_endpoint = card.get("url") or card.get("endpoint") or record.get("endpoint_url")
 
+    # 若刷新后的 Agent Card 暴露了 agents 列表，则拆分为具体子 Agent 记录，
+    # 并将本次不再出现的（同一 card URL 下的）旧记录标记为 offline。
+    sub_agents = _extract_agents(card)
+    if sub_agents:
+        return await _refresh_split_agents(
+            record=record,
+            card=card,
+            card_json=card_json,
+            streaming=streaming,
+            push=push,
+            skills_json=skills_json,
+            new_endpoint=new_endpoint,
+            sub_agents=sub_agents,
+            now=now,
+        )
+
     async with async_session_factory() as session:
         await session.execute(
             text(
@@ -552,3 +737,91 @@ async def refresh_remote_agent(
         await session.commit()
 
     return await _get_agent_row(agent_id)
+
+
+async def _refresh_split_agents(
+    *,
+    record: dict[str, Any],
+    card: dict[str, Any],
+    card_json: str,
+    streaming: bool,
+    push: bool,
+    skills_json: str,
+    new_endpoint: Optional[str],
+    sub_agents: list[dict[str, Any]],
+    now: str,
+) -> dict[str, Any]:
+    """刷新时根据 Agent Card 的 agents 列表更新/创建各子 Agent 记录。
+
+    - 以当前记录推导出父前缀（去掉尾部的 ``-{agent}`` 后缀）；
+    - 对每个子 Agent 执行 upsert；
+    - 同一 agent_card_url 下本次未出现、非 ws 模式的记录标记为 offline。
+    """
+    card_url = record.get("agent_card_url") or ""
+    rid = record["id"]
+    rname = record.get("name") or ""
+    suffix = f"-{_slugify(rname)}" if rname else ""
+    parent_prefix = rid[: -len(suffix)] if suffix and rid.endswith(suffix) else rid
+
+    pseudo_body = SimpleNamespace(
+        agent_card_url=card_url,
+        auth_type=record.get("auth_type"),
+        auth_credentials=record.get("auth_credentials"),
+        auth_header_name=record.get("auth_header_name"),
+        approval_policy=record.get("approval_policy"),
+        timeout_ms=record.get("timeout_ms"),
+        max_retries=record.get("max_retries"),
+        scope=record.get("scope"),
+        scope_target=record.get("scope_target"),
+    )
+    created_by = record.get("created_by")
+
+    active_ids: list[str] = []
+    async with async_session_factory() as session:
+        for sub in sub_agents:
+            sub_name = sub["name"]
+            child_id = f"{parent_prefix}-{_slugify(sub_name)}"
+            capability_tags = json.dumps(sub.get("capabilities") or [], ensure_ascii=False)
+            params = _build_agent_params(
+                agent_id=child_id,
+                name=sub_name,
+                description=sub.get("description") or record.get("description"),
+                body=pseudo_body,
+                card_json=card_json,
+                endpoint_url=new_endpoint or "",
+                streaming=streaming,
+                push=push,
+                skills_json=skills_json,
+                capability_tags=capability_tags,
+                created_by=created_by,
+                now=now,
+            )
+            params["created_at"] = record.get("created_at") or now
+            await session.execute(_UPSERT_AGENT_SQL, params)
+            active_ids.append(child_id)
+
+        # 将同一 card URL 下本次不再出现的 HTTP 记录（含旧的笼统单条记录）标记为 offline
+        if card_url and active_ids:
+            placeholders = ",".join(f":aid{i}" for i in range(len(active_ids)))
+            offline_params = {f"aid{i}": aid for i, aid in enumerate(active_ids)}
+            offline_params["card_url"] = card_url
+            offline_params["now"] = now
+            await session.execute(
+                text(
+                    f"""
+                    UPDATE remote_agents
+                    SET status = 'offline', updated_at = :now
+                    WHERE agent_card_url = :card_url
+                      AND (connection_mode IS NULL OR connection_mode != 'ws')
+                      AND id NOT IN ({placeholders})
+                    """
+                ),
+                offline_params,
+            )
+        await session.commit()
+
+    for child_id, sub in zip(active_ids, sub_agents):
+        await _upsert_actor(child_id, sub["name"])
+
+    items = [row for cid in active_ids if (row := await _get_agent_row(cid))]
+    return {"items": items, "total": len(items)}

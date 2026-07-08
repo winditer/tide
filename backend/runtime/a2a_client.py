@@ -46,6 +46,8 @@ class A2AAgentConfig:
     max_retries: int = 0
     approval_required: bool = False
     approval_policy: str = "on-request"  # always | on-request | never
+    connection_mode: str = "http"  # http | ws (Daemon WebSocket 推模式)
+    daemon_session_id: str = ""
 
 
 @dataclass

@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.db.engine import init_db
 from backend.api.ws import router as ws_router
+from backend.api.ws_daemon import router as ws_daemon_router
 from backend.api.tasks import router as tasks_router
 from backend.api.agents import router as agents_router
 from backend.api.events import router as events_router
@@ -47,6 +48,8 @@ from backend.api.files import router as files_router
 from backend.api.git_audit import router as git_audit_router
 from backend.api.expert_teams import router as expert_teams_router
 from backend.api.agent_configs import router as agent_configs_router
+from backend.api.settings import router as settings_router
+from backend.api.notifications import router as notifications_router
 from backend.services.auth_service import auth_service
 
 logger = logging.getLogger("tide.main")
@@ -56,6 +59,13 @@ logger = logging.getLogger("tide.main")
 async def lifespan(app: FastAPI):
     await init_db()
 
+    # Seed 系统默认工作流（幂等）
+    try:
+        from backend.services.workflow_service import WorkflowService
+        await WorkflowService().seed_default_workflow()
+    except Exception:  # noqa: BLE001
+        logger.exception("seed_default_workflow failed")
+
     # 启动时确保管理员账号存在（基于 TIDE_ADMIN_USERNAME / TIDE_ADMIN_PASSWORD）
     try:
         await auth_service.ensure_admin_exists()
@@ -63,6 +73,10 @@ async def lifespan(app: FastAPI):
         logger.exception("ensure_admin_exists failed")
 
     await schedule_service.start()
+
+    # 启动 Daemon Registry（WebSocket 推模式）
+    from backend.services.daemon_registry import daemon_registry
+    await daemon_registry.start()
 
     # 恢复后端重启前处于 active/running 状态的 Plan
     try:
@@ -134,6 +148,7 @@ async def lifespan(app: FastAPI):
         await message_handler.stop()
         lark_listener.stop()
         await schedule_service.shutdown()
+        await daemon_registry.stop()
 
 
 app = FastAPI(title="Tide API", version="0.1.0", lifespan=lifespan)
@@ -147,6 +162,7 @@ app.add_middleware(
 )
 
 app.include_router(ws_router)
+app.include_router(ws_daemon_router)
 app.include_router(tasks_router)
 app.include_router(agents_router)
 app.include_router(events_router)
@@ -178,6 +194,8 @@ app.include_router(files_router)
 app.include_router(git_audit_router)
 app.include_router(expert_teams_router)
 app.include_router(agent_configs_router)
+app.include_router(settings_router)
+app.include_router(notifications_router)
 
 
 @app.get("/health")

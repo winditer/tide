@@ -28,6 +28,11 @@ import {
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
+interface SquadMember {
+  agent_id: string;
+  [key: string]: any;
+}
+
 interface ExpertTeam {
   id: string;
   workspace_id: string;
@@ -39,10 +44,19 @@ interface ExpertTeam {
   model?: string | null;
   skill_slugs: string[];
   role_prompt?: string | null;
+  is_squad?: number;
+  member_agents?: SquadMember[];
+  leader_strategy?: string;
   enabled: number;
   created_at?: string | null;
   updated_at?: string | null;
 }
+
+const LEADER_STRATEGY_OPTIONS = [
+  { value: "capability_match", label: "能力匹配" },
+  { value: "round_robin", label: "轮询" },
+  { value: "random", label: "随机" },
+];
 
 interface AgentOption {
   id: string;
@@ -230,6 +244,9 @@ export default function SettingsExpertTeamsPage() {
     role_prompt: string;
     project_id: string | null;
     enabled: number;
+    is_squad: number;
+    member_agents: SquadMember[];
+    leader_strategy: string;
   }) => {
     setSaving(true);
     try {
@@ -243,6 +260,9 @@ export default function SettingsExpertTeamsPage() {
         role_prompt: data.role_prompt,
         project_id: data.project_id || null,
         enabled: data.enabled,
+        is_squad: data.is_squad,
+        member_agents: data.is_squad ? data.member_agents : [],
+        leader_strategy: data.is_squad ? data.leader_strategy : "capability_match",
       };
       if (editing) {
         await apiClient.put<ExpertTeam>(`/api/expert-teams/${editing.id}`, body);
@@ -375,7 +395,14 @@ export default function SettingsExpertTeamsPage() {
                 {paged.map((team) => (
                   <tr key={team.id} className="hover:bg-muted/40 transition-smooth">
                     <td className="px-4 py-3">
-                      <div className="font-medium">{team.name}</div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-medium">{team.name}</span>
+                        {team.is_squad ? (
+                          <Badge variant="default" className="bg-indigo-500 hover:bg-indigo-500">
+                            小队
+                          </Badge>
+                        ) : null}
+                      </div>
                       <div className="text-xs text-muted-foreground font-mono">{team.slug}</div>
                     </td>
                     <td className="px-4 py-3">
@@ -384,7 +411,13 @@ export default function SettingsExpertTeamsPage() {
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      <Badge variant="secondary">{getAgentName(team.agent_id)}</Badge>
+                      {team.is_squad ? (
+                        <Badge variant="secondary">
+                          {(team.member_agents?.length || 0)} 名成员
+                        </Badge>
+                      ) : (
+                        <Badge variant="secondary">{getAgentName(team.agent_id)}</Badge>
+                      )}
                     </td>
                     <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
                       {team.skill_slugs.length}
@@ -538,6 +571,9 @@ function ExpertTeamDialog({
     role_prompt: string;
     project_id: string | null;
     enabled: number;
+    is_squad: number;
+    member_agents: SquadMember[];
+    leader_strategy: string;
   }) => void;
   agents: AgentOption[];
   skills: SkillOption[];
@@ -552,6 +588,9 @@ function ExpertTeamDialog({
   const [rolePrompt, setRolePrompt] = useState("");
   const [projectId, setProjectId] = useState<string>("");
   const [enabled, setEnabled] = useState(1);
+  const [isSquad, setIsSquad] = useState(false);
+  const [memberAgents, setMemberAgents] = useState<string[]>([]);
+  const [leaderStrategy, setLeaderStrategy] = useState("capability_match");
 
   useEffect(() => {
     if (open) {
@@ -565,6 +604,13 @@ function ExpertTeamDialog({
         setRolePrompt(team.role_prompt || "");
         setProjectId(team.project_id || "");
         setEnabled(team.enabled);
+        setIsSquad(!!team.is_squad);
+        setMemberAgents(
+          (team.member_agents || [])
+            .map((m) => m?.agent_id)
+            .filter((id): id is string => !!id)
+        );
+        setLeaderStrategy(team.leader_strategy || "capability_match");
       } else {
         setName("");
         setDescription("");
@@ -575,6 +621,9 @@ function ExpertTeamDialog({
         setRolePrompt("");
         setProjectId("");
         setEnabled(1);
+        setIsSquad(false);
+        setMemberAgents([]);
+        setLeaderStrategy("capability_match");
       }
     }
   }, [open, team]);
@@ -585,20 +634,33 @@ function ExpertTeamDialog({
       toast({ title: "请填写专家团名称", variant: "destructive" });
       return;
     }
-    if (!agentId) {
+    if (!isSquad && !agentId) {
       toast({ title: "请选择 Agent", variant: "destructive" });
+      return;
+    }
+    if (isSquad && memberAgents.length === 0) {
+      toast({ title: "小队模式需至少选择一个成员 Agent", variant: "destructive" });
       return;
     }
     onSave({
       name,
       description,
-      agent_id: agentId,
+      agent_id: isSquad ? memberAgents[0] : agentId,
       model,
       skill_slugs: selectedSkills,
       role_prompt: rolePrompt,
       project_id: projectId || null,
       enabled,
+      is_squad: isSquad ? 1 : 0,
+      member_agents: memberAgents.map((id) => ({ agent_id: id })),
+      leader_strategy: leaderStrategy,
     });
+  };
+
+  const toggleMember = (id: string) => {
+    setMemberAgents((prev) =>
+      prev.includes(id) ? prev.filter((m) => m !== id) : [...prev, id]
+    );
   };
 
   const toggleSkill = (slug: string) => {
@@ -648,16 +710,49 @@ function ExpertTeamDialog({
             />
           </div>
 
-          {/* Agent + Scope */}
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Agent *</label>
-              <Select
-                value={agentId}
-                onChange={(e) => setAgentId(e.target.value)}
-                options={agentOptions}
-              />
+          {/* Mode Toggle */}
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">模式</label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setIsSquad(false)}
+                className={`rounded-lg border px-3 py-2 text-sm text-left transition-smooth ${
+                  !isSquad
+                    ? "border-indigo-500 bg-indigo-500/10 text-foreground"
+                    : "border-border/50 text-muted-foreground hover:border-foreground/30"
+                }`}
+              >
+                <div className="font-medium">单一 Agent</div>
+                <div className="text-xs text-muted-foreground">使用单个 Agent 执行</div>
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsSquad(true)}
+                className={`rounded-lg border px-3 py-2 text-sm text-left transition-smooth ${
+                  isSquad
+                    ? "border-indigo-500 bg-indigo-500/10 text-foreground"
+                    : "border-border/50 text-muted-foreground hover:border-foreground/30"
+                }`}
+              >
+                <div className="font-medium">小队模式</div>
+                <div className="text-xs text-muted-foreground">多 Agent 协作调度</div>
+              </button>
             </div>
+          </div>
+
+          {/* Agent (single mode) + Scope */}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {!isSquad && (
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Agent *</label>
+                <Select
+                  value={agentId}
+                  onChange={(e) => setAgentId(e.target.value)}
+                  options={agentOptions}
+                />
+              </div>
+            )}
             <div className="space-y-1.5">
               <label className="text-sm font-medium">作用域</label>
               <Select
@@ -667,6 +762,74 @@ function ExpertTeamDialog({
               />
             </div>
           </div>
+
+          {/* Squad fields */}
+          {isSquad && (
+            <>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">
+                  成员 Agent{" "}
+                  <span className="text-muted-foreground font-normal">
+                    ({memberAgents.length} 已选)
+                  </span>
+                </label>
+                {memberAgents.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {memberAgents.map((id) => (
+                      <span
+                        key={id}
+                        className="inline-flex items-center gap-1 rounded-full bg-indigo-500/10 px-2.5 py-1 text-xs text-indigo-600 dark:text-indigo-300"
+                      >
+                        {agents.find((a) => a.id === id)?.name || id}
+                        <button
+                          type="button"
+                          onClick={() => toggleMember(id)}
+                          className="hover:text-destructive"
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <div className="max-h-[180px] overflow-y-auto rounded-lg border border-border/50 bg-background p-2 space-y-1">
+                  {agents.length === 0 ? (
+                    <p className="text-xs text-muted-foreground py-2 text-center">暂无可用 Agent</p>
+                  ) : (
+                    agents.map((agent) => (
+                      <label
+                        key={agent.id}
+                        className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/40 cursor-pointer transition-smooth"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={memberAgents.includes(agent.id)}
+                          onChange={() => toggleMember(agent.id)}
+                          className="h-3.5 w-3.5 rounded border-border text-indigo-500 focus:ring-indigo-500"
+                        />
+                        <span className="text-sm">{agent.name}</span>
+                        {agent.type === "remote" && (
+                          <span className="text-xs text-muted-foreground">(远程)</span>
+                        )}
+                      </label>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Leader 策略</label>
+                <Select
+                  value={leaderStrategy}
+                  onChange={(e) => setLeaderStrategy(e.target.value)}
+                  options={LEADER_STRATEGY_OPTIONS}
+                />
+                <p className="text-xs text-muted-foreground">
+                  决定如何从成员中选择执行者：能力匹配 / 轮询 / 随机
+                </p>
+              </div>
+            </>
+          )}
 
           {/* Model */}
           <div className="space-y-1.5">

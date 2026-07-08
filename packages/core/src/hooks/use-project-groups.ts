@@ -13,6 +13,7 @@ import {
   getGroupWorkflow,
   getProjectGroup,
   listProjectGroups,
+  listGroupAvailableUsers,
   removeGroupMember,
   setGroupWorkflow,
   updateProjectGroup,
@@ -143,6 +144,18 @@ export function useRemoveGroupMember(groupId: string) {
   });
 }
 
+/** 拉取可添加为项目组用户成员的候选用户列表。 */
+export function useGroupAvailableUsers(
+  groupId: string | undefined,
+  params?: { q?: string; page?: number; page_size?: number },
+) {
+  return useQuery({
+    queryKey: ["project-group-users-available", groupId ?? "", params ?? null],
+    queryFn: () => listGroupAvailableUsers(groupId as string, params),
+    enabled: !!groupId,
+  });
+}
+
 // ── 聚合查询 hooks ──────────────────────────────────────────────────────────
 
 export function useGroupConversations(
@@ -192,10 +205,12 @@ export function useSetGroupWorkflow() {
     mutationFn: ({
       groupId,
       workflowId,
+      flowMode,
     }: {
       groupId: string;
-      workflowId: string;
-    }) => setGroupWorkflow(groupId, workflowId),
+      workflowId?: string | null;
+      flowMode?: string;
+    }) => setGroupWorkflow(groupId, workflowId, flowMode),
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: groupWorkflowKey(vars.groupId) });
     },

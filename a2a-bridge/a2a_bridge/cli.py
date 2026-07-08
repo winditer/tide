@@ -102,10 +102,40 @@ def _write_env(env: dict[str, str]) -> None:
 
 
 def _apply_env(env: dict[str, str]) -> None:
-    """Inject config values into ``os.environ``."""
+    """Inject config values into ``os.environ``.
+
+    PATH is treated specially: the value from .env is *prepended* to the
+    existing system PATH (with deduplication) so that both user-installed
+    tools and system utilities remain discoverable.
+    """
     for key, value in env.items():
-        if value:  # don't overwrite with empty
+        if not value:  # don't overwrite with empty
+            continue
+        if key == "PATH":
+            # Merge: prepend .env PATH entries to current system PATH
+            existing = os.environ.get("PATH", "")
+            merged = _merge_path(value, existing)
+            os.environ["PATH"] = merged
+        else:
             os.environ[key] = value
+
+
+def _merge_path(primary: str, secondary: str) -> str:
+    """Merge two PATH strings: *primary* entries first, then *secondary*,
+    dropping duplicates while preserving order."""
+    seen: set[str] = set()
+    parts: list[str] = []
+    for p in primary.split(os.pathsep):
+        p = p.strip()
+        if p and p not in seen:
+            seen.add(p)
+            parts.append(p)
+    for p in secondary.split(os.pathsep):
+        p = p.strip()
+        if p and p not in seen:
+            seen.add(p)
+            parts.append(p)
+    return os.pathsep.join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -113,12 +143,37 @@ def _apply_env(env: dict[str, str]) -> None:
 # ---------------------------------------------------------------------------
 _CLI_TOOLS = ("codex", "claude", "qoder")
 
+# Some CLIs ship under alternate binary names. Map the logical agent name to
+# every candidate executable we should probe (in priority order). Notably the
+# Qoder IDE installs its CLI as ``qodercli`` (e.g. ~/.local/bin/qodercli), not
+# ``qoder``.
+_CLI_BIN_CANDIDATES: dict[str, tuple[str, ...]] = {
+    "codex": ("codex",),
+    "claude": ("claude",),
+    "qoder": ("qoder", "qodercli"),
+}
+
+# Env var used to pin each agent's binary path in the generated config.
+_CLI_BIN_ENV = {
+    "codex": "CODEX_BIN",
+    "claude": "CLAUDE_BIN",
+    "qoder": "QODER_BIN",
+}
+
 
 def _detect_clis() -> dict[str, Optional[str]]:
-    """Return ``{cli_name: binary_path_or_None}``."""
+    """Return ``{cli_name: binary_path_or_None}``.
+
+    For each logical agent, probe all known candidate executable names and
+    return the first one found on ``PATH``.
+    """
     result: dict[str, Optional[str]] = {}
     for name in _CLI_TOOLS:
-        path = shutil.which(name)
+        path: Optional[str] = None
+        for candidate in _CLI_BIN_CANDIDATES.get(name, (name,)):
+            path = shutil.which(candidate)
+            if path:
+                break
         result[name] = path
     return result
 
@@ -157,10 +212,95 @@ def _choice(label: str, options: list[str], default: str = "") -> str:
 
 
 # ---------------------------------------------------------------------------
+# Daemon WebSocket push mode configuration
+# ---------------------------------------------------------------------------
+def _setup_daemon(env: dict[str, str]) -> dict[str, str]:
+    """Interactive Daemon WebSocket push mode configuration."""
+    print()
+    print(f"  {_bold('Daemon WebSocket 推模式配置')}")
+    print()
+
+    # 1. 是否启用
+    enable = input("  启用 Daemon 推模式? [Y/n]: ").strip().lower()
+    if enable in ("n", "no"):
+        env["DAEMON_ENABLED"] = "false"
+        _warn("Daemon 模式已禁用")
+        return env
+    env["DAEMON_ENABLED"] = "true"
+
+    # 2. Tide 后端 WS 地址
+    default_url = env.get("TIDE_WS_URL", "ws://localhost:8000/ws/daemon")
+    url = input(f"  Tide 后端 WS 地址 [{default_url}]: ").strip()
+    env["TIDE_WS_URL"] = url or default_url
+
+    # 3. 共享 Token
+    existing_token = env.get("DAEMON_TOKEN", "")
+    if existing_token:
+        masked = f"{existing_token[:8]}...{existing_token[-4:]}" if len(existing_token) > 12 else existing_token
+        print(f"  当前 Token: {masked}")
+        change = input("  重新生成 Token? [y/N]: ").strip().lower()
+        if change in ("y", "yes"):
+            import secrets
+            token = secrets.token_hex(24)
+            env["DAEMON_TOKEN"] = token
+            print(f"  → 新 Token: {token}")
+            _warn("请同步更新 Tide 后端 .env 中的 DAEMON_TOKEN")
+        # else keep existing
+    else:
+        gen = input("  自动生成共享 Token? [Y/n]: ").strip().lower()
+        if gen in ("n", "no"):
+            token = input("  输入 Token: ").strip()
+        else:
+            import secrets
+            token = secrets.token_hex(24)
+            print(f"  → 生成 Token: {token}")
+        env["DAEMON_TOKEN"] = token
+        _warn("请将同一 Token 设置到 Tide 后端 .env 的 DAEMON_TOKEN 中")
+
+    # 4. Daemon ID (可选)
+    default_id = env.get("DAEMON_ID", "")
+    id_hint = f" [{default_id}]" if default_id else ""
+    daemon_id = input(f"  Daemon ID (留空自动生成){id_hint}: ").strip()
+    env["DAEMON_ID"] = daemon_id or default_id
+
+    # 5. 心跳间隔
+    default_hb = env.get("HEARTBEAT_INTERVAL", "15")
+    hb = input(f"  心跳间隔(秒) [{default_hb}]: ").strip()
+    env["HEARTBEAT_INTERVAL"] = hb or default_hb
+
+    # 6. 能力标签
+    default_tags = env.get("CAPABILITY_TAGS", "code,review,docs")
+    tags = input(f"  能力标签(逗号分隔) [{default_tags}]: ").strip()
+    env["CAPABILITY_TAGS"] = tags or default_tags
+
+    print()
+    _ok("Daemon WebSocket 推模式配置完成")
+    print(f"  → 连接目标: {env['TIDE_WS_URL']}")
+    print(f"  → 重启后生效: a2a-bridge stop && a2a-bridge start")
+
+    return env
+
+
+# ---------------------------------------------------------------------------
 # cmd: setup
 # ---------------------------------------------------------------------------
 def _cmd_setup(args: argparse.Namespace) -> None:
     """Interactive setup wizard."""
+    daemon_only = getattr(args, "daemon", False)
+
+    # If --daemon is given and a config already exists, only run the daemon
+    # configuration flow (skip the regular setup wizard).
+    if daemon_only and CONFIG_FILE.exists():
+        print()
+        print(_bold("  A2A Bridge Setup — Daemon Mode"))
+        print("  " + "─" * 44)
+        env = _load_env()
+        env = _setup_daemon(env)
+        _write_env(env)
+        _ok(f"Config saved to {CONFIG_FILE}")
+        print()
+        return
+
     print()
     print(_bold("  A2A Bridge Setup"))
     print("  " + "─" * 44)
@@ -235,6 +375,20 @@ def _cmd_setup(args: argparse.Namespace) -> None:
         "GIT_AUTO_PUSH": existing.get("GIT_AUTO_PUSH", "true"),
     }
 
+    # Persist detected CLI binary paths so the runtime executor invokes the
+    # exact binary we found (e.g. Qoder ships as ``qodercli``). Never override a
+    # value the user already configured explicitly.
+    for _name, _path in clis.items():
+        if not _path:
+            continue
+        _env_key = _CLI_BIN_ENV.get(_name)
+        if _env_key and not existing.get(_env_key):
+            env[_env_key] = _path
+
+    # --- Daemon WebSocket push mode (optional) ---
+    if daemon_only:
+        env = _setup_daemon(env)
+
     _write_env(env)
     _ok(f"Config saved to {CONFIG_FILE}")
 
@@ -263,6 +417,27 @@ def _cmd_start(args: argparse.Namespace) -> None:
         _start_daemon(env, host, port, args.log_level)
     else:
         _start_foreground(env, host, port, args.log_level)
+
+
+def _persist_path_if_needed(env: dict[str, str]) -> None:
+    """Save the current shell PATH into ~/.a2a-bridge/.env if not already set.
+
+    This ensures that when the daemon is restarted by launchd/systemd (which
+    provides only a minimal PATH), the saved PATH from the user's interactive
+    shell is available.
+    """
+    if env.get("PATH"):
+        # User has already configured PATH in .env, respect it
+        return
+
+    current_path = os.environ.get("PATH", "")
+    if not current_path:
+        return
+
+    # Write PATH into the existing .env file
+    env["PATH"] = current_path
+    _write_env(env)
+    _ok(f"Saved current PATH to {CONFIG_FILE}")
 
 
 def _start_foreground(env: dict[str, str], host: str, port: str, log_level: str) -> None:
@@ -295,9 +470,17 @@ def _start_daemon(env: dict[str, str], host: str, port: str, log_level: str) -> 
 
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
+    # ── Persist current shell PATH into .env so that future daemon
+    #    restarts (e.g. via launchd/systemd) inherit the full PATH.
+    _persist_path_if_needed(env)
+
     # Build environment for subprocess
     sub_env = dict(os.environ)
-    sub_env.update({k: v for k, v in env.items() if v})
+    # Merge PATH specially: .env PATH entries + current shell PATH
+    env_path = env.get("PATH", "")
+    if env_path:
+        sub_env["PATH"] = _merge_path(env_path, sub_env.get("PATH", ""))
+    sub_env.update({k: v for k, v in env.items() if v and k != "PATH"})
     if log_level:
         sub_env["BRIDGE_LOG_LEVEL"] = log_level
 
@@ -612,7 +795,8 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", help="Available commands")
 
     # setup
-    sub.add_parser("setup", help="Interactive setup wizard (configure + detect CLIs)")
+    p_setup = sub.add_parser("setup", help="Interactive setup wizard (configure + detect CLIs)")
+    p_setup.add_argument("--daemon", action="store_true", help="Configure Daemon WebSocket push mode")
 
     # start
     p_start = sub.add_parser("start", help="Start the bridge server")

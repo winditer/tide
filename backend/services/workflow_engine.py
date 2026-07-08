@@ -532,7 +532,7 @@ class WorkflowEngine:
             try:
                 from backend.services.expert_team_service import ExpertTeamService
                 expert_team_svc = ExpertTeamService()
-                expert_team = await expert_team_svc.resolve_expert_team(
+                expert_team = await expert_team_svc.resolve_squad(
                     data["expert_team_id"], workspace_id
                 )
                 if expert_team:

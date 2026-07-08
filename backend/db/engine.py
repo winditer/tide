@@ -103,6 +103,21 @@ async def init_db():
         if wi_columns and "group_id" not in wi_columns:
             await db.execute("ALTER TABLE work_items ADD COLUMN group_id TEXT")
 
+        # work_items 补列 flow_mode（协作模式：default_workflow | freeform）
+        # SQLite 不支持在 ALTER TABLE 上加 CHECK 约束，取值约束在应用层校验
+        if wi_columns and "flow_mode" not in wi_columns:
+            await db.execute("ALTER TABLE work_items ADD COLUMN flow_mode TEXT DEFAULT 'default_workflow'")
+
+        # work_items 增加 status 列（用于 freeform 模式手动状态设置）
+        if wi_columns and "status" not in wi_columns:
+            await db.execute("ALTER TABLE work_items ADD COLUMN status TEXT DEFAULT NULL")
+
+        # project_settings 补列 flow_mode（项目默认协作模式）
+        cursor = await db.execute("PRAGMA table_info(project_settings)")
+        ps_columns = {row[1] for row in await cursor.fetchall()}
+        if ps_columns and "flow_mode" not in ps_columns:
+            await db.execute("ALTER TABLE project_settings ADD COLUMN flow_mode TEXT DEFAULT 'default_workflow'")
+
         # plans 补列 group_id（项目组关联，与 work_items.group_id 模式一致）
         cursor = await db.execute("PRAGMA table_info(plans)")
         plan_columns = {row[1] for row in await cursor.fetchall()}
@@ -155,6 +170,11 @@ async def init_db():
         pg_columns = {row[1] for row in await cursor.fetchall()}
         if pg_columns and "workflow_id" not in pg_columns:
             await db.execute("ALTER TABLE project_groups ADD COLUMN workflow_id TEXT")
+
+        # project_groups 补列：flow_mode（项目组协作模式）
+        # 取值：default_workflow | custom_workflow | freeform；NULL 表示未设置
+        if pg_columns and "flow_mode" not in pg_columns:
+            await db.execute("ALTER TABLE project_groups ADD COLUMN flow_mode TEXT DEFAULT NULL")
 
         # project_group_user_members 表（与 project_members 对称的用户级成员）
         await db.execute("""
@@ -263,11 +283,28 @@ async def init_db():
         if et_columns and "model" not in et_columns:
             await db.execute("ALTER TABLE expert_teams ADD COLUMN model TEXT")
 
+        # expert_teams 补列：Squad 多 Agent 支持
+        if et_columns and "member_agents" not in et_columns:
+            await db.execute("ALTER TABLE expert_teams ADD COLUMN member_agents TEXT DEFAULT '[]'")
+        if et_columns and "is_squad" not in et_columns:
+            await db.execute("ALTER TABLE expert_teams ADD COLUMN is_squad INTEGER DEFAULT 0")
+        if et_columns and "leader_strategy" not in et_columns:
+            await db.execute("ALTER TABLE expert_teams ADD COLUMN leader_strategy TEXT DEFAULT 'capability_match'")
+
         # workflows 表补列 created_by（工作流权限模型）
         cursor = await db.execute("PRAGMA table_info(workflows)")
         wf_columns = {row[1] for row in await cursor.fetchall()}
         if wf_columns and "created_by" not in wf_columns:
             await db.execute("ALTER TABLE workflows ADD COLUMN created_by TEXT")
+
+        # workflows 表补列 is_system（内建系统工作流标记）
+        if wf_columns and "is_system" not in wf_columns:
+            await db.execute("ALTER TABLE workflows ADD COLUMN is_system INTEGER DEFAULT 0")
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_workflows_system_default
+            ON workflows(workspace_id, is_system DESC, created_at ASC)
+            WHERE enabled = 1
+        """)
 
         # remote_agents 表补列 scope / scope_target（远程 Agent 作用域）
         cursor = await db.execute("PRAGMA table_info(remote_agents)")
@@ -276,5 +313,49 @@ async def init_db():
             await db.execute("ALTER TABLE remote_agents ADD COLUMN scope TEXT DEFAULT 'global'")
         if ra_columns and "scope_target" not in ra_columns:
             await db.execute("ALTER TABLE remote_agents ADD COLUMN scope_target TEXT DEFAULT ''")
+
+        # remote_agents 补列：Daemon WebSocket 推模式
+        if ra_columns and "connection_mode" not in ra_columns:
+            await db.execute("ALTER TABLE remote_agents ADD COLUMN connection_mode TEXT DEFAULT 'http'")
+        if ra_columns and "capability_tags" not in ra_columns:
+            await db.execute("ALTER TABLE remote_agents ADD COLUMN capability_tags TEXT")
+        if ra_columns and "last_heartbeat" not in ra_columns:
+            await db.execute("ALTER TABLE remote_agents ADD COLUMN last_heartbeat TIMESTAMP")
+        if ra_columns and "daemon_session_id" not in ra_columns:
+            await db.execute("ALTER TABLE remote_agents ADD COLUMN daemon_session_id TEXT")
+
+        # work_item_comments 表（freeform 协作评论，旧库兼容建表）
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS work_item_comments (
+                id TEXT PRIMARY KEY,
+                work_item_id TEXT NOT NULL,
+                author_id TEXT NOT NULL,
+                content TEXT NOT NULL,
+                mentions TEXT,
+                task_id TEXT,
+                task_status TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_wicomments_work_item ON work_item_comments(work_item_id)"
+        )
+
+        # notifications 表（站内通知，旧库兼容建表）
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS notifications (
+                id TEXT PRIMARY KEY,
+                recipient_id TEXT NOT NULL,
+                work_item_id TEXT NOT NULL,
+                notification_type TEXT NOT NULL,
+                trigger_actor_id TEXT,
+                content TEXT NOT NULL,
+                is_read INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notif_recipient ON notifications(recipient_id, is_read, created_at DESC)"
+        )
 
         await db.commit()

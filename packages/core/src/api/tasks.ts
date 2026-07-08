@@ -98,3 +98,16 @@ export function rejectTask(id: string, body?: ApprovalAction): Promise<Task> {
 export function retryTask(id: string): Promise<Task> {
   return apiClient.post<Task>(`/api/tasks/${id}/retry`);
 }
+
+export interface ContinueTaskParams {
+  prompt: string;
+  attachments?: string[];
+}
+
+/** 在已完成/失败的任务上续聊，复用原有 session_id 在同一任务上继续执行。 */
+export function continueTask(
+  id: string,
+  params: ContinueTaskParams
+): Promise<Task> {
+  return apiClient.post<Task>(`/api/tasks/${id}/continue`, params);
+}

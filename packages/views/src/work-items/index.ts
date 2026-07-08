@@ -6,3 +6,5 @@ export { WorkItemListView } from "./WorkItemListView";
 export { CrossRepoResults } from "./CrossRepoResults";
 export { AIDecomposeDialog, type AIDecomposeDialogProps } from "./AIDecomposeDialog";
 export { AIOptimizeButton } from "./AIOptimizeButton";
+export { AssignmentPanel, type AssignmentPanelProps } from "./AssignmentPanel";
+export { SharedContextPanel, type SharedContextPanelProps } from "./SharedContextPanel";
