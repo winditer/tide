@@ -18,7 +18,7 @@ import logging
 import re
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -667,6 +667,27 @@ def read_session_messages(
     return out
 
 
+def extract_first_user_prompt(file_path: str, agent_id: str) -> Optional[str]:
+    """从会话文件中解析出第一条 ``role == "user"`` 的消息内容作为 prompt。
+
+    用于任务详情视图：相比 ``_peek_session_meta`` 提取的 title（截断到 120 字），
+    这里返回用户实际输入的完整首条指令文本。复用 ``read_session_messages`` 的
+    解析逻辑（已处理 Qoder ``<user_query>`` 标签、跳过系统提示/工具结果）。
+
+    为控制成本仅读取前若干条消息即可命中首条用户消息；文件不存在或无用户
+    消息时返回 None。
+    """
+    if not file_path:
+        return None
+    messages = read_session_messages(file_path, agent_id, limit=20)
+    for msg in messages:
+        if msg.get("role") == "user":
+            content = (msg.get("content") or "").strip()
+            if content:
+                return content
+    return None
+
+
 # ---------- Token 估算与同步 ----------
 
 # 复用全局 tiktoken 编码器实例，避免每次调用都重新创建
@@ -906,6 +927,46 @@ def _estimate_session_file_tokens(file_path: str, start_line: int = 0) -> Tuple[
     return (input_tokens, output_tokens, total_lines)
 
 
+def _safe_file_mtime(file_path: str) -> Optional[datetime]:
+    """返回文件 mtime 对应的 naive UTC datetime；读取失败返回 None。"""
+    try:
+        return datetime.utcfromtimestamp(Path(file_path).stat().st_mtime)
+    except (OSError, ValueError, OverflowError):
+        return None
+
+
+def _parse_db_timestamp(value) -> Optional[datetime]:
+    """将 DB 时间值解析为 naive UTC datetime；无法解析返回 None。
+
+    兼容 ``2026-07-08T12:34:56.789`` 与 ``2026-07-08 12:34:56`` 两种格式，
+    以及带 ``Z`` / 时区偏移的 ISO 字符串。解析失败时返回 None，
+    调用方据此回退到既有行为（不跳过），保证不漏刷 token。
+    """
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is not None:
+            return value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value
+    s = str(value).strip()
+    if not s:
+        return None
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    if " " in s and "T" not in s:
+        s = s.replace(" ", "T", 1)
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        try:
+            dt = datetime.strptime(s[:19], "%Y-%m-%dT%H:%M:%S")
+        except ValueError:
+            return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
 async def sync_session_token_usage() -> dict:
     """扫描所有 Qoder/Codex/Claude IDE 会话，估算 token 并写入 DB。
 
@@ -949,6 +1010,8 @@ async def sync_session_token_usage() -> dict:
 async def _sync_session_token_usage_inner(sa_text, async_session_factory, cost_service) -> dict:
     """sync_session_token_usage 的核心逻辑，被超时保护包裹。"""
     stats = {"synced": 0, "skipped": 0, "created": 0, "errors": 0}
+    # 已有 DB 记录、因文件更新而重新刷新 token 的会话数（用于 info 日志）
+    refreshed = 0
 
     # 获取所有已发现的 Qoder/Codex/Claude IDE 会话
     # _load() 包含文件扫描，放到线程池执行
@@ -968,11 +1031,12 @@ async def _sync_session_token_usage_inner(sa_text, async_session_factory, cost_s
             # 查找或创建关联的 task
             task_id: Optional[str] = None
             synced_count = 0
+            db_completed_at = None
 
             async with async_session_factory() as db_session:
                 r = await db_session.execute(
                     sa_text(
-                        "SELECT id, COALESCE(synced_message_count, 0) "
+                        "SELECT id, COALESCE(synced_message_count, 0), completed_at "
                         "FROM tasks WHERE session_id = :sid "
                         "ORDER BY created_at DESC LIMIT 1"
                     ),
@@ -982,6 +1046,23 @@ async def _sync_session_token_usage_inner(sa_text, async_session_factory, cost_s
                 if row:
                     task_id = row[0]
                     synced_count = int(row[1] or 0)
+                    db_completed_at = row[2]
+
+            # 已有 DB 记录时，先用文件 mtime 判断是否需要刷新：
+            # 文件自上次同步（completed_at）后未修改 → 跳过，避免读盘/估算 token；
+            # 文件已更新 → 继续走下方增量估算逻辑刷新 token。
+            # 时间无法解析（如 completed_at 为空）时不跳过，回退既有行为，保证不漏刷。
+            pre_existing = task_id is not None
+            if pre_existing:
+                file_mtime_dt = _safe_file_mtime(file_path)
+                db_time_dt = _parse_db_timestamp(db_completed_at)
+                if (
+                    file_mtime_dt is not None
+                    and db_time_dt is not None
+                    and file_mtime_dt <= db_time_dt
+                ):
+                    stats["skipped"] += 1
+                    continue
 
             # 使用专用函数估算 token（计入 tool_use/tool_result 等全部内容）
             # synced_count 语义为已处理的文件行数
@@ -996,6 +1077,10 @@ async def _sync_session_token_usage_inner(sa_text, async_session_factory, cost_s
                 continue
 
             # 如果没有关联 task，创建占位任务
+            # 关键：文件源会话是客户端已完成的历史指令，仅用于 token 统计与展示。
+            # 必须以终态 completed 落库（initial_status="completed"），
+            # 绝不能用默认的 queued，否则 create_task 会调度 _schedule_agent_start
+            # 重新启动 Agent CLI 执行历史 prompt（后端重启后重跑旧指令的 Bug 根因）。
             if not task_id:
                 from backend.services.task_service import task_service
                 title = sess.get("title") or "Qoder IDE session"
@@ -1008,6 +1093,7 @@ async def _sync_session_token_usage_inner(sa_text, async_session_factory, cost_s
                     cwd=cwd,
                     attachments=[],
                     session_id=session_id,
+                    initial_status="completed",
                 )
                 if task:
                     task_id = task.get("id")
@@ -1040,6 +1126,8 @@ async def _sync_session_token_usage_inner(sa_text, async_session_factory, cost_s
                 await db_session.commit()
 
             stats["synced"] += 1
+            if pre_existing:
+                refreshed += 1
 
         except Exception as exc:  # noqa: BLE001
             logger.warning(
@@ -1047,5 +1135,12 @@ async def _sync_session_token_usage_inner(sa_text, async_session_factory, cost_s
                 session_id, exc,
             )
             stats["errors"] += 1
+
+    if refreshed:
+        logger.info(
+            "sync_session_token_usage refreshed tokens for %d existing session(s) "
+            "due to file modification",
+            refreshed,
+        )
 
     return stats

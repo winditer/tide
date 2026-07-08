@@ -672,7 +672,7 @@ async def set_group_workflow(group_id: str, body: dict):
 
     body: ``{"workflow_id": "xxx", "flow_mode": "freeform"}``。
     - flow_mode 可选，传 None 时保留现有值（向后兼容）；
-    - flow_mode='freeform' 时 workflow_id 可选；其余模式仍要求 workflow_id。
+    - flow_mode='freeform' 或 'default_workflow' 时 workflow_id 可选；仅 custom_workflow 要求 workflow_id。
     """
     await _ensure_group_exists(group_id)
     body = body or {}
@@ -687,8 +687,9 @@ async def set_group_workflow(group_id: str, body: dict):
         str(workflow_id).strip() if workflow_id and str(workflow_id).strip() else None
     )
 
-    # freeform 无需绑定工作流；其余模式仍要求 workflow_id
-    if flow_mode != "freeform" and not workflow_id:
+    # freeform 无需绑定工作流；default_workflow 使用系统默认工作流也无需显式绑定；
+    # 仅 custom_workflow 必须绑定一个工作流。
+    if flow_mode == "custom_workflow" and not workflow_id:
         raise HTTPException(status_code=400, detail="workflow_id is required")
 
     wf = None

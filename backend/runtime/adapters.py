@@ -1421,9 +1421,30 @@ class A2AAdapter:
                 if event.get("type") == "task_event":
                     kind = str(event.get("kind", "") or "")
                     content = str(event.get("content", "") or "")
-                    if kind == "artifact" and content:
+                    if kind == "artifact":
+                        # content 为空时，尝试从嵌套的 payload/artifacts 中提取
+                        # artifacts[].parts[].text（与 task_result 提取逻辑保持一致）
+                        if not content:
+                            nested = event.get("payload") or event
+                            artifacts = nested.get("artifacts") if isinstance(nested, dict) else None
+                            if not artifacts:
+                                artifacts = event.get("artifacts") or []
+                            parts_texts = []
+                            for art in (artifacts or []):
+                                if not isinstance(art, dict):
+                                    continue
+                                for part in (art.get("parts") or []):
+                                    if isinstance(part, dict) and (part.get("kind") == "text" or part.get("type") == "text"):
+                                        t = (part.get("text") or "").strip()
+                                        if t:
+                                            parts_texts.append(t)
+                            content = "\n".join(parts_texts)
+                        if content:
+                            yield {"type": "output_chunk", "content": content}
+                    elif kind == "output" and content:
+                        # "output" 表示实际输出内容，应作为流式内容而非状态
                         yield {"type": "output_chunk", "content": content}
-                    elif kind in ("output", "status") and content:
+                    elif kind == "status" and content:
                         yield {"type": "status_changed", "status": content}
                     # 空事件跳过
                     continue

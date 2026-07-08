@@ -23,7 +23,11 @@ from backend.core.dependencies import (
 )
 from backend.db.engine import async_session_factory
 from backend.models.schemas import TaskCreate, TaskResponse, TaskListResponse, ApprovalAction
-from backend.services.session_discovery import discover_sessions, find_session
+from backend.services.session_discovery import (
+    discover_sessions,
+    extract_first_user_prompt,
+    find_session,
+)
 from backend.services.task_service import task_service
 
 
@@ -232,6 +236,46 @@ async def _fetch_db_tasks(
     return items
 
 
+async def _fetch_db_dedup_keys(
+    workspace_id: str,
+    agent_id: Optional[str] = None,
+    project: Optional[str] = None,
+    group_id: Optional[str] = None,
+) -> tuple[set, set]:
+    """查询 tasks 表中"全部状态"任务的 session_id / id，用于与文件源去重。
+
+    与 ``_fetch_db_tasks`` 不同，此处**不按 status 过滤**（含 cancelled/stopped/
+    rejected 等终态）。原因：``_fetch_db_tasks`` 默认排除 cancelled 任务不予展示，
+    若去重集合也随之缺失这些 session_id，文件源扫描到同一会话时去重会失效，
+    导致已取消/隐藏的任务被文件源当作 ``completed`` 重新显示（"重复出现"缺陷）。
+
+    返回 ``(session_ids, task_ids)`` 两个集合。
+    """
+    conditions = ["workspace_id = :workspace_id"]
+    params: dict = {"workspace_id": workspace_id}
+    if agent_id:
+        conditions.append("agent_id = :agent_id")
+        params["agent_id"] = agent_id
+    if project:
+        conditions.append("(cwd = :project OR cwd LIKE :project_prefix)")
+        params["project"] = project
+        params["project_prefix"] = project.rstrip("/") + "/%"
+    if group_id:
+        conditions.append("group_id = :group_id")
+        params["group_id"] = group_id
+    where = " AND ".join(conditions)
+
+    async with async_session_factory() as session:
+        result = await session.execute(
+            text(f"SELECT id, session_id FROM tasks WHERE {where}"),
+            params,
+        )
+        rows = result.fetchall()
+    session_ids = {row[1] for row in rows if row[1]}
+    task_ids = {row[0] for row in rows if row[0]}
+    return session_ids, task_ids
+
+
 def _file_session_to_task(item: dict, workspace_id: str) -> dict:
     """把文件扫描得到的会话映射成 TaskResponse 兼容的 dict。"""
     return {
@@ -313,13 +357,16 @@ async def list_tasks(
 
     # 2) 文件扫描会话
     merged: list[dict] = list(db_items)
-    # 复合去重集合：DB 任务优先（状态更完整），文件源命中任一集合即跳过
-    db_session_ids = {
-        it.get("session_id") for it in db_items if it.get("session_id")
-    }
-    db_task_ids = {
-        it.get("id") for it in db_items if it.get("id")
-    }
+    # 复合去重集合：DB 任务优先（状态更完整），文件源命中任一集合即跳过。
+    # 关键：去重集合基于**全部状态**的 DB 任务构建（含 cancelled/stopped/rejected），
+    # 而非仅当前展示的 db_items。否则被隐藏的 cancelled 任务会被文件源当作
+    # completed 重新显示，造成同一会话"重复出现"。
+    db_session_ids, db_task_ids = await _fetch_db_dedup_keys(
+        workspace_id,
+        agent_id=agent_id,
+        project=project,
+        group_id=group_id,
+    )
     # 已并入合并列表的文件源标识，避免文件源自身重复（同一 session 多条会话文件）
     seen_file_session_ids: set = set()
 
@@ -329,8 +376,11 @@ async def list_tasks(
     if include_files:
         file_sessions = discover_sessions(project_cwd=project, agent_id=agent_id)
         for s in file_sessions:
-            # 只包含 session_source == "exec" 的文件会话作为任务
-            if s.get("session_source") != "exec":
+            # 包含 "exec" 和 "cli" 来源的文件会话作为任务
+            # - "exec": Codex 自动化执行（/plan、工作流）
+            # - "cli": Qoder/Claude IDE 直接对话
+            session_source = s.get("session_source")
+            if session_source and session_source not in ("exec", "cli"):
                 continue
             sid = s.get("session_id")
             # 已在 DB 中存在（按 session_id）：DB 记录状态更完整，优先保留 DB，跳过文件源
@@ -409,9 +459,24 @@ async def get_task(
             return result
 
     # 文件来源 fallback：raw_id 实际上是 session_id
+    # 放宽来源判定，与 list_tasks 保持一致：
+    #   - "exec": Codex 自动化执行（/plan、工作流）
+    #   - "cli": Qoder/Claude IDE 直接对话
+    #   - None: Codex 无显式来源的历史会话
+    # 仅当来源为其他明确类型（如 vscode）时才不作为任务返回。
     file_session = find_session(raw_id)
-    if file_session and file_session.get("session_source") == "exec":
-        return _file_session_to_task(file_session, workspace_id)
+    if file_session:
+        session_source = file_session.get("session_source")
+        if not session_source or session_source in ("exec", "cli"):
+            task = _file_session_to_task(file_session, workspace_id)
+            # prompt 优先取会话文件中用户实际输入的首条完整指令，
+            # 回退到 peek 提取的 title（截断），避免详情页显示会话名/文件名。
+            first_prompt = extract_first_user_prompt(
+                file_session.get("file"), file_session.get("agent_id") or ""
+            )
+            if first_prompt:
+                task["prompt"] = first_prompt
+            return task
 
     raise HTTPException(status_code=404, detail="Task not found")
 
@@ -476,7 +541,15 @@ async def retry_task(
 ):
     """重试失败任务"""
     _ensure_not_viewer(current_user)
-    raw_id, _ = _strip_source_prefix(task_id)
+    raw_id, source_hint = _strip_source_prefix(task_id)
+
+    # 文件源会话（本地 Agent 会话文件）不是 DB 任务，不支持重试执行
+    if source_hint == "file":
+        raise HTTPException(
+            status_code=400,
+            detail="文件源会话不支持重试操作，请创建新任务",
+        )
+
     existing = await task_service.get_task(raw_id)
     if existing:
         await check_cwd_write_permission(existing.get("cwd"), current_user)
@@ -494,7 +567,14 @@ async def continue_task(
 ):
     """在已完成/失败的任务上续聊，复用原有 session_id 在同一任务上继续执行。"""
     _ensure_not_viewer(current_user)
-    raw_id, _ = _strip_source_prefix(task_id)
+    raw_id, source_hint = _strip_source_prefix(task_id)
+
+    # 文件源会话（本地 Agent 会话文件）不是 DB 任务，直接续聊会误匹配并触发新执行
+    if source_hint == "file":
+        raise HTTPException(
+            status_code=400,
+            detail="文件源会话不支持续聊操作，请创建新任务",
+        )
 
     prompt = (body.get("prompt") or "").strip()
     if not prompt:

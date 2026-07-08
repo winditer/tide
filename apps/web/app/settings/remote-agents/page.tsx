@@ -11,6 +11,8 @@ import {
 import { apiClient, ApiError, useAuth } from "@tide/core";
 import {
   ArrowLeft,
+  FolderOpen,
+  Globe,
   Network,
   PenLine,
   Plus,
@@ -20,6 +22,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Trash2,
+  User,
   Wifi,
 } from "lucide-react";
 import {
@@ -487,8 +490,24 @@ export default function RemoteAgentsPage() {
                             <Network className="h-3.5 w-3.5" />
                           </div>
                           <div className="min-w-0">
-                            <div className="font-medium truncate">
-                              {agent.name}
+                            <div className="flex items-center gap-1.5">
+                              {(() => {
+                                const s = (agent.scope || "global").toLowerCase();
+                                if (s === "project")
+                                  return (
+                                    <FolderOpen className="h-3.5 w-3.5 flex-shrink-0 text-blue-500" />
+                                  );
+                                if (s === "personal")
+                                  return (
+                                    <User className="h-3.5 w-3.5 flex-shrink-0 text-purple-500" />
+                                  );
+                                return (
+                                  <Globe className="h-3.5 w-3.5 flex-shrink-0 text-amber-500" />
+                                );
+                              })()}
+                              <div className="font-medium truncate">
+                                {agent.name}
+                              </div>
                             </div>
                             <div className="text-[11px] font-mono text-muted-foreground truncate">
                               {agent.id}

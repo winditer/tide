@@ -832,8 +832,9 @@ async def set_project_workflow(
     valid_modes = {"default_workflow", "custom_workflow", "freeform"}
     if flow_mode is not None and flow_mode not in valid_modes:
         raise HTTPException(status_code=400, detail=f"invalid flow_mode: {flow_mode}")
-    # freeform 无需绑定工作流；其余模式仍要求 workflow_id
-    if flow_mode != "freeform" and not body.workflow_id:
+    # freeform 无需绑定工作流；default_workflow 使用系统默认工作流也无需显式绑定；
+    # 仅 custom_workflow 必须绑定一个工作流。
+    if flow_mode == "custom_workflow" and not body.workflow_id:
         raise HTTPException(status_code=400, detail="workflow_id is required")
     settings = await work_item_service.set_project_workflow(
         project_id=project_id, workflow_id=body.workflow_id, flow_mode=flow_mode
@@ -852,7 +853,10 @@ async def get_project_workflow(
     settings = await work_item_service.get_project_settings(project_id)
     if not settings:
         raise HTTPException(status_code=404, detail="Project workflow not bound")
-    # flow_mode 采用继承链（项目级 > 项目组级 > 系统默认），
+    # own_flow_mode：项目自身显式设置的模式（供设置页回显，不受项目组继承影响），
+    # 避免用户选择「默认工作流」后被项目组的 freeform 覆盖。
+    settings["own_flow_mode"] = settings.get("flow_mode") or "default_workflow"
+    # flow_mode 采用继承链（项目级 > 项目组级 > 系统默认），供看板/工作项运行时使用，
     # 使项目组设为 freeform 时子项目前端也能识别为 freeform。
     settings["flow_mode"] = await work_item_service.get_effective_flow_mode(
         project_id, settings=settings

@@ -355,8 +355,14 @@ export default function TaskDetailPage({
   }
 
   const status = task.status as string;
+  // 文件源会话（本地 Agent 会话文件推导出的虚拟任务）不是 DB 任务，
+  // 不支持续聊/重试，否则会误匹配 DB 任务并触发重新执行。
+  const isFileSource =
+    id.startsWith("file:") || (task as { source?: string }).source === "file";
   const canStop = status === "queued" || status === "running";
-  const canRetry = status === "failed" || status === "stopped" || status === "rejected" || status === "cancelled";
+  const canRetry =
+    !isFileSource &&
+    (status === "failed" || status === "stopped" || status === "rejected" || status === "cancelled");
   const needsApproval = status === "review";
   const attachments = parseAttachments(task.attachments);
 
@@ -644,7 +650,7 @@ export default function TaskDetailPage({
       )}
 
       {/* ── 续聊输入区 ─────────────────────────────────────── */}
-      {task.session_id && (
+      {task.session_id && !isFileSource && (
         <div className="border-t border-border/50 pt-6">
           <div className="flex items-end gap-2">
             <textarea

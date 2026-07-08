@@ -182,7 +182,9 @@ export function useUnbindProjectWorkflow() {
   return useMutation({
     mutationFn: (projectId: string) => unbindProjectWorkflow(projectId),
     onSuccess: (_data, projectId) => {
-      qc.invalidateQueries({ queryKey: ["project-workflow", projectId] });
+      // 解绑后后端 GET /workflow 会返回 404，react-query 默认会保留上一次的旧数据，
+      // 导致页面仍显示已绑定的工作流。直接移除缓存以清空绑定状态并触发重拉。
+      qc.removeQueries({ queryKey: ["project-workflow", projectId] });
       qc.invalidateQueries({ queryKey: ["work-items"] });
     },
   });

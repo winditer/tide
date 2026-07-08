@@ -159,6 +159,8 @@ export interface ProjectSettings {
   metadata?: Record<string, any>;
   /** 流转模式：默认工作流 / 自定义工作流 / 自由协作 */
   flow_mode?: WorkItemFlowMode;
+  /** 项目自身显式设置的流转模式（不受项目组继承影响，供设置页回显） */
+  own_flow_mode?: WorkItemFlowMode;
   updated_at: string;
 }
 

@@ -144,39 +144,47 @@ class AgentConfigService:
             config_json_str = None
 
         async with async_session_factory() as session:
-            await session.execute(
-                text(
-                    """
-                    INSERT INTO agent_configs
-                        (id, workspace_id, agent_id, scope, scope_target,
-                         enabled, display_name, description,
-                         model_override, timeout_override, config_json,
-                         created_by, created_at, updated_at)
-                    VALUES
-                        (:id, :workspace_id, :agent_id, :scope, :scope_target,
-                         :enabled, :display_name, :description,
-                         :model_override, :timeout_override, :config_json,
-                         :created_by, :created_at, :updated_at)
-                    """
-                ),
-                {
-                    "id": config_id,
-                    "workspace_id": workspace_id,
-                    "agent_id": agent_id,
-                    "scope": scope,
-                    "scope_target": scope_target,
-                    "enabled": int(data.get("enabled", 1)),
-                    "display_name": data.get("display_name"),
-                    "description": data.get("description"),
-                    "model_override": data.get("model_override"),
-                    "timeout_override": data.get("timeout_override"),
-                    "config_json": config_json_str,
-                    "created_by": data.get("created_by"),
-                    "created_at": now,
-                    "updated_at": now,
-                },
-            )
-            await session.commit()
+            try:
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO agent_configs
+                            (id, workspace_id, agent_id, scope, scope_target,
+                             enabled, display_name, description,
+                             model_override, timeout_override, config_json,
+                             created_by, created_at, updated_at)
+                        VALUES
+                            (:id, :workspace_id, :agent_id, :scope, :scope_target,
+                             :enabled, :display_name, :description,
+                             :model_override, :timeout_override, :config_json,
+                             :created_by, :created_at, :updated_at)
+                        """
+                    ),
+                    {
+                        "id": config_id,
+                        "workspace_id": workspace_id,
+                        "agent_id": agent_id,
+                        "scope": scope,
+                        "scope_target": scope_target,
+                        "enabled": int(data.get("enabled", 1)),
+                        "display_name": data.get("display_name"),
+                        "description": data.get("description"),
+                        "model_override": data.get("model_override"),
+                        "timeout_override": data.get("timeout_override"),
+                        "config_json": config_json_str,
+                        "created_by": data.get("created_by"),
+                        "created_at": now,
+                        "updated_at": now,
+                    },
+                )
+                await session.commit()
+            except Exception as exc:  # noqa: BLE001
+                emsg = str(exc).lower()
+                if "unique" in emsg or "constraint" in emsg:
+                    raise ValueError(
+                        "相同作用域下已存在该 Agent 的配置，无法重复创建"
+                    ) from exc
+                raise
 
         return await self.get_config(config_id)  # type: ignore[return-value]
 
@@ -226,11 +234,19 @@ class AgentConfigService:
         params["updated_at"] = now
 
         async with async_session_factory() as session:
-            await session.execute(
-                text(f"UPDATE agent_configs SET {', '.join(sets)} WHERE id = :id"),
-                params,
-            )
-            await session.commit()
+            try:
+                await session.execute(
+                    text(f"UPDATE agent_configs SET {', '.join(sets)} WHERE id = :id"),
+                    params,
+                )
+                await session.commit()
+            except Exception as exc:  # noqa: BLE001
+                msg = str(exc).lower()
+                if "unique" in msg or "constraint" in msg:
+                    raise ValueError(
+                        "相同作用域下已存在该 Agent 的配置，无法重复设置，请先删除原有配置或选择其他作用域"
+                    ) from exc
+                raise
 
         return await self.get_config(config_id)
 

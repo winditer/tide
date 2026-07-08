@@ -612,16 +612,22 @@ function SettingsPane({
   const currentWorkflow = projectWfQuery.data;
 
   // 从后端设置同步流转模式（仅在数据加载后初始化一次）
+  // 使用 own_flow_mode（项目自身显式设置）回显，避免被项目组继承的 flow_mode 覆盖，
+  // 否则用户选择「默认工作流」后重新进入会被误显示为项目组的自由协作模式。
   useEffect(() => {
-    if (currentWorkflow?.flow_mode) {
-      setFlowMode(currentWorkflow.flow_mode as typeof flowMode);
+    const ownMode = currentWorkflow?.own_flow_mode ?? currentWorkflow?.flow_mode;
+    if (ownMode) {
+      setFlowMode(ownMode as typeof flowMode);
     }
-  }, [currentWorkflow?.flow_mode]);
+  }, [currentWorkflow?.own_flow_mode, currentWorkflow?.flow_mode]);
 
   const currentWorkflowName =
     currentWorkflow?.workflow_id
       ? workflows.find((w) => w.id === currentWorkflow.workflow_id)?.name ?? currentWorkflow.workflow_id
       : undefined;
+
+  // 系统默认工作流（is_system === 1），用于「默认工作流」模式的只读展示
+  const systemDefaultWorkflow = workflows.find((w) => w.is_system === 1);
 
   const workflowOptions = [
     { value: "", label: "-- 选择工作流 --" },
@@ -638,7 +644,7 @@ function SettingsPane({
     {
       value: "default_workflow",
       label: "默认工作流",
-      desc: "使用系统内建 4 阶段流程",
+      desc: "使用系统默认工作流",
     },
     {
       value: "custom_workflow",
@@ -667,11 +673,24 @@ function SettingsPane({
         workflowId: currentWorkflow.workflow_id,
         flowMode: mode,
       });
+    } else if (mode === "default_workflow") {
+      // 默认工作流使用系统内建工作流，无需绑定，直接持久化模式，
+      // 保证选择后能正确写入并在重新进入时恢复。
+      bindMutation.mutate({ projectId, flowMode: mode });
     }
+    // custom_workflow 且尚未绑定工作流：暂不持久化，等待用户在下方选择并绑定。
   };
 
   const handleBind = () => {
-    if (!selectedWfId) return;
+    // 自定义工作流模式下必须绑定一个工作流，不能为空
+    if (!selectedWfId) {
+      toast({
+        title: "请先选择一个工作流",
+        description: "自定义工作流模式下必须绑定工作流，不能为空",
+        variant: "destructive",
+      });
+      return;
+    }
     bindMutation.mutate({ projectId, workflowId: selectedWfId, flowMode });
   };
 
@@ -778,50 +797,75 @@ function SettingsPane({
 
       {/* Workflow Binding */}
       {!isFreeform && (
-      <div className="bg-card rounded-xl shadow-card p-6 space-y-4">
-        <h2 className="text-base font-medium">工作流绑定</h2>
-        {currentWorkflow?.workflow_id ? (
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-sm">
-                <span className="text-muted-foreground">当前绑定：</span>
-                <span className="font-medium">{currentWorkflowName}</span>
-              </div>
+        flowMode === "default_workflow" ? (
+          // 默认工作流：只读展示系统默认工作流，不支持绑定/解绑
+          <div className="bg-card rounded-xl shadow-card p-6 space-y-4">
+            <h2 className="text-base font-medium">工作流绑定</h2>
+            <div className="text-sm">
+              <span className="text-muted-foreground">当前使用系统默认工作流：</span>
+              <span className="font-medium">
+                {systemDefaultWorkflow?.name ?? "系统内建 4 阶段流程"}
+              </span>
+            </div>
+            {systemDefaultWorkflow && (
               <a
-                href={`/workflows/${currentWorkflow.workflow_id}?projectId=${encodeURIComponent(projectId)}`}
-                className="text-xs text-muted-foreground hover:text-foreground transition-smooth"
+                href={`/workflows/${systemDefaultWorkflow.id}?projectId=${encodeURIComponent(projectId)}`}
+                className="block text-xs text-muted-foreground hover:text-foreground transition-smooth"
               >
                 查看工作流 →
               </a>
-            </div>
-            <Button
-              variant="outline"
-              onClick={handleUnbind}
-              disabled={unbindMutation.isPending}
-            >
-              {unbindMutation.isPending ? "解绑中…" : "解绑"}
-            </Button>
+            )}
+            <p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+              默认工作流由系统统一管理，无需手动绑定或解绑。如需自定义流程，请切换到「自定义工作流」模式。
+            </p>
           </div>
         ) : (
-          <p className="text-sm text-muted-foreground">
-            未绑定工作流，绑定后可在工作项看板中使用。
-          </p>
-        )}
-        <div className="flex items-center gap-3">
-          <Select
-            value={selectedWfId}
-            onChange={(e) => setSelectedWfId(e.target.value)}
-            options={workflowOptions}
-            className="flex-1"
-          />
-          <Button
-            onClick={handleBind}
-            disabled={!selectedWfId || bindMutation.isPending}
-          >
-            {bindMutation.isPending ? "绑定中…" : "绑定"}
-          </Button>
-        </div>
-      </div>
+          // 自定义工作流：支持绑定/解绑，且必须绑定一个工作流
+          <div className="bg-card rounded-xl shadow-card p-6 space-y-4">
+            <h2 className="text-base font-medium">工作流绑定</h2>
+            {currentWorkflow?.workflow_id ? (
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-sm">
+                    <span className="text-muted-foreground">当前绑定：</span>
+                    <span className="font-medium">{currentWorkflowName}</span>
+                  </div>
+                  <a
+                    href={`/workflows/${currentWorkflow.workflow_id}?projectId=${encodeURIComponent(projectId)}`}
+                    className="text-xs text-muted-foreground hover:text-foreground transition-smooth"
+                  >
+                    查看工作流 →
+                  </a>
+                </div>
+                <Button
+                  variant="outline"
+                  onClick={handleUnbind}
+                  disabled={unbindMutation.isPending}
+                >
+                  {unbindMutation.isPending ? "解绑中…" : "解绑"}
+                </Button>
+              </div>
+            ) : (
+              <p className="text-sm text-destructive">
+                自定义工作流模式下必须绑定一个工作流，请在下方选择并绑定。
+              </p>
+            )}
+            <div className="flex items-center gap-3">
+              <Select
+                value={selectedWfId}
+                onChange={(e) => setSelectedWfId(e.target.value)}
+                options={workflowOptions}
+                className="flex-1"
+              />
+              <Button
+                onClick={handleBind}
+                disabled={bindMutation.isPending}
+              >
+                {bindMutation.isPending ? "绑定中…" : "绑定"}
+              </Button>
+            </div>
+          </div>
+        )
       )}
 
       {/* Git Repository Config */}

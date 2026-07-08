@@ -1167,6 +1167,13 @@ class TaskService:
         """
         task = await self.get_task(task_id)
         if not task:
+            logger.warning("continue_task: task not found in DB, task_id=%s", task_id)
+            return None
+
+        # 防止对文件源任务（本地 Agent 会话文件推导出的虚拟任务）误操作，
+        # 避免已结束的客户端任务被误匹配并重新执行。
+        if task.get("source") == "file":
+            logger.warning("continue_task: rejecting file-source task, task_id=%s", task_id)
             return None
 
         # 仅允许 completed 或 failed 状态的任务续聊

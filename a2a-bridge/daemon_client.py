@@ -55,7 +55,7 @@ class DaemonWSClient:
         endpoint_url: str = "",
         max_concurrency: int = 5,
     ):
-        self.tide_ws_url = tide_ws_url
+        self.tide_ws_url = self._normalize_ws_scheme(tide_ws_url)
         self.daemon_token = daemon_token
         self.daemon_id = daemon_id or self._resolve_daemon_id()
         self.heartbeat_interval = heartbeat_interval
@@ -73,6 +73,15 @@ class DaemonWSClient:
         self._executor = None  # 注入外部 executor
         # dispatch_task_id -> executor 内部任务 id 的映射（用于取消）
         self._task_map: dict[str, str] = {}
+
+    @staticmethod
+    def _normalize_ws_scheme(url: str) -> str:
+        """将 http(s) scheme 归一化为 ws(s)，保留路径与 query string。"""
+        if url.startswith("https://"):
+            return "wss://" + url[len("https://"):]
+        if url.startswith("http://"):
+            return "ws://" + url[len("http://"):]
+        return url
 
     def set_executor(self, executor):
         """注入 executor 实例，用于执行收到的任务。"""

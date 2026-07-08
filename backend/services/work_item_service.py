@@ -4689,10 +4689,14 @@ class WorkItemService:
         if flow_mode == "freeform":
             return {"columns": [], "workflow": None, "flow_mode": "freeform"}
 
-        if not settings or not settings.get("workflow_id"):
+        # default_workflow 模式下项目未显式绑定工作流时，回退到系统默认工作流，
+        # 避免看板返回空列导致前端误报"该项目尚未绑定工作流"。
+        workflow_id = settings.get("workflow_id") if settings else None
+        if not workflow_id:
+            workflow_id = await self._find_default_workflow_id()
+        if not workflow_id:
             return {"columns": [], "workflow": None, "flow_mode": flow_mode}
 
-        workflow_id = settings["workflow_id"]
         definition = await self._load_workflow_definition(workflow_id)
         if not definition:
             return {"columns": [], "workflow": None}

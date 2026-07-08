@@ -2418,7 +2418,7 @@ function WorkflowBindingCard({ groupId, members = [] }: { groupId: string; membe
     {
       value: "default_workflow",
       label: "默认工作流",
-      desc: "使用系统内建 4 阶段流程",
+      desc: "使用系统默认工作流",
     },
     {
       value: "custom_workflow",

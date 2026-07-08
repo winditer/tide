@@ -374,7 +374,9 @@ export function useChat(options: UseChatOptions = {}): UseChatResult {
             status: finalStatus ?? m.status,
           };
           if (finalStatus === "completed") {
-            next.content = result || "(任务已完成，无输出)";
+            // task.result 有内容则用 result；为空但流式事件已积累内容则保留；
+            // 仅两者都为空时才显示占位文案
+            next.content = result || next.content || "(任务已完成，无输出)";
           } else if (finalStatus === "failed") {
             next.content = result || "(任务执行失败)";
           }

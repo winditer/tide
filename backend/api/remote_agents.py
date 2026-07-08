@@ -548,6 +548,8 @@ async def update_remote_agent(
     if not existing:
         raise HTTPException(status_code=404, detail="Remote agent not found")
 
+    # 仅更新客户端显式传入的字段（exclude_unset）：
+    # 不会根据 scope 变更自动重新生成/覆盖 name，name 仅在客户端显式提交时更新。
     updates = body.model_dump(exclude_unset=True)
     if not updates:
         return existing
@@ -565,14 +567,24 @@ async def update_remote_agent(
     set_clauses.append("updated_at = :updated_at")
     params["updated_at"] = datetime.now(timezone.utc).isoformat()
 
-    async with async_session_factory() as session:
-        await session.execute(
-            text(
-                f"UPDATE remote_agents SET {', '.join(set_clauses)} WHERE id = :id"
-            ),
-            params,
-        )
-        await session.commit()
+    try:
+        async with async_session_factory() as session:
+            await session.execute(
+                text(
+                    f"UPDATE remote_agents SET {', '.join(set_clauses)} WHERE id = :id"
+                ),
+                params,
+            )
+            await session.commit()
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc).lower()
+        if "unique" in msg or "constraint" in msg or "primary key" in msg:
+            raise HTTPException(
+                status_code=409,
+                detail="相同作用域下已存在同名 Agent 配置，请调整名称或作用域后重试",
+            )
+        logger.exception("update remote_agents failed")
+        raise HTTPException(status_code=500, detail=f"Failed to update remote agent: {exc}")
 
     # 同步 actors.name（若提供了新名字）
     new_name = updates.get("name")

@@ -1,11 +1,15 @@
 "use client";
 
+import Link from "next/link";
 import { Bot } from "lucide-react";
 import { useAgents } from "@tide/core";
+
+const MAX_VISIBLE_AGENTS = 5;
 
 export function AgentPanel() {
   const { data, isLoading, isError } = useAgents();
   const agents = data?.agents ?? [];
+  const visibleAgents = agents.slice(0, MAX_VISIBLE_AGENTS);
 
   return (
     <section className="rounded-xl border border-gray-200/60 bg-white/80 p-5 shadow-sm backdrop-blur-sm">
@@ -16,8 +20,17 @@ export function AgentPanel() {
             Agent 状态
           </h2>
         </div>
-        {agents.length > 0 && (
-          <span className="text-xs text-gray-400">共 {agents.length}</span>
+        {agents.length > MAX_VISIBLE_AGENTS ? (
+          <Link
+            href="/settings/agents"
+            className="text-xs font-medium text-indigo-600 transition-colors hover:text-indigo-700"
+          >
+            查看全部 →
+          </Link>
+        ) : (
+          agents.length > 0 && (
+            <span className="text-xs text-gray-400">共 {agents.length}</span>
+          )
         )}
       </header>
 
@@ -29,7 +42,7 @@ export function AgentPanel() {
         <div className="py-6 text-center text-sm text-gray-400">暂无 Agent</div>
       ) : (
         <ul className="space-y-1.5">
-          {agents.map((agent) => (
+          {visibleAgents.map((agent) => (
             <li
               key={agent.id}
               className="flex items-center justify-between rounded-lg px-2 py-1.5 transition-colors hover:bg-indigo-50/60"

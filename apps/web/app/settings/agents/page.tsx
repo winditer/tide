@@ -24,12 +24,15 @@ import {
   Bot,
   ChevronLeft,
   ChevronRight,
+  FolderOpen,
+  Globe,
   PenLine,
   Plus,
   RotateCcw,
   Search,
   Server,
   Trash2,
+  User,
 } from "lucide-react";
 import { RemoteAgentGuide } from "@tide/views/remote-agents/RemoteAgentGuide";
 import { AgentFormDialog } from "../remote-agents/agent-dialogs";
@@ -99,6 +102,8 @@ export default function SettingsAgentsPage() {
 
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [configs, setConfigs] = useState<AgentConfig[]>([]);
+  // 跨所有作用域的配置，仅用于列表图标显示 Agent 的真实作用域
+  const [allConfigs, setAllConfigs] = useState<AgentConfig[]>([]);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -177,12 +182,25 @@ export default function SettingsAgentsPage() {
     }
   }, [scope, projectTarget, user?.id]);
 
+  // Fetch configs across all scopes (used only to render the true scope icon per agent)
+  const fetchAllConfigs = useCallback(async () => {
+    try {
+      const data = await apiClient.get<AgentConfig[]>(
+        "/api/agent-configs?workspace_id=default"
+      );
+      setAllConfigs(Array.isArray(data) ? data : []);
+    } catch {
+      setAllConfigs([]);
+    }
+  }, []);
+
   useEffect(() => {
     if (hydrated) {
       fetchAgents();
       fetchConfigs();
+      fetchAllConfigs();
     }
-  }, [hydrated, fetchAgents, fetchConfigs]);
+  }, [hydrated, fetchAgents, fetchConfigs, fetchAllConfigs]);
 
   // Build config map for current scope
   const configMap = useMemo(() => {
@@ -192,6 +210,30 @@ export default function SettingsAgentsPage() {
     }
     return map;
   }, [configs]);
+
+  // 每个 Agent 的真实作用域（跨所有 scope），用于列表图标显示。
+  // 同一 Agent 存在多条配置时按 personal > project > global 取最具体的一条；
+  // personal 配置仅统计属于当前用户的。
+  const agentScopeMap = useMemo(() => {
+    const order: Record<string, number> = { personal: 3, project: 2, global: 1 };
+    const map: Record<string, ScopeType> = {};
+    for (const c of allConfigs) {
+      const s = (c.scope || "global").toLowerCase() as ScopeType;
+      if (
+        s === "personal" &&
+        user?.id &&
+        c.scope_target &&
+        c.scope_target !== user.id
+      ) {
+        continue; // 跳过其他用户的个人配置
+      }
+      const existing = map[c.agent_id];
+      if (!existing || (order[s] || 0) > (order[existing] || 0)) {
+        map[c.agent_id] = s;
+      }
+    }
+    return map;
+  }, [allConfigs, user?.id]);
 
   // Merge agents with their config status
   const mergedAgents = useMemo(() => {
@@ -280,6 +322,7 @@ export default function SettingsAgentsPage() {
         description: agent.name,
       });
       fetchConfigs();
+      fetchAllConfigs();
     } catch (e: any) {
       const detail = e?.body?.detail || e?.message || "操作失败";
       toast({ title: "操作失败", description: detail, variant: "destructive" });
@@ -328,6 +371,7 @@ export default function SettingsAgentsPage() {
       setScope(data.scope);
       setProjectTarget(data.scope === "project" ? data.scope_target || "" : "");
       fetchConfigs();
+      fetchAllConfigs();
     } catch (e: any) {
       const detail = e?.body?.detail || e?.message || "保存失败";
       toast({ title: "保存失败", description: detail, variant: "destructive" });
@@ -356,6 +400,7 @@ export default function SettingsAgentsPage() {
         setDeletingAgent(null);
         fetchAgents();
         fetchConfigs();
+        fetchAllConfigs();
         return;
       }
       // reset
@@ -368,6 +413,7 @@ export default function SettingsAgentsPage() {
       toast({ title: "已重置", description: `${deletingAgent.name} 配置已恢复默认` });
       setDeletingAgent(null);
       fetchConfigs();
+      fetchAllConfigs();
     } catch (e: any) {
       const detail = e?.body?.detail || e?.message || "操作失败";
       toast({ title: "操作失败", description: detail, variant: "destructive" });
@@ -520,11 +566,37 @@ export default function SettingsAgentsPage() {
                         </td>
                         {/* Name */}
                         <td className="px-4 py-3 max-w-[200px]">
-                          <div
-                            className="font-medium truncate"
-                            title={cfg?.display_name || agent.name}
-                          >
-                            {cfg?.display_name || agent.name}
+                          <div className="flex items-center gap-2">
+                            {(() => {
+                              // 优先取当前作用域的 config，否则回退到该 Agent 跨作用域的真实 scope
+                              const realScope = (
+                                cfg?.scope ||
+                                agentScopeMap[agent.id] ||
+                                ""
+                              ).toLowerCase();
+                              if (realScope === "project")
+                                return (
+                                  <FolderOpen className="h-3.5 w-3.5 flex-shrink-0 text-blue-500" />
+                                );
+                              if (realScope === "personal")
+                                return (
+                                  <User className="h-3.5 w-3.5 flex-shrink-0 text-purple-500" />
+                                );
+                              if (realScope === "global")
+                                return (
+                                  <Globe className="h-3.5 w-3.5 flex-shrink-0 text-amber-500" />
+                                );
+                              // 无任何配置覆盖：灰色图标表示使用默认，而非显示为全局
+                              return (
+                                <Globe className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground/40" />
+                              );
+                            })()}
+                            <div
+                              className="font-medium truncate"
+                              title={cfg?.display_name || agent.name}
+                            >
+                              {cfg?.display_name || agent.name}
+                            </div>
                           </div>
                           {(cfg?.description || agent.description) && (
                             <div
@@ -770,6 +842,7 @@ export default function SettingsAgentsPage() {
             setRegisterOpen(false);
             void fetchAgents();
             void fetchConfigs();
+            void fetchAllConfigs();
           }}
           discover={async (url) =>
             apiClient.post<{
@@ -878,11 +951,17 @@ function EditAgentDialog({
           </DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Badge variant={SCOPE_VARIANT[localScope]}>{SCOPE_LABELS[localScope]}</Badge>
-            <code className="bg-muted px-1.5 py-0.5 rounded">{agent.id}</code>
-            <span>·</span>
-            <span>{agent.type === "remote" ? "远程 Agent" : "本地 Agent"}</span>
+          <div className="flex flex-wrap items-center gap-2 overflow-hidden text-xs text-muted-foreground">
+            <Badge variant={SCOPE_VARIANT[localScope]} className="flex-shrink-0">
+              {SCOPE_LABELS[localScope]}
+            </Badge>
+            <code className="max-w-[220px] truncate whitespace-nowrap rounded bg-muted px-1.5 py-0.5">
+              {agent.id}
+            </code>
+            <span className="flex-shrink-0">·</span>
+            <span className="flex-shrink-0">
+              {agent.type === "remote" ? "远程 Agent" : "本地 Agent"}
+            </span>
           </div>
 
           <div className="space-y-1.5">

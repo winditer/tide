@@ -454,6 +454,8 @@ class ProjectSettingsResponse(BaseModel):
     default_assignee: Optional[str] = None
     metadata: Optional[dict] = None
     flow_mode: Optional[str] = None
+    # 项目自身显式设置的流转模式（不受项目组继承影响，供设置页回显）
+    own_flow_mode: Optional[str] = None
     updated_at: Optional[str] = None
 
 
