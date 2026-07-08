@@ -4,7 +4,8 @@ export type NotificationType =
   | "assigned"
   | "completed"
   | "mentioned"
-  | "task_completed";
+  | "task_completed"
+  | "project_added";
 
 export interface Notification {
   id: string;

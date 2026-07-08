@@ -6,7 +6,7 @@ import { continueTask } from "../api/tasks";
 import { getTask } from "../api/tasks";
 import { fetchApprovals, approveApproval, rejectApproval } from "../api/approvals";
 import { useWs } from "../providers/ws-provider";
-import type { TaskEvent } from "../types/task";
+import type { Task, TaskEvent } from "../types/task";
 
 export type ChatMessageStatus = "pending" | "running" | "completed" | "failed";
 export type ChatMessageRole = "user" | "assistant";
@@ -270,7 +270,7 @@ export interface UseChatResult {
   sendMessage: (
     content: string,
     overrides?: SendMessageOverrides
-  ) => Promise<void>;
+  ) => Promise<Task | undefined>;
   clearHistory: () => void;
   approveTask: (approvalId: string, comment?: string) => Promise<void>;
   rejectTask: (approvalId: string, comment?: string) => Promise<void>;

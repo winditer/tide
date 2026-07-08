@@ -285,7 +285,7 @@ export default function TaskDetailPage({
   // 避免不同任务共享 _global_ 历史导致续聊消息串台。
   const chat = useChat({
     projectId: task?.id,
-    agentId: task?.agent_id,
+    agentId: task?.agent_id ?? undefined,
   });
   const chatRef = useRef(chat);
   chatRef.current = chat;
