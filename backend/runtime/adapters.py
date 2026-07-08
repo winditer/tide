@@ -1337,6 +1337,27 @@ class A2AAdapter:
 
     # --------------------------------------------------------------- ws mode
 
+    @staticmethod
+    def _resolve_daemon_skill(agent_id: str, daemon_session_id: str) -> str:
+        """从远程 Agent 记录 id 中解析具体 Agent 名（skill）。
+
+        记录 id 形如 ``daemon-{daemon_session_id}-{agent_name}``，如
+        ``daemon-a300f902-...-claude`` → 返回 ``claude``。
+        兼容可能携带的 ``a2a:`` 前缀；无法解析时返回空字符串，
+        由 Bridge 侧回退到默认 Agent。
+        """
+        aid = str(agent_id or "")
+        if aid.startswith("a2a:"):
+            aid = aid[len("a2a:"):]
+        did = str(daemon_session_id or "")
+        prefix = f"daemon-{did}-"
+        if did and aid.startswith(prefix):
+            return aid[len(prefix):]
+        # 降级：取最后一段（agent 名不含连字符，如 codex/claude/qoder）
+        if aid:
+            return aid.rsplit("-", 1)[-1]
+        return ""
+
     async def _execute_ws(
         self,
         runtime: CodexTaskRuntime,
@@ -1352,10 +1373,17 @@ class A2AAdapter:
         # 任务事件桥接以 task_id 为键，优先使用 runtime.task_id
         task_id = str(getattr(runtime, "task_id", "") or getattr(runtime, "session_id", "") or "")
 
+        # 解析具体 Agent 名（skill）：远程 Agent 记录 id 形如
+        # ``daemon-{daemon_session_id}-{agent_name}``（如 daemon-<uuid>-claude）。
+        # 若不带 skill 下发，Bridge 会回退到默认 Agent（codex），导致
+        # Claude/Qoder 远程 Agent 实际运行的是 codex，输出无法正确解析。
+        skill = self._resolve_daemon_skill(config.agent_id, daemon_session_id)
+
         logger.info(
-            "[A2AAdapter] execute(ws) agent_id=%s daemon=%s task_id=%s",
+            "[A2AAdapter] execute(ws) agent_id=%s daemon=%s skill=%s task_id=%s",
             config.agent_id,
             daemon_session_id[:8] if daemon_session_id else "",
+            skill,
             task_id,
         )
 
@@ -1364,6 +1392,8 @@ class A2AAdapter:
             task_id=task_id,
             payload={
                 "prompt": prompt,
+                "skill": skill,
+                "agent": skill,
                 "context_parts": context_parts,
                 "context_id": str(getattr(runtime, "conversation_id", "") or ""),
                 "cwd": str(getattr(runtime, "cwd", "") or ""),

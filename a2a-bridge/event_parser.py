@@ -111,7 +111,73 @@ def parse_codex_event(obj: dict[str, Any]) -> Optional[ParsedEvent]:
         return ParsedEvent(type=EVENT_RAW, text=item.get("text") or "", raw=obj)
     if t == "error":
         return ParsedEvent(type=EVENT_ERROR, text=obj.get("message") or str(obj), raw=obj)
+
+    # ── Codex CLI <= 0.135 旧版事件格式 ──
+    # 部分 daemon 主机安装的 codex CLI 仍输出旧版 session_meta / event_msg /
+    # response_item 结构；若不识别，AI 实际回复会落入 EVENT_RAW 被丢弃，
+    # 导致任务只剩进度而无内容。此处与 backend/runtime/adapters.py 完整版对齐。
+    payload = obj.get("payload") or {}
+    if t == "session_meta":
+        sid = payload.get("id") or obj.get("session_id")
+        return ParsedEvent(type=EVENT_SESSION, metadata={"session_id": sid}, raw=obj)
+    if t == "event_msg":
+        etype = payload.get("type") or ""
+        if etype == "agent_message":
+            text = payload.get("message") or ""
+            if _looks_like_approval(text):
+                return ParsedEvent(type=EVENT_APPROVAL, text=text, role="assistant", raw=obj)
+            return ParsedEvent(type=EVENT_MESSAGE, text=text, role="assistant", raw=obj)
+        if etype == "task_complete":
+            # 最终回复文本（旧版通过 last_agent_message 携带）
+            return ParsedEvent(type=EVENT_MESSAGE, text=payload.get("last_agent_message") or "", role="assistant", raw=obj)
+        if etype == "user_message":
+            return None
+        # 其它 event_msg（如 reasoning/exec 等）作为进度
+        txt = payload.get("message") or payload.get("text") or ""
+        return ParsedEvent(type=EVENT_PROGRESS, text=txt, raw=obj) if txt else None
+    if t == "response_item":
+        item_type = payload.get("type") or ""
+        if item_type == "message" and payload.get("role") == "assistant":
+            text = _extract_content_text(payload.get("content"))
+            if _looks_like_approval(text):
+                return ParsedEvent(type=EVENT_APPROVAL, text=text, role="assistant", raw=obj)
+            return ParsedEvent(type=EVENT_MESSAGE, text=text, role="assistant", raw=obj)
+        if item_type == "reasoning":
+            text = _extract_content_text(payload.get("summary"))
+            return ParsedEvent(type=EVENT_PROGRESS, text=text, metadata={"kind": "reasoning"}, raw=obj) if text else None
+        if item_type == "function_call":
+            name = payload.get("name") or "tool"
+            args = payload.get("arguments") or ""
+            return ParsedEvent(type=EVENT_TOOL_USE, text=f"{name} {args}".strip(), metadata={"command": name}, raw=obj)
+        if item_type == "function_call_output":
+            out = payload.get("output") or ""
+            return ParsedEvent(type=EVENT_TOOL_RESULT, text=str(out), raw=obj) if out else None
+
     return ParsedEvent(type=EVENT_RAW, raw=obj)
+
+
+def _extract_content_text(content: Any) -> str:
+    """从 Codex 旧版 content/summary 结构中提取纯文本。
+
+    兼容形式：字符串、[{"type":"text"|"input_text"|"output_text","text":...}]。
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        return content.get("text") or ""
+    if isinstance(content, list):
+        texts: list[str] = []
+        for piece in content:
+            if isinstance(piece, str):
+                texts.append(piece)
+            elif isinstance(piece, dict):
+                txt = piece.get("text") or piece.get("content") or ""
+                if isinstance(txt, str) and txt:
+                    texts.append(txt)
+        return "\n".join(texts).strip()
+    return ""
 
 
 # ---------------- Claude / Qoder 解析 ----------------
