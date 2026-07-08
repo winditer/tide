@@ -77,7 +77,10 @@ def parse_codex_event(obj: dict[str, Any]) -> Optional[ParsedEvent]:
     if t in ("item.started", "item.updated", "item.completed"):
         item = obj.get("item") or {}
         item_type = item.get("type") or item.get("item_type") or ""
-        if item_type == "assistant_message":
+        # Codex CLI >=0.136 将最终回复以 item_type == "agent_message" 输出；
+        # 旧版本（及部分分支）使用 "assistant_message"。两者均需识别，
+        # 否则 AI 实际输出会落入 EVENT_RAW 被丢弃，导致任务无输出。
+        if item_type in ("agent_message", "assistant_message"):
             text = item.get("text") or ""
             if _looks_like_approval(text):
                 return ParsedEvent(type=EVENT_APPROVAL, text=text, role="assistant", raw=obj)

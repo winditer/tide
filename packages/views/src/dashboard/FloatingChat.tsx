@@ -152,6 +152,12 @@ export function FloatingChat() {
   const groups = groupsQuery.data?.groups ?? [];
   const { data: agentsData } = useAgents();
   const agents = agentsData?.agents ?? [];
+  // 防御性过滤：排除已禁用的 Agent。后端默认已过滤 enabled=0，
+  // 这里再次排除 status==="disabled" 以防缓存或数据滞后。
+  const selectableAgents = useMemo(
+    () => agents.filter((a) => a.status !== "disabled"),
+    [agents]
+  );
 
   // 从统一 scope 解码出当前选择的项目 cwd 与项目组 id
   const projectCwd = scopeValue.startsWith("project:") ? scopeValue.slice(8) : "";
@@ -666,7 +672,7 @@ export function FloatingChat() {
                 className="h-7 w-[110px] rounded-md border border-border/50 bg-muted/50 px-2 text-xs text-foreground transition-colors focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30"
               >
                 <option value="">自动</option>
-                {agents.map((a) => (
+                {selectableAgents.map((a) => (
                   <option key={a.id} value={a.id}>
                     {a.name}
                   </option>

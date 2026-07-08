@@ -52,7 +52,7 @@ export function MentionInput({
 
   useEffect(() => {
     let cancelled = false;
-    const params = new URLSearchParams({ workspace_id: "default" });
+    const params = new URLSearchParams({ workspace_id: "default", exclude_disabled_agents: "true" });
     if (projectId) params.set("project_id", projectId);
     apiClient
       .get<ExpertTeamRow[]>(`/api/expert-teams?${params.toString()}`)

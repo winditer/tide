@@ -85,7 +85,7 @@ export function PropertyPanel({
   const [expertTeams, setExpertTeams] = useState<ExpertTeamOption[]>([]);
   useEffect(() => {
     let cancelled = false;
-    const params = new URLSearchParams({ workspace_id: "default" });
+    const params = new URLSearchParams({ workspace_id: "default", exclude_disabled_agents: "true" });
     if (projectId) params.set("project_id", projectId);
     apiClient
       .get<ExpertTeamOption[]>(`/api/expert-teams?${params.toString()}`)

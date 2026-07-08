@@ -14,6 +14,7 @@ from backend.core.dependencies import (
     get_optional_user,
 )
 from backend.db.engine import async_session_factory
+from backend.services import project_discovery
 from backend.services.project_group_service import project_group_service
 from backend.services.session_discovery import discover_sessions
 
@@ -501,10 +502,9 @@ async def get_active_projects(
                       {cwd_clause}
                     GROUP BY cwd
                     ORDER BY last_active DESC NULLS LAST
-                    LIMIT :limit
                     """
                 ),
-                {"ws": workspace_id, "limit": limit, **cwd_params},
+                {"ws": workspace_id, **cwd_params},
             )
             rows = r.fetchall()
     except Exception as exc:  # 表不存在 / DB 未初始化 → 返回空列表
@@ -515,6 +515,12 @@ async def get_active_projects(
     projects: list[dict] = []
     for row in rows:
         cwd = row[0] or ""
+        # 与 /api/projects 项目菜单保持一致：排除 .tide/worktrees 下的临时
+        # 工作树路径与客户端对话工作目录，避免 worktree/普通对话 cwd 被误列为项目。
+        if project_discovery.is_worktree_path(cwd) or project_discovery._is_excluded_path(
+            cwd
+        ):
+            continue
         reg = registry.get(cwd) or {}
         projects.append(
             {
@@ -526,6 +532,8 @@ async def get_active_projects(
                 "running_count": int(row[2] or 0),
             }
         )
+        if len(projects) >= limit:
+            break
     return projects
 
 
@@ -1126,6 +1134,14 @@ async def get_cost_by_dimension(
     results: list[dict] = []
     for row in rows:
         key = row[0] or ""
+        # project 维度与 /api/projects、活跃项目接口保持一致：排除
+        # .tide/worktrees 下的临时工作树路径与客户端普通对话工作目录，
+        # 避免 worktree/普通对话 cwd 被误列为项目并计入成本。
+        if dimension == "project" and (
+            project_discovery.is_worktree_path(key)
+            or project_discovery._is_excluded_path(key)
+        ):
+            continue
         cost_val = round(float(row[1] or 0), 6)
         ti_val = int(row[2] or 0)
         to_val = int(row[3] or 0)

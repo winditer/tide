@@ -1400,53 +1400,39 @@ class A2AAdapter:
                         # 从 artifacts 提取文本结果（Bridge 发送 artifacts 而非 result 字段）
                         result_text = str(event.get("result", "") or "")
                         if not result_text:
-                            artifacts = event.get("artifacts") or []
-                            parts_texts = []
-                            for art in artifacts:
-                                if not isinstance(art, dict):
-                                    continue
-                                for part in (art.get("parts") or []):
-                                    # A2A 协议 part 使用 "kind": "text"，旧格式使用 "type": "text"，
-                                    # 同时兼容两种字段以防 Bridge/内部事件格式不一致
-                                    if isinstance(part, dict) and (part.get("kind") == "text" or part.get("type") == "text"):
-                                        t = (part.get("text") or "").strip()
-                                        if t:
-                                            parts_texts.append(t)
-                            result_text = "\n".join(parts_texts)
+                            result_text = self._extract_task_event_text(event)
                         yield {"type": "completed", "result": result_text}
                     break
 
                 # task_event：Bridge 通过 WS 直接推送的流式事件（kind=artifact/output/status）
                 # 该格式不被 _map_to_internal_event 识别，需要在此直接处理，否则会被静默丢弃
                 if event.get("type") == "task_event":
-                    kind = str(event.get("kind", "") or "")
+                    raw_kind = str(event.get("kind", "") or "")
+                    # 归一化 kind：兼容 Bridge 归一化后的 "artifact/output/status"
+                    # 以及原始 A2A 事件的 "artifact-update/status-update"
+                    kind = raw_kind.replace("-update", "").strip().lower()
                     content = str(event.get("content", "") or "")
-                    if kind == "artifact":
-                        # content 为空时，尝试从嵌套的 payload/artifacts 中提取
-                        # artifacts[].parts[].text（与 task_result 提取逻辑保持一致）
-                        if not content:
-                            nested = event.get("payload") or event
-                            artifacts = nested.get("artifacts") if isinstance(nested, dict) else None
-                            if not artifacts:
-                                artifacts = event.get("artifacts") or []
-                            parts_texts = []
-                            for art in (artifacts or []):
-                                if not isinstance(art, dict):
-                                    continue
-                                for part in (art.get("parts") or []):
-                                    if isinstance(part, dict) and (part.get("kind") == "text" or part.get("type") == "text"):
-                                        t = (part.get("text") or "").strip()
-                                        if t:
-                                            parts_texts.append(t)
-                            content = "\n".join(parts_texts)
+                    logger.info(
+                        "[A2AAdapter] ws task_event raw_kind=%r kind=%r content_len=%d",
+                        raw_kind, kind, len(content),
+                    )
+                    if kind == "status":
                         if content:
-                            yield {"type": "output_chunk", "content": content}
-                    elif kind == "output" and content:
-                        # "output" 表示实际输出内容，应作为流式内容而非状态
+                            yield {"type": "status_changed", "status": content}
+                        continue
+                    # artifact / output / 其它未识别 kind：均视为 AI 实际输出内容。
+                    # content 为空时，尝试从嵌套的 payload/artifacts 中提取
+                    # artifacts[].parts[].text（与 task_result 提取逻辑保持一致），
+                    # 避免因 Bridge/内部事件格式不一致而静默丢弃 AI 内容。
+                    if not content:
+                        content = self._extract_task_event_text(event)
+                    if content:
                         yield {"type": "output_chunk", "content": content}
-                    elif kind == "status" and content:
-                        yield {"type": "status_changed", "status": content}
-                    # 空事件跳过
+                    else:
+                        logger.debug(
+                            "[A2AAdapter] ws task_event dropped (no content) raw_kind=%r",
+                            raw_kind,
+                        )
                     continue
 
                 # 其他事件：映射内部承载的 A2A 事件为 Tide 内部事件
@@ -1456,6 +1442,38 @@ class A2AAdapter:
                     yield mapped
         finally:
             await daemon_registry.unregister_task(task_id)
+
+    def _extract_task_event_text(self, event: dict) -> str:
+        """从 Bridge 推送的 task_event / task_result 中提取 artifacts 文本。
+
+        兼容多种嵌套形式：
+        - event["artifacts"] = [{"parts": [{"kind"|"type": "text", "text": ...}]}]
+        - event["payload"]["artifacts"] = [...]
+        - event["artifact"] = {"parts": [...]}（单个 artifact）
+        part 同时兼容 A2A 协议的 "kind": "text" 与旧格式 "type": "text"。
+        """
+        if not isinstance(event, dict):
+            return ""
+        artifacts: list = []
+        nested = event.get("payload") if isinstance(event.get("payload"), dict) else None
+        for src in (event, nested):
+            if isinstance(src, dict):
+                arts = src.get("artifacts")
+                if isinstance(arts, list):
+                    artifacts.extend(arts)
+                single = src.get("artifact")
+                if isinstance(single, dict):
+                    artifacts.append(single)
+        parts_texts: list[str] = []
+        for art in artifacts:
+            if not isinstance(art, dict):
+                continue
+            for part in (art.get("parts") or []):
+                if isinstance(part, dict) and (part.get("kind") == "text" or part.get("type") == "text"):
+                    t = (part.get("text") or "").strip()
+                    if t:
+                        parts_texts.append(t)
+        return "\n".join(parts_texts)
 
     # ------------------------------------------------------------------ map
 

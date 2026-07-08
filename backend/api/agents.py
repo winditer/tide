@@ -36,7 +36,8 @@ async def _list_remote_agents() -> list[dict]:
             result = await session.execute(
                 text(
                     "SELECT id, name, description, skills_json,"
-                    " capabilities_streaming, capabilities_push_notifications"
+                    " capabilities_streaming, capabilities_push_notifications,"
+                    " scope, scope_target"
                     " FROM remote_agents WHERE status = 'active'"
                 )
             )
@@ -47,7 +48,16 @@ async def _list_remote_agents() -> list[dict]:
 
     agents: list[dict] = []
     for row in rows:
-        agent_id, name, description, skills_json, streaming, push = row
+        (
+            agent_id,
+            name,
+            description,
+            skills_json,
+            streaming,
+            push,
+            scope,
+            scope_target,
+        ) = row
         try:
             skills = json.loads(skills_json) if skills_json else []
         except (TypeError, ValueError):
@@ -60,6 +70,10 @@ async def _list_remote_agents() -> list[dict]:
                 "description": description,
                 "status": "active",
                 "skills": skills,
+                # 远程 Agent 在 remote_agents 表中自带作用域（注册时确定），
+                # 作为列表作用域图标的兜底来源，避免"未额外配置覆盖"时误显示为灰色。
+                "scope": (scope or "global"),
+                "scope_target": scope_target or None,
                 "capabilities": {
                     "streaming": bool(streaming),
                     "pushNotifications": bool(push),

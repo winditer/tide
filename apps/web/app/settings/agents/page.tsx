@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Badge,
   Button,
@@ -52,6 +53,10 @@ interface AgentInfo {
   timeout_override?: number | null;
   skills?: any[];
   capabilities?: { streaming?: boolean; pushNotifications?: boolean };
+  // 远程 Agent 在 remote_agents 表中自带的作用域（注册时确定），
+  // 用作列表作用域图标的兜底来源。
+  scope?: string | null;
+  scope_target?: string | null;
 }
 
 interface AgentConfig {
@@ -99,6 +104,13 @@ const PAGE_SIZE = 20;
 export default function SettingsAgentsPage() {
   const router = useRouter();
   const { hydrated, user } = useAuth();
+  const queryClient = useQueryClient();
+
+  // Agent 启用/禁用/配置变更后，让消费端（浮动聊天、任务、对话等）的
+  // useAgents 缓存立即失效并重新拉取，避免下拉列表仍能选到已禁用的 Agent。
+  const invalidateAgents = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ["agents"] });
+  }, [queryClient]);
 
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [configs, setConfigs] = useState<AgentConfig[]>([]);
@@ -323,6 +335,7 @@ export default function SettingsAgentsPage() {
       });
       fetchConfigs();
       fetchAllConfigs();
+      invalidateAgents();
     } catch (e: any) {
       const detail = e?.body?.detail || e?.message || "操作失败";
       toast({ title: "操作失败", description: detail, variant: "destructive" });
@@ -372,6 +385,7 @@ export default function SettingsAgentsPage() {
       setProjectTarget(data.scope === "project" ? data.scope_target || "" : "");
       fetchConfigs();
       fetchAllConfigs();
+      invalidateAgents();
     } catch (e: any) {
       const detail = e?.body?.detail || e?.message || "保存失败";
       toast({ title: "保存失败", description: detail, variant: "destructive" });
@@ -401,6 +415,7 @@ export default function SettingsAgentsPage() {
         fetchAgents();
         fetchConfigs();
         fetchAllConfigs();
+        invalidateAgents();
         return;
       }
       // reset
@@ -414,6 +429,7 @@ export default function SettingsAgentsPage() {
       setDeletingAgent(null);
       fetchConfigs();
       fetchAllConfigs();
+      invalidateAgents();
     } catch (e: any) {
       const detail = e?.body?.detail || e?.message || "操作失败";
       toast({ title: "操作失败", description: detail, variant: "destructive" });
@@ -568,10 +584,15 @@ export default function SettingsAgentsPage() {
                         <td className="px-4 py-3 max-w-[200px]">
                           <div className="flex items-center gap-2">
                             {(() => {
-                              // 优先取当前作用域的 config，否则回退到该 Agent 跨作用域的真实 scope
+                              // 作用域图标优先级（从高到低）：
+                              // 1. 当前作用域的 config；
+                              // 2. 该 Agent 跨作用域配置中最具体的一条（personal > project > global）；
+                              // 3. 远程 Agent 在 remote_agents 表中自带的作用域；
+                              // 均无则视为“未显式配置”，显示灰色图标。
                               const realScope = (
                                 cfg?.scope ||
                                 agentScopeMap[agent.id] ||
+                                agent.scope ||
                                 ""
                               ).toLowerCase();
                               if (realScope === "project")
