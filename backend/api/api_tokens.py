@@ -7,6 +7,7 @@ prefix（token 前 8 位）用于 UI 展示，便于用户识别。
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 import uuid
@@ -51,6 +52,59 @@ class TokenInfo(BaseModel):
     expires_at: Optional[str] = None
     created_at: str
     updated_at: str
+
+
+# ── 模块级验证函数 ───────────────────────────────────────
+
+
+async def verify_api_token(token: str) -> Optional[str]:
+    """验证 API Token，返回归属用户 ID；无效返回 None。
+
+    供 get_current_user 调用：命中时异步更新 last_used_at，不阻塞认证返回。
+    """
+    if not token:
+        return None
+    token_hash = hash_token(token)
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        async with async_session_factory() as session:
+            result = await session.execute(
+                text(
+                    "SELECT id, user_id FROM api_tokens"
+                    " WHERE token_hash = :hash"
+                    " AND (expires_at IS NULL OR expires_at > :now)"
+                    " LIMIT 1"
+                ),
+                {"hash": token_hash, "now": now},
+            )
+            row = result.fetchone()
+            if not row:
+                return None
+            token_id = row[0]
+            user_id = row[1]
+            # 异步更新 last_used_at，不阻塞认证返回
+            asyncio.create_task(_touch_last_used(token_id))
+            return user_id
+    except Exception as e:
+        logger.warning("verify_api_token failed: %s", e)
+        return None
+
+
+async def _touch_last_used(token_id: str) -> None:
+    """更新指定 Token 的 last_used_at。"""
+    try:
+        async with async_session_factory() as session:
+            now = datetime.now(timezone.utc).isoformat()
+            await session.execute(
+                text(
+                    "UPDATE api_tokens SET last_used_at = :now, updated_at = :now"
+                    " WHERE id = :id"
+                ),
+                {"now": now, "id": token_id},
+            )
+            await session.commit()
+    except Exception as e:
+        logger.debug("Failed to update last_used_at for token %s: %s", token_id, e)
 
 
 # ── API 路由 ─────────────────────────────────────────────

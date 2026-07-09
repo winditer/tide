@@ -956,9 +956,22 @@ function ProjectBranchCard({
 
   const handlePull = (branch: string) => {
     pullBranch.mutateAsync({ branchName: branch })
-      .then(() => {
+      .then((result) => {
         qc.invalidateQueries({ queryKey: ["project-group", groupId, "branches"] });
-        toast({ title: "Pull 成功", description: branch });
+        if (result.ok) {
+          toast({ title: "Pull 成功", description: branch });
+        } else if (result.conflicts && result.conflicts.length > 0) {
+          // 拉取产生合并冲突，进入交互式冲突解决模式
+          setMergeConflictData({
+            sourceBranch: `origin/${branch}`,
+            targetBranch: branch,
+            conflicts: result.conflicts,
+            cwd: result.cwd ?? "",
+            deleteSource: false,
+          });
+        } else {
+          toast({ title: "Pull 失败", description: result.output?.slice(0, 200), variant: "destructive" });
+        }
       })
       .catch((e) => toast({ title: "Pull 失败", description: getApiErrorMessage(e), variant: "destructive" }));
   };

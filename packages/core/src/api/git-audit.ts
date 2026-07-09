@@ -247,13 +247,14 @@ export function pushBranch(
 
 /**
  * 从远端拉取分支。
+ * 遇到合并冲突时返回 ok=false 及 conflicts/cwd，供前端触发交互式冲突解决面板。
  */
 export function pullBranch(
   projectId: string,
   branchName?: string,
   remote?: string,
-): Promise<{ ok: boolean; output: string }> {
-  return apiClient.post<{ ok: boolean; output: string }>(
+): Promise<{ ok: boolean; output: string; conflicts?: string[]; cwd?: string }> {
+  return apiClient.post<{ ok: boolean; output: string; conflicts?: string[]; cwd?: string }>(
     `/api/projects/${encodeURIComponent(projectId)}/git/pull`,
     { branch_name: branchName, remote },
   );

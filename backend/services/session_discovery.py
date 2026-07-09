@@ -1095,32 +1095,43 @@ async def _sync_session_token_usage_inner(sa_text, async_session_factory, cost_s
                     stats["errors"] += 1
                     continue
 
-            if input_tokens == 0 and output_tokens == 0:
-                stats["skipped"] += 1
-                continue
+            # token 估算为 0（如 Qoder 缓存仅含纯文本、缺失 tool_use/tool_result）时，
+            # 不能直接 continue 跳过：否则 synced_message_count 永不更新，
+            # 下轮扫描将无限重试却始终不记录成本。
+            # 处理策略：仍推进 synced_message_count（防无限重试），仅当
+            # token=0 时跳过 cost 写入（不把全零垃圾数据写入 DB）。
+            has_tokens = input_tokens > 0 or output_tokens > 0
 
             # 以文件 mtime 作为会话最后活跃时间（比 utcnow 更能反映真实活动时刻）。
             file_mtime_dt = _safe_file_mtime(file_path)
             last_active_iso = (
                 file_mtime_dt.isoformat() if file_mtime_dt else datetime.utcnow().isoformat()
             )
+            sess_model = sess.get("model", "auto")
 
             if synced_count > 0:
                 # 增量路径：synced_count 已可靠反映已计入 token 的行数，
                 # input/output 仅为新增行的估算值 → 累加（续聊新回合）。
-                await cost_service.update_task_cost(
-                    task_id=task_id,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                    model=sess.get("model", "auto"),
-                )
+                # token=0 时跳过 cost 累加，但仍推进 synced_message_count。
+                if has_tokens:
+                    await cost_service.update_task_cost(
+                        task_id=task_id,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        model=sess_model,
+                    )
                 async with async_session_factory() as db_session:
                     await db_session.execute(
                         sa_text(
                             "UPDATE tasks SET synced_message_count = :cnt, "
-                            "completed_at = :now WHERE id = :tid"
+                            "completed_at = :now, model = :model WHERE id = :tid"
                         ),
-                        {"cnt": total_lines, "tid": task_id, "now": last_active_iso},
+                        {
+                            "cnt": total_lines,
+                            "tid": task_id,
+                            "now": last_active_iso,
+                            "model": sess_model,
+                        },
                     )
                     await db_session.commit()
             else:
@@ -1128,26 +1139,39 @@ async def _sync_session_token_usage_inner(sa_text, async_session_factory, cost_s
                 # 此时 input/output 为整文件估算值。采用 SET（而非累加）语义，
                 # 以文件为权威重置 token 计数：避免与实时执行时已记录的
                 # （可能不完整的）实时 token 叠加而重复计数（根因修复）。
-                cost = cost_service.calculate_cost(
-                    sess.get("model", "auto"), input_tokens, output_tokens
-                )
-                async with async_session_factory() as db_session:
-                    await db_session.execute(
-                        sa_text(
-                            "UPDATE tasks SET token_input = :ti, token_output = :to_, "
-                            "estimated_cost_usd = :cost, synced_message_count = :cnt, "
-                            "completed_at = :now WHERE id = :tid"
-                        ),
-                        {
-                            "ti": input_tokens,
-                            "to_": output_tokens,
-                            "cost": cost,
-                            "cnt": total_lines,
-                            "tid": task_id,
-                            "now": last_active_iso,
-                        },
+                if has_tokens:
+                    cost = cost_service.calculate_cost(
+                        sess_model, input_tokens, output_tokens
                     )
-                    await db_session.commit()
+                    async with async_session_factory() as db_session:
+                        await db_session.execute(
+                            sa_text(
+                                "UPDATE tasks SET token_input = :ti, token_output = :to_, "
+                                "estimated_cost_usd = :cost, synced_message_count = :cnt, "
+                                "completed_at = :now, model = :model WHERE id = :tid"
+                            ),
+                            {
+                                "ti": input_tokens,
+                                "to_": output_tokens,
+                                "cost": cost,
+                                "cnt": total_lines,
+                                "tid": task_id,
+                                "now": last_active_iso,
+                                "model": sess_model,
+                            },
+                        )
+                        await db_session.commit()
+                else:
+                    # token=0：仅推进 synced_message_count 防无限重试，不写入成本。
+                    async with async_session_factory() as db_session:
+                        await db_session.execute(
+                            sa_text(
+                                "UPDATE tasks SET synced_message_count = :cnt, "
+                                "completed_at = :now WHERE id = :tid"
+                            ),
+                            {"cnt": total_lines, "tid": task_id, "now": last_active_iso},
+                        )
+                        await db_session.commit()
 
             stats["synced"] += 1
             if pre_existing:

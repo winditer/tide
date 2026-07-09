@@ -14,6 +14,7 @@ import {
   DialogFooter,
 } from "@tide/ui";
 import { Plus, RotateCcw, Trash2, Copy, Check, KeyRound, ShieldAlert } from "lucide-react";
+import { ApiTokenGuide } from "./ApiTokenGuide";
 
 function getApiErrorMessage(err: unknown): string {
   if (err instanceof ApiError) {
@@ -157,6 +158,7 @@ export function ApiTokensTab() {
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          <ApiTokenGuide />
           <Button variant="outline" onClick={() => void reload()} className="gap-1.5">
             <RotateCcw className="h-4 w-4" /> 刷新
           </Button>

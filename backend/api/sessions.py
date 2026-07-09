@@ -722,6 +722,8 @@ async def _find_or_create_usage_task(session_id: str) -> Optional[str]:
             return row[0]
 
     # 无关联 task → 创建轻量级占位任务
+    # 关键：以终态 completed 落库（initial_status="completed"），避免被调度器
+    # 当作待执行任务重新启动 Agent CLI。
     task = await task_service.create_task(
         workspace_id="default",
         prompt="[usage-tracking] Token usage placeholder",
@@ -730,6 +732,7 @@ async def _find_or_create_usage_task(session_id: str) -> Optional[str]:
         cwd="",
         attachments=[],
         session_id=session_id,
+        initial_status="completed",
     )
     if task:
         return task.get("id")

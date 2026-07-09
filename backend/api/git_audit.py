@@ -1461,9 +1461,16 @@ async def git_pull_branch(
         repo_root, ["merge", f"{req.remote}/{branch_name}"], timeout=60
     )
     if code != 0:
-        # 检测是否是合并冲突
+        # 检测是否是合并冲突：保留冲突状态（不 abort），返回结构化数据
+        # 供前端触发交互式冲突解决面板
         if "CONFLICT" in merge_output or "conflict" in merge_output.lower():
-            raise HTTPException(status_code=409, detail=f"合并冲突: {merge_output[:500]}")
+            conflicts = await git_conflict_files(repo_root)
+            return {
+                "ok": False,
+                "conflicts": conflicts,
+                "cwd": str(repo_root),
+                "output": merge_output[:500],
+            }
         raise HTTPException(status_code=500, detail=f"合并失败: {merge_output[:500]}")
 
     return {"ok": True, "output": merge_output[:500]}

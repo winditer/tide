@@ -41,14 +41,20 @@ MODEL_PRICING: dict[str, tuple[float, float]] = {
 }
 
 _DEFAULT_PRICING: tuple[float, float] = (0.0, 0.0)
+# 空模型或 "auto"（客户端续聊常见，未显式指定模型）时的保守 fallback 定价：
+# 采用 claude-sonnet 级别价格，避免 token 已正确估算却因定价缺失导致成本计为 0。
+_AUTO_FALLBACK_PRICING: tuple[float, float] = MODEL_PRICING["claude-sonnet"]
 _VALID_PERIODS = {"today", "week", "month"}
 _VALID_DIMENSIONS = {"agent", "model", "project"}
 
 
 def _resolve_pricing(model: str) -> tuple[float, float]:
-    """根据模型名匹配定价；优先精确匹配，其次按关键词模糊匹配。"""
-    if not model:
-        return _DEFAULT_PRICING
+    """根据模型名匹配定价；优先精确匹配，其次按关键词模糊匹配。
+
+    空模型或 "auto" 使用保守 fallback 定价（claude-sonnet 级别）。
+    """
+    if not model or str(model).strip().lower() == "auto":
+        return _AUTO_FALLBACK_PRICING
     key = str(model).strip().lower()
     if key in MODEL_PRICING:
         return MODEL_PRICING[key]

@@ -185,32 +185,43 @@ async def get_current_user(
         )
 
     payload = verify_token(token)
-    if not payload or payload.get("type") != "access":
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    if payload and payload.get("type") == "access":
+        # ── JWT 认证路径 ──
+        user_id = payload.get("sub")
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token payload",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
 
-    user_id = payload.get("sub")
-    if not user_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token payload",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        user = await _load_user(user_id)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found or disabled",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
 
-    user = await _load_user(user_id)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found or disabled",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        # 将 JWT 中的 role 同步到结果，优先以 DB 为准
+        user.setdefault("role", payload.get("role", "member"))
+        return user
 
-    # 将 JWT 中的 role 同步到结果，优先以 DB 为准
-    user.setdefault("role", payload.get("role", "member"))
-    return user
+    # ── JWT 验证失败，回退尝试 API Token ──
+    from backend.api.api_tokens import verify_api_token
+
+    api_user_id = await verify_api_token(token)
+    if api_user_id:
+        user = await _load_user(api_user_id)
+        if user:
+            user.setdefault("role", "member")
+            return user
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid or expired token",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 async def get_optional_user(

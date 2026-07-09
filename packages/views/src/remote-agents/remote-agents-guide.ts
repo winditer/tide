@@ -5,8 +5,68 @@ export const REMOTE_AGENTS_GUIDE = `# 远程 Agent 注册与 A2A Bridge 部署�
 
 远程 Agent 是通过 A2A（Agent-to-Agent）协议与 Tide 通信的外部 AI Agent 服务。
 支持两种连接模式：
-- **HTTP 模式（默认）**：Tide 主动调用 Agent 端点，适合有公网入口的服务
-- **WebSocket 推模式（Daemon）**：Agent 主动连接 Tide，适合 NAT/防火墙后的服务
+- **WebSocket 推模式（Daemon，推荐）**：Agent 主动连接 Tide，适合 NAT/防火墙后的服务
+- **HTTP 模式**：Tide 主动调用 Agent 端点，适合有公网入口的服务
+
+## WebSocket 推模式（Daemon，推荐）
+
+适用于 Bridge 部署在 NAT/防火墙后、无法被 Tide 主动访问的场景，也是推荐的首选连接方式。
+
+> 首次使用请先参考下方「快速开始：HTTP 模式 → 1. 安装 A2A Bridge」完成 Bridge 的安装。
+
+### 1. 创建 Daemon Token
+
+Daemon Token 用于 Bridge 连接 Tide 后端时的身份认证，在「个人设置 → Daemon Token」Tab 中创建和管理：
+
+1. 进入「个人设置 → Daemon Token」Tab
+2. 点击创建，输入一个便于识别的 Token 名称
+3. Token 明文仅在创建时展示一次，请立即复制并妥善保存
+4. 将该 Token 配置到 a2a-bridge 的环境变量 \`DAEMON_TOKEN\` 中，或在执行 \`a2a-bridge setup --daemon\` 交互式配置时输入
+
+### 2. 后端配置
+
+在 Tide 后端 \`.env\` 中设置共享密钥：
+\`\`\`bash
+DAEMON_TOKEN=your-shared-secret
+\`\`\`
+
+### 3. Bridge 配置
+
+运行 Daemon 模式配置向导：
+\`\`\`bash
+a2a-bridge setup --daemon
+\`\`\`
+
+向导将交互式引导你完成：
+- 是否启用 Daemon 推模式
+- 输入 Tide 后端 WebSocket 地址（默认 ws://localhost:8000/ws/daemon）
+- 自动生成或输入共享 Token
+- 配置 Daemon ID、心跳间隔、能力标签
+
+所有配置写入 \`~/.a2a-bridge/.env\`，重启后生效。
+
+或手动编辑 \`~/.a2a-bridge/.env\`：
+\`\`\`bash
+DAEMON_ENABLED=true
+TIDE_WS_URL=ws://tide-backend:8000/ws/daemon
+DAEMON_TOKEN=your-shared-secret
+
+# 可选配置
+DAEMON_ID=my-bridge-01
+HEARTBEAT_INTERVAL=15
+CAPABILITY_TAGS=code,review,docs
+\`\`\`
+
+### 4. 启动 Bridge
+
+启动后 Bridge 将自动：
+- 连接到 Tide 后端 WebSocket 端点
+- 注册本地 Agent 能力
+- 维持心跳保活（默认 15 秒）
+- 接收并执行 Tide 下发的任务
+- 断线时自动重连（指数退避）
+
+注册成功后，Agent 会自动出现在远程 Agent 列表中，\`connection_mode\` 标记为 \`ws\`。
 
 ## 快速开始：HTTP 模式
 
@@ -75,55 +135,6 @@ a2a-bridge doctor
 3. 点击「发现」自动填充 Agent 信息
 4. 配置认证方式（如 Bearer Token）
 5. 测试连通性，确认可用
-
-## WebSocket 推模式（Daemon）
-
-适用于 Bridge 部署在 NAT/防火墙后、无法被 Tide 主动访问的场景。
-
-### 1. 后端配置
-
-在 Tide 后端 \`.env\` 中设置共享密钥：
-\`\`\`bash
-DAEMON_TOKEN=your-shared-secret
-\`\`\`
-
-### 2. Bridge 配置
-
-运行 Daemon 模式配置向导：
-\`\`\`bash
-a2a-bridge setup --daemon
-\`\`\`
-
-向导将交互式引导你完成：
-- 是否启用 Daemon 推模式
-- 输入 Tide 后端 WebSocket 地址（默认 ws://localhost:8000/ws/daemon）
-- 自动生成或输入共享 Token
-- 配置 Daemon ID、心跳间隔、能力标签
-
-所有配置写入 \`~/.a2a-bridge/.env\`，重启后生效。
-
-或手动编辑 \`~/.a2a-bridge/.env\`：
-\`\`\`bash
-DAEMON_ENABLED=true
-TIDE_WS_URL=ws://tide-backend:8000/ws/daemon
-DAEMON_TOKEN=your-shared-secret
-
-# 可选配置
-DAEMON_ID=my-bridge-01
-HEARTBEAT_INTERVAL=15
-CAPABILITY_TAGS=code,review,docs
-\`\`\`
-
-### 3. 启动 Bridge
-
-启动后 Bridge 将自动：
-- 连接到 Tide 后端 WebSocket 端点
-- 注册本地 Agent 能力
-- 维持心跳保活（默认 15 秒）
-- 接收并执行 Tide 下发的任务
-- 断线时自动重连（指数退避）
-
-注册成功后，Agent 会自动出现在远程 Agent 列表中，\`connection_mode\` 标记为 \`ws\`。
 
 ## 连接模式对比
 
