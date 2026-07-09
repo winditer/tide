@@ -509,6 +509,17 @@ export type {
 export { useAuth, isAuthRequired } from "./hooks/useAuth";
 export type { UseAuthResult } from "./hooks/useAuth";
 
+// API Tokens
+export {
+  listApiTokens,
+  createApiToken,
+  revokeApiToken,
+} from "./api/api-tokens";
+export type {
+  ApiTokenInfo,
+  CreateApiTokenResponse,
+} from "./api/api-tokens";
+
 // Admin (user management)
 export {
   listUsers,

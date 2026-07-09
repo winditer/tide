@@ -160,12 +160,16 @@ async def create_daemon_token(
 async def list_daemon_tokens(
     current_user: dict = Depends(get_current_user),
 ) -> list[TokenInfo]:
-    """列出当前用户的所有 Daemon Token（不含哈希或明文）。"""
+    """列出当前用户的 Daemon Token（不含哈希或明文，且排除已撤销的）。
+
+    撤销为软删除（status='revoked'），此处过滤掉已撤销 Token，
+    使前端撤销后重新拉取列表时该 Token 不再出现。
+    """
     async with async_session_factory() as session:
         result = await session.execute(
             text(
                 "SELECT id, name, status, last_used_at, expires_at, created_at, updated_at"
-                " FROM daemon_tokens WHERE user_id = :user_id"
+                " FROM daemon_tokens WHERE user_id = :user_id AND status != 'revoked'"
                 " ORDER BY created_at DESC"
             ),
             {"user_id": current_user["id"]},

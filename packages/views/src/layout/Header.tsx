@@ -9,6 +9,7 @@ import {
   ChevronsRight,
   LogOut,
   UserRound,
+  UserCircle,
   ShieldCheck,
 } from "lucide-react";
 import {
@@ -163,6 +164,9 @@ function UserMenu() {
           </span>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={() => router.push("/profile")}>
+          <UserCircle className="mr-2 h-4 w-4" strokeWidth={2} /> 个人设置
+        </DropdownMenuItem>
         <DropdownMenuItem onSelect={() => router.push("/settings")}>
           <Settings className="mr-2 h-4 w-4" strokeWidth={2} /> 设置
         </DropdownMenuItem>

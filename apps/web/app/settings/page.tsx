@@ -15,6 +15,7 @@ import {
   BrainCircuit,
   Bot,
   Columns3,
+  UserCircle,
   type LucideIcon,
 } from "lucide-react";
 
@@ -28,6 +29,12 @@ interface SettingItem {
 }
 
 const ITEMS: SettingItem[] = [
+  {
+    href: "/profile",
+    label: "个人设置",
+    description: "管理个人信息、通知偏好与访问令牌",
+    icon: UserCircle,
+  },
   {
     href: "/settings/users",
     label: "用户管理",

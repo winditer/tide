@@ -361,4 +361,31 @@ async def init_db():
             "CREATE INDEX IF NOT EXISTS idx_notif_recipient ON notifications(recipient_id, is_read, created_at DESC)"
         )
 
+        # users 表补列 notification_prefs（用户通知偏好，JSON 文本）
+        cursor = await db.execute("PRAGMA table_info(users)")
+        users_columns = {row[1] for row in await cursor.fetchall()}
+        if users_columns and "notification_prefs" not in users_columns:
+            await db.execute("ALTER TABLE users ADD COLUMN notification_prefs TEXT")
+
+        # api_tokens 表（用户 API Token，旧库兼容建表）
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS api_tokens (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                token_hash TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                prefix TEXT NOT NULL,
+                last_used_at TIMESTAMP,
+                expires_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_api_tokens_user_id ON api_tokens(user_id)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash)"
+        )
+
         await db.commit()

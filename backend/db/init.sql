@@ -652,3 +652,18 @@ CREATE TABLE IF NOT EXISTS daemon_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_daemon_tokens_user_id ON daemon_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_daemon_tokens_hash ON daemon_tokens(token_hash);
+
+-- ── API Tokens ──────────────────────────────
+CREATE TABLE IF NOT EXISTS api_tokens (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id),
+    token_hash TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    prefix TEXT NOT NULL,
+    last_used_at TIMESTAMP,
+    expires_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_api_tokens_user_id ON api_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash);

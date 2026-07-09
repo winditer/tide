@@ -48,6 +48,13 @@ class ChangePasswordRequest(BaseModel):
     new_password: str = Field(..., min_length=1)
 
 
+class UpdateProfileRequest(BaseModel):
+    display_name: Optional[str] = None
+    email: Optional[str] = None
+    avatar_url: Optional[str] = None
+    notification_prefs: Optional[dict] = None
+
+
 class TokenPair(BaseModel):
     access_token: str
     refresh_token: str
@@ -65,6 +72,7 @@ class UserPublic(BaseModel):
     lark_open_id: Optional[str] = None
     lark_union_id: Optional[str] = None
     workspace_id: Optional[str] = None
+    notification_prefs: Optional[dict] = None
 
 
 class LoginResponse(BaseModel):
@@ -266,8 +274,30 @@ async def logout(current_user: dict = Depends(get_current_user)) -> dict:
 
 @router.get("/me", response_model=UserPublic)
 async def me(current_user: dict = Depends(get_current_user)) -> UserPublic:
-    """返回当前登录用户的公开信息。"""
-    return UserPublic(**_public_user(current_user))
+    """返回当前登录用户的公开信息（含通知偏好）。"""
+    import json
+
+    data = _public_user(current_user)
+
+    # notification_prefs 以 JSON 字符串形式存储，需单独查询并解析。
+    async with async_session_factory() as session:
+        result = await session.execute(
+            text(
+                "SELECT notification_prefs FROM users WHERE id = :user_id LIMIT 1"
+            ),
+            {"user_id": current_user["id"]},
+        )
+        row = result.fetchone()
+
+    prefs = row[0] if row else None
+    if isinstance(prefs, str) and prefs:
+        try:
+            prefs = json.loads(prefs)
+        except (ValueError, TypeError):
+            prefs = None
+    data["notification_prefs"] = prefs if isinstance(prefs, dict) else None
+
+    return UserPublic(**data)
 
 
 @router.post("/change-password")
@@ -332,3 +362,92 @@ async def change_password(
     # 安全起见：吊销该用户其它活跃会话（强制其它端重新登录）
     await auth_service.revoke_session(user_id=user_id)
     return {"ok": True}
+
+
+@router.patch("/profile", response_model=UserPublic)
+async def update_profile(
+    body: UpdateProfileRequest,
+    current_user: dict = Depends(get_current_user),
+) -> UserPublic:
+    """当前用户修改自己的资料。"""
+    import json
+    from datetime import datetime, timezone
+
+    user_id = current_user["id"]
+
+    # 收集待更新字段
+    updates: dict = {}
+    if body.display_name is not None:
+        updates["display_name"] = body.display_name
+    if body.avatar_url is not None:
+        updates["avatar_url"] = body.avatar_url
+    if body.notification_prefs is not None:
+        updates["notification_prefs"] = json.dumps(body.notification_prefs)
+
+    async with async_session_factory() as session:
+        # 修改 email 时检查唯一性
+        if body.email is not None:
+            result = await session.execute(
+                text(
+                    "SELECT id FROM users WHERE email = :email AND id != :user_id LIMIT 1"
+                ),
+                {"email": body.email, "user_id": user_id},
+            )
+            if result.fetchone():
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Email already in use",
+                )
+            updates["email"] = body.email
+
+        if updates:
+            now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            set_clause = ", ".join(f"{col} = :{col}" for col in updates)
+            params = {**updates, "now": now_iso, "user_id": user_id}
+            await session.execute(
+                text(
+                    f"UPDATE users SET {set_clause}, updated_at = :now"
+                    " WHERE id = :user_id"
+                ),
+                params,
+            )
+            await session.commit()
+
+        # 返回更新后的用户信息
+        result = await session.execute(
+            text(
+                "SELECT id, username, email, display_name, avatar_url, role, status,"
+                " lark_open_id, lark_union_id, workspace_id, notification_prefs FROM users"
+                " WHERE id = :user_id LIMIT 1"
+            ),
+            {"user_id": user_id},
+        )
+        row = result.fetchone()
+
+    if not row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+
+    # notification_prefs 以 JSON 字符串形式存储，需解析后返回。
+    prefs = row[10]
+    if isinstance(prefs, str) and prefs:
+        try:
+            prefs = json.loads(prefs)
+        except (ValueError, TypeError):
+            prefs = None
+
+    return UserPublic(
+        id=row[0],
+        username=row[1],
+        email=row[2],
+        display_name=row[3],
+        avatar_url=row[4],
+        role=row[5] or "member",
+        status=row[6] or "active",
+        lark_open_id=row[7],
+        lark_union_id=row[8],
+        workspace_id=row[9],
+        notification_prefs=prefs if isinstance(prefs, dict) else None,
+    )
