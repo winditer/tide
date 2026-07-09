@@ -393,9 +393,12 @@ export default function SettingsAgentsPage() {
         });
       } else {
         // Create a new config with enabled=0 (to disable it)。
-        // 列表处于「全部作用域」筛选时 scope 为空字符串，后端会报 "Invalid scope"，
-        // 因此这里空值回退为 global，保证 toggle 始终携带合法作用域。
-        const effectiveScope: Exclude<ScopeType, ""> = scope || "global";
+        // 作用域来源优先级：当前筛选器 scope → 该 Agent 的真实作用域 → personal。
+        // 「全部作用域」筛选时 scope 为空字符串，此时回退到 Agent 自身作用域，
+        // 最终兜底为 personal（而非 global），避免非管理员误触发
+        // “仅管理员可管理全局配置”权限错误。
+        const effectiveScope: Exclude<ScopeType, ""> =
+          scope || agentScopeMap[agent.id] || "personal";
         const scopeTarget =
           effectiveScope === "project"
             ? projectTarget

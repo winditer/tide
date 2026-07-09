@@ -327,6 +327,15 @@ async def init_db():
         if ra_columns and "daemon_session_id" not in ra_columns:
             await db.execute("ALTER TABLE remote_agents ADD COLUMN daemon_session_id TEXT")
 
+        # 一次性修复：个人作用域 Agent 若 scope_target 为空，回填为 created_by，
+        # 否则 /api/agents 作用域过滤（target == user_id）失败导致 Agent 不可见。
+        if ra_columns and "scope_target" in ra_columns and "created_by" in ra_columns:
+            await db.execute(
+                "UPDATE remote_agents SET scope_target = created_by "
+                "WHERE scope = 'personal' AND (scope_target IS NULL OR scope_target = '') "
+                "AND created_by IS NOT NULL"
+            )
+
         # work_item_comments 表（freeform 协作评论，旧库兼容建表）
         await db.execute("""
             CREATE TABLE IF NOT EXISTS work_item_comments (

@@ -355,8 +355,9 @@ class DaemonWSClient:
             return
 
         try:
-            # 通知开始执行
-            await self._send_task_event(task_id, "working", "Task execution started", kind="status")
+            # 通知开始执行：仅回传状态信号（content 置空），不携带可见文本，
+            # 避免被后端当作 AI 回复内容推送到前端。
+            await self._send_task_event(task_id, "working", "", kind="status")
 
             prompt = msg.get("prompt", "")
             skill = msg.get("skill", "") or msg.get("agent", "")
@@ -409,7 +410,12 @@ class DaemonWSClient:
                         continue
                     pushed_texts.add(norm)
                     await self._send_task_event(task_id, state, content, kind=kind)
-                elif content or kind != "status":
+                elif kind == "status":
+                    # 状态/进度事件仅作为内部状态信号回传（content 置空），
+                    # 不携带用户可见文本，避免 submitted/working/completed 等原始
+                    # 状态字符串或进度噪声被后端当作 AI 回复内容推送到前端。
+                    await self._send_task_event(task_id, state, "", kind=kind)
+                else:
                     await self._send_task_event(task_id, state, content, kind=kind)
 
             # 获取最终结果（run_streaming 结束后 task 已进入终态）

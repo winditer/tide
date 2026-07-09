@@ -146,6 +146,7 @@ class A2AClient:
         context_id: Optional[str],
         context_parts: Optional[list],
         metadata: Optional[dict],
+        cwd: Optional[str] = None,
     ) -> dict:
         parts: list = [{"text": prompt}]
         if context_parts:
@@ -163,11 +164,18 @@ class A2AClient:
         if metadata:
             message["metadata"] = metadata
 
+        configuration: dict[str, Any] = {
+            "acceptedOutputModes": list(self.DEFAULT_OUTPUT_MODES),
+        }
+        if cwd:
+            # Bridge/远程 Agent 从 configuration 读取工作目录，
+            # 同时提供 workDir 与 cwd 两个键以兼容不同实现。
+            configuration["workDir"] = cwd
+            configuration["cwd"] = cwd
+
         return {
             "message": message,
-            "configuration": {
-                "acceptedOutputModes": list(self.DEFAULT_OUTPUT_MODES),
-            },
+            "configuration": configuration,
         }
 
     async def _post_jsonrpc(self, payload: dict) -> dict:
@@ -215,6 +223,7 @@ class A2AClient:
         context_id: Optional[str] = None,
         context_parts: Optional[list] = None,
         metadata: Optional[dict] = None,
+        cwd: Optional[str] = None,
     ) -> A2ATask:
         """Send a synchronous ``message/send`` request and return the task."""
 
@@ -224,6 +233,7 @@ class A2AClient:
             context_id=context_id,
             context_parts=context_parts,
             metadata=metadata,
+            cwd=cwd,
         )
         request = self._build_jsonrpc_request("message/send", params)
 
@@ -243,6 +253,7 @@ class A2AClient:
         context_id: Optional[str] = None,
         context_parts: Optional[list] = None,
         metadata: Optional[dict] = None,
+        cwd: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
         """Stream events for ``message/stream`` over SSE.
 
@@ -256,6 +267,7 @@ class A2AClient:
             context_id=context_id,
             context_parts=context_parts,
             metadata=metadata,
+            cwd=cwd,
         )
         request = self._build_jsonrpc_request("message/stream", params)
 

@@ -133,6 +133,21 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
     )
 
+    # 定时健康检查 HTTP 模式远程 Agent，及时将离线 Agent 从 active 置为 unreachable/inactive
+    async def _agent_health_check():
+        try:
+            from backend.services.a2a_discovery import A2ADiscoveryService
+            await A2ADiscoveryService().scheduled_check_all()
+        except Exception:  # noqa: BLE001
+            logger.exception("scheduled_check_all failed")
+
+    schedule_service.scheduler.add_job(
+        _agent_health_check,
+        trigger=IntervalTrigger(seconds=30),
+        id="remote_agent_health_check",
+        replace_existing=True,
+    )
+
     # Lark WebSocket 监听器（可选启动：未配置凭据时静默跳过，运行 Web-only 模式）
     from backend.runtime.config import LARK_EVENT_QUEUE_MAXSIZE
     lark_event_queue: asyncio.Queue = asyncio.Queue(maxsize=LARK_EVENT_QUEUE_MAXSIZE)

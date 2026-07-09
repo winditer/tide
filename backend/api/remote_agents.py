@@ -5,6 +5,7 @@
 注册后的远程 Agent 会以 `a2a:{slug}` ID 出现在 /api/agents 列表中。
 """
 
+import base64
 import json
 import logging
 import re
@@ -88,6 +89,19 @@ class DiscoverRequest(BaseModel):
     url: str
 
 
+class ValidateAuthRequest(BaseModel):
+    """注册前的认证凭据校验请求。
+
+    endpoint_url / agent_card_url 至少填写一项，优先使用 endpoint_url 探测。
+    """
+
+    endpoint_url: Optional[str] = None
+    agent_card_url: Optional[str] = None
+    auth_type: Optional[str] = "none"
+    auth_credentials: Optional[str] = None
+    auth_header_name: Optional[str] = None
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -119,6 +133,54 @@ async def _fetch_agent_card(url: str) -> dict[str, Any]:
             status_code=502,
             detail=f"Agent Card response is not valid JSON: {exc}",
         )
+
+
+def _build_probe_headers(
+    auth_type: Optional[str],
+    creds: Optional[str],
+    header_name: Optional[str],
+) -> dict[str, str]:
+    """根据认证方式构造探测请求头。
+
+    兼容前端的 ``api-key`` 与服务端历史的 ``api_key`` 两种写法。
+    """
+    headers: dict[str, str] = {"Accept": "application/json"}
+    at = (auth_type or "none").lower()
+    creds = creds or ""
+    if not creds:
+        return headers
+    if at in ("bearer", "oauth2"):
+        headers["Authorization"] = f"Bearer {creds}"
+    elif at in ("api-key", "api_key"):
+        headers[header_name or "X-API-Key"] = creds
+    elif at == "basic":
+        token = base64.b64encode(creds.encode("utf-8")).decode("ascii")
+        headers["Authorization"] = f"Basic {token}"
+    return headers
+
+
+async def _verify_credentials(
+    endpoint_url: str,
+    auth_type: Optional[str],
+    auth_credentials: Optional[str],
+    auth_header_name: Optional[str] = None,
+) -> tuple[bool, Optional[str]]:
+    """通过探测目标 endpoint 校验认证凭据。返回 (valid, error_message)。
+
+    与 :func:`_fetch_agent_card` / :func:`validate_auth_credentials` 复用同一超时；
+    401/403 视为认证被拒绝，连接失败视为无法连接。
+    """
+    headers = _build_probe_headers(auth_type, auth_credentials, auth_header_name)
+    try:
+        async with httpx.AsyncClient(
+            timeout=_AGENT_CARD_FETCH_TIMEOUT, follow_redirects=True
+        ) as client:
+            resp = await client.get(endpoint_url, headers=headers)
+    except httpx.HTTPError as exc:
+        return False, f"无法连接到目标服务：{exc}"
+    if resp.status_code in (401, 403):
+        return False, "认证被拒绝"
+    return True, None
 
 
 def _extract_capabilities(card: dict[str, Any]) -> tuple[bool, bool]:
@@ -371,6 +433,46 @@ async def discover_agent_card(
     }
 
 
+@router.post("/validate-auth")
+async def validate_auth_credentials(
+    body: ValidateAuthRequest,
+    current_user=Depends(get_optional_user),
+):
+    """在注册前验证认证凭据是否有效。
+
+    使用所提供的凭据向 endpoint_url（优先）或 agent_card_url 发起一次探测请求，
+    若返回 401/403 则认为凭据无效。返回 ``{"valid": bool, "error": str | None}``。
+    """
+    _ensure_not_viewer(current_user)
+
+    target = (body.endpoint_url or body.agent_card_url or "").strip()
+    if not target:
+        raise HTTPException(
+            status_code=422,
+            detail="endpoint_url 或 agent_card_url 至少填写一项",
+        )
+
+    headers = _build_probe_headers(
+        body.auth_type, body.auth_credentials, body.auth_header_name
+    )
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=_AGENT_CARD_FETCH_TIMEOUT, follow_redirects=True
+        ) as client:
+            resp = await client.get(target, headers=headers)
+    except httpx.HTTPError as exc:
+        return {"valid": False, "error": f"无法连接：{exc}"}
+
+    if resp.status_code in (401, 403):
+        return {
+            "valid": False,
+            "error": f"HTTP {resp.status_code}：认证被拒绝，请检查凭据是否正确",
+        }
+
+    return {"valid": True, "error": None}
+
+
 @router.post("")
 async def create_remote_agent(
     body: RemoteAgentCreate,
@@ -408,8 +510,25 @@ async def create_remote_agent(
             detail="endpoint_url is required (either provided directly or resolvable from Agent Card)",
         )
 
+    # 写入前校验认证凭据：选择了非 none 认证方式且提供了凭据时，
+    # 向 endpoint 发起一次探测，拒绝无效凭据。
+    if (body.auth_type or "none").lower() != "none" and (body.auth_credentials or "").strip():
+        valid, err = await _verify_credentials(
+            endpoint_url,
+            body.auth_type,
+            body.auth_credentials,
+            body.auth_header_name,
+        )
+        if not valid:
+            raise HTTPException(status_code=422, detail=f"凭据验证失败：{err}")
+
     now = datetime.now(timezone.utc).isoformat()
     created_by = current_user.get("id") if current_user else None
+
+    # 个人作用域自动回填 scope_target：避免 scope_target 为空导致
+    # /api/agents 作用域过滤（target == user_id）失败而被隐藏。
+    if body.scope == "personal" and not body.scope_target and created_by:
+        body.scope_target = created_by
 
     # 当 Agent Card 暴露了 A2A 扩展的 agents 列表时（仅发现/自动拉取场景），
     # 为每个具体 Agent 创建独立记录；否则保持单条记录（向后兼容、手动创建）。
@@ -522,12 +641,22 @@ async def list_remote_agents(
     scope: Optional[str] = None,
     current_user=Depends(get_optional_user),
 ):
-    """列出所有已注册的远程 Agent。可通过 scope 查询参数过滤。"""
-    sql = f"SELECT {_SELECT_COLUMNS} FROM remote_agents"
+    """列出已注册的远程 Agent。可通过 scope 查询参数过滤。
+
+    权限规则：管理员可查看全部；普通用户仅能查看自己创建的 Agent。
+    """
+    conditions: list[str] = []
     params: dict[str, Any] = {}
     if scope:
-        sql += " WHERE scope = :scope"
+        conditions.append("scope = :scope")
         params["scope"] = scope
+    # 非管理员仅能查看自己创建的 Agent
+    if current_user and current_user.get("role") != "admin":
+        conditions.append("created_by = :user_id")
+        params["user_id"] = current_user["id"]
+    sql = f"SELECT {_SELECT_COLUMNS} FROM remote_agents"
+    if conditions:
+        sql += " WHERE " + " AND ".join(conditions)
     sql += " ORDER BY created_at DESC"
     async with async_session_factory() as session:
         result = await session.execute(text(sql), params)
@@ -566,6 +695,34 @@ async def update_remote_agent(
     updates = body.model_dump(exclude_unset=True)
     if not updates:
         return existing
+
+    # 若本次将作用域改为 personal 但未显式设置 scope_target，则自动回填为当前用户，
+    # 与创建逻辑保持一致，避免个人作用域 Agent 因 scope_target 为空而不可见。
+    eff_scope = updates.get("scope", existing.get("scope"))
+    if eff_scope == "personal" and not updates.get("scope_target") and not existing.get("scope_target"):
+        uid = current_user.get("id") if current_user else None
+        if uid:
+            updates["scope_target"] = uid
+
+    # 若本次更新涉及认证方式或凭据变更，写入前先校验。
+    if "auth_type" in updates or "auth_credentials" in updates:
+        eff_auth_type = updates.get("auth_type", existing.get("auth_type"))
+        eff_credentials = updates.get("auth_credentials", existing.get("auth_credentials"))
+        eff_header_name = updates.get("auth_header_name", existing.get("auth_header_name"))
+        eff_endpoint = (updates.get("endpoint_url") or existing.get("endpoint_url") or "").strip()
+        if (
+            eff_endpoint
+            and (eff_auth_type or "none").lower() != "none"
+            and (eff_credentials or "").strip()
+        ):
+            valid, err = await _verify_credentials(
+                eff_endpoint,
+                eff_auth_type,
+                eff_credentials,
+                eff_header_name,
+            )
+            if not valid:
+                raise HTTPException(status_code=422, detail=f"凭据验证失败：{err}")
 
     set_clauses: list[str] = []
     params: dict[str, Any] = {"id": agent_id}

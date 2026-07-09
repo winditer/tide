@@ -192,6 +192,17 @@ const API = {
     ),
   discover: (url: string) =>
     apiClient.post<DiscoverResponse>("/api/remote-agents/discover", { url }),
+  validateAuth: (body: {
+    endpoint_url?: string;
+    agent_card_url?: string;
+    auth_type?: string;
+    auth_credentials?: string;
+    auth_header_name?: string;
+  }) =>
+    apiClient.post<{ valid: boolean; error: string | null }>(
+      "/api/remote-agents/validate-auth",
+      body,
+    ),
 };
 
 // ── Page ─────────────────────────────────────────────────────────────────
@@ -199,7 +210,6 @@ const API = {
 export default function RemoteAgentsPage() {
   const router = useRouter();
   const { user, hydrated } = useAuth();
-  const isAdmin = user?.role === "admin";
 
   const [agents, setAgents] = useState<RemoteAgent[]>([]);
   const [loading, setLoading] = useState(true);
@@ -294,6 +304,12 @@ export default function RemoteAgentsPage() {
   };
 
   const handleCreate = async (input: AgentFormValue) => {
+    // 个人作用域时回填 scope_target 为当前用户 ID，与后端自动回填一致，
+    // 避免 scope_target 为空导致 Agent 在任务/聊天选择列表中不可见。
+    const scopeTarget =
+      input.scope === "personal" && !input.scope_target && user?.id
+        ? user.id
+        : input.scope_target;
     await API.create({
       name: input.name,
       description: input.description || undefined,
@@ -306,7 +322,7 @@ export default function RemoteAgentsPage() {
       timeout_ms: input.timeout_ms,
       max_retries: input.max_retries,
       scope: input.scope,
-      scope_target: input.scope_target,
+      scope_target: scopeTarget,
     });
     toast({ title: "已注册远程 Agent", description: input.name });
     setCreateOpen(false);
@@ -314,6 +330,10 @@ export default function RemoteAgentsPage() {
   };
 
   const handleUpdate = async (agent: RemoteAgent, input: AgentFormValue) => {
+    const scopeTarget =
+      input.scope === "personal" && !input.scope_target && user?.id
+        ? user.id
+        : input.scope_target;
     await API.update(agent.id, {
       name: input.name,
       description: input.description || null,
@@ -326,7 +346,7 @@ export default function RemoteAgentsPage() {
       timeout_ms: input.timeout_ms,
       max_retries: input.max_retries,
       scope: input.scope,
-      scope_target: input.scope_target,
+      scope_target: scopeTarget,
     });
     setEditing(null);
     await reload();
@@ -347,27 +367,32 @@ export default function RemoteAgentsPage() {
     }
   };
 
-  if (hydrated && !isAdmin) {
+  // 未登录用户跳转到登录页；所有已登录用户均可访问本页面
+  // （普通用户仅能看到自己创建的 Agent，管理员可看到全部，由后端过滤）
+  useEffect(() => {
+    if (hydrated && !user) {
+      router.replace("/auth/login");
+    }
+  }, [hydrated, user, router]);
+
+  if (hydrated && !user) {
     return (
       <main className="mx-auto max-w-3xl px-2 py-12">
-        <div className="bg-card rounded-xl shadow-card border border-destructive/30 p-8 text-center">
+        <div className="bg-card rounded-xl shadow-card border border-border/50 p-8 text-center">
           <ShieldAlert
-            className="mx-auto h-10 w-10 text-destructive"
+            className="mx-auto h-10 w-10 text-muted-foreground"
             strokeWidth={1.5}
           />
-          <h2 className="mt-3 text-lg font-semibold">无访问权限</h2>
+          <h2 className="mt-3 text-lg font-semibold">请先登录</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            远程 Agent 管理仅对管理员开放。当前角色：
-            <code className="ml-1 rounded bg-muted px-1.5 py-0.5 font-mono text-xs">
-              {user?.role ?? "guest"}
-            </code>
+            访问远程 Agent 管理需要登录账号。
           </p>
           <Button
             variant="outline"
             className="mt-6"
-            onClick={() => router.push("/settings")}
+            onClick={() => router.push("/auth/login")}
           >
-            ← 返回设置
+            前往登录
           </Button>
         </div>
       </main>
@@ -627,6 +652,7 @@ export default function RemoteAgentsPage() {
           }
         }}
         discover={async (url) => API.discover(url)}
+        validateAuth={async (body) => API.validateAuth(body)}
       />
 
       {/* Edit dialog */}
@@ -651,6 +677,7 @@ export default function RemoteAgentsPage() {
           }
         }}
         discover={async (url) => API.discover(url)}
+        validateAuth={async (body) => API.validateAuth(body)}
       />
 
       {/* Delete dialog */}

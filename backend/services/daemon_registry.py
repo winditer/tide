@@ -272,15 +272,19 @@ class DaemonRegistry:
         try:
             async with async_session_factory() as session:
                 now = datetime.now(timezone.utc).isoformat()
+                # 当 daemon token 绑定了用户（created_by 不为空）时，默认作用域为个人；
+                # 否则（全局 daemon token 无用户绑定）保持全局作用域。
+                scope = "personal" if conn.created_by else "global"
+                scope_target = conn.created_by if conn.created_by else None
                 await session.execute(
                     text("""
                         INSERT INTO remote_agents
                             (id, name, endpoint_url, agent_card_url, protocol_binding, protocol_version,
                              status, connection_mode, capability_tags, last_heartbeat,
-                             daemon_session_id, created_by, created_at, updated_at)
+                             daemon_session_id, created_by, scope, scope_target, created_at, updated_at)
                         VALUES (:id, :name, :endpoint_url, :agent_card_url, 'JSONRPC', '1.0',
                                 'active', 'ws', :capability_tags, :last_heartbeat,
-                                :session_id, :created_by, :now, :now)
+                                :session_id, :created_by, :scope, :scope_target, :now, :now)
                         ON CONFLICT(id) DO UPDATE SET
                             name = :name,
                             status = 'active',
@@ -300,6 +304,8 @@ class DaemonRegistry:
                         "last_heartbeat": now,
                         "session_id": conn.daemon_id,
                         "created_by": conn.created_by,
+                        "scope": scope,
+                        "scope_target": scope_target,
                         "now": now,
                     },
                 )
@@ -317,6 +323,10 @@ class DaemonRegistry:
         """
         # 从注册消息中获取 bridge_name，用于构建显示名
         bridge_name = getattr(conn, '_bridge_name', '') or ''
+        # 当 daemon token 绑定了用户（created_by 不为空）时，默认作用域为个人；
+        # 否则（全局 daemon token 无用户绑定）保持全局作用域。
+        scope = "personal" if conn.created_by else "global"
+        scope_target = conn.created_by if conn.created_by else None
         try:
             async with async_session_factory() as session:
                 now = datetime.now(timezone.utc).isoformat()
@@ -349,10 +359,10 @@ class DaemonRegistry:
                             INSERT INTO remote_agents
                                 (id, name, endpoint_url, agent_card_url, protocol_binding, protocol_version,
                                  status, connection_mode, capability_tags, last_heartbeat,
-                                 daemon_session_id, created_by, created_at, updated_at)
+                                 daemon_session_id, created_by, scope, scope_target, created_at, updated_at)
                             VALUES (:id, :name, :endpoint_url, :agent_card_url, 'JSONRPC', '1.0',
                                     'active', 'ws', :capability_tags, :last_heartbeat,
-                                    :session_id, :created_by, :now, :now)
+                                    :session_id, :created_by, :scope, :scope_target, :now, :now)
                             ON CONFLICT(id) DO UPDATE SET
                                 name = :name,
                                 status = 'active',
@@ -372,6 +382,8 @@ class DaemonRegistry:
                             "last_heartbeat": now,
                             "session_id": conn.daemon_id,
                             "created_by": conn.created_by,
+                            "scope": scope,
+                            "scope_target": scope_target,
                             "now": now,
                         },
                     )

@@ -34,6 +34,7 @@ export function useAgents(params?: { projectId?: string; overrides?: boolean; sc
   return useQuery({
     queryKey: ["agents", params?.projectId ?? null, params?.overrides ?? true, params?.scopeFilter ?? false],
     queryFn: () => getAgents(params),
+    refetchInterval: 15000,  // 每15秒自动刷新 agent 列表，及时反映在线/离线状态
   });
 }
 

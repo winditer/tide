@@ -1232,6 +1232,10 @@ class A2AAdapter:
         context_id = str(getattr(runtime, "conversation_id", "") or "") or None
         task_id = str(getattr(runtime, "session_id", "") or "") or None
         context_parts = self._build_context_parts(runtime)
+        # HTTP 模式下，Bridge/远程 Agent 从 configuration 读取工作目录，
+        # 需将 runtime.cwd 作为字符串显式传递。
+        _runtime_cwd = getattr(runtime, "cwd", None)
+        cwd = str(_runtime_cwd) if _runtime_cwd else None
 
         # ── Daemon WebSocket 推模式：对现有 HTTP 模式的增补 ──
         # connection_mode == 'ws' 时走 DaemonRegistry 下发；否则照常走 HTTP。
@@ -1259,6 +1263,7 @@ class A2AAdapter:
                     task_id=task_id,
                     context_id=context_id,
                     context_parts=context_parts,
+                    cwd=cwd,
                 ):
                     mapped = self._map_to_internal_event(raw_event)
                     if mapped:
@@ -1272,6 +1277,7 @@ class A2AAdapter:
                     task_id=task_id,
                     context_id=context_id,
                     context_parts=context_parts,
+                    cwd=cwd,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.exception(
@@ -1447,8 +1453,16 @@ class A2AAdapter:
                         raw_kind, kind, len(content),
                     )
                     if kind == "status":
+                        # 状态事件（submitted/working/completed 及工具/进度类状态）
+                        # 仅用于内部状态跟踪与日志，绝不作为用户可见文本推送到前端，
+                        # 否则原始 A2A 状态字符串会污染聊天消息流（此前已修复的回归问题）。
+                        # 仅 message/artifact 类事件才产生用户可见输出。
                         if content:
-                            yield {"type": "status_changed", "status": content}
+                            logger.debug(
+                                "[A2AAdapter] ws status event suppressed (not surfaced) "
+                                "state=%r content_len=%d",
+                                str(event.get("state", "") or ""), len(content),
+                            )
                         continue
                     # artifact / output / 其它未识别 kind：均视为 AI 实际输出内容。
                     # content 为空时，尝试从嵌套的 payload/artifacts 中提取

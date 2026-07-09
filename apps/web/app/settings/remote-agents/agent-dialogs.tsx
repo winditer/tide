@@ -47,10 +47,10 @@ const DEFAULT_VALUE: AgentFormValue = {
   auth_type: "bearer",
   auth_credentials: "",
   auth_header_name: "",
-  approval_policy: "on-request",
+  approval_policy: "never",
   timeout_ms: 300000,
   max_retries: 2,
-  scope: "global",
+  scope: "personal",
   scope_target: "",
 };
 
@@ -87,6 +87,17 @@ function encodeScopeTargets(targets: string[]): string {
 
 // ── Helpers ─────────────────────────────────────────
 
+// 用户仅需填写基础 URL（如 https://your-agent-host.com），
+// 在发现与提交时自动补全 /.well-known/agent.json。
+function normalizeAgentCardUrl(url: string): string {
+  const trimmed = url.replace(/\/+$/, "");
+  if (!trimmed) return "";
+  if (!trimmed.endsWith(".well-known/agent.json")) {
+    return `${trimmed}/.well-known/agent.json`;
+  }
+  return trimmed;
+}
+
 function getApiErrorMessage(err: unknown): string {
   if (!err) return "未知错误";
   const e = err as { body?: unknown; message?: string };
@@ -113,7 +124,7 @@ function fromAgent(agent: RemoteAgent | null): AgentFormValue {
       typeof agent.timeout_ms === "number" ? agent.timeout_ms : 300000,
     max_retries:
       typeof agent.max_retries === "number" ? agent.max_retries : 2,
-    scope: agent.scope || "global",
+    scope: agent.scope || "personal",
     scope_target: agent.scope_target ?? "",
   };
 }
@@ -169,6 +180,7 @@ export function AgentFormDialog({
   initial,
   onSubmit,
   discover,
+  validateAuth,
 }: {
   mode: "create" | "edit";
   open: boolean;
@@ -176,6 +188,13 @@ export function AgentFormDialog({
   initial?: RemoteAgent | null;
   onSubmit: (value: AgentFormValue) => Promise<void>;
   discover: (url: string) => Promise<DiscoverResult>;
+  validateAuth?: (body: {
+    endpoint_url: string;
+    agent_card_url: string;
+    auth_type: string;
+    auth_credentials: string;
+    auth_header_name: string;
+  }) => Promise<{ valid: boolean; error: string | null }>;
 }) {
   const [value, setValue] = useState<AgentFormValue>(DEFAULT_VALUE);
   const [error, setError] = useState<string | null>(null);
@@ -199,11 +218,12 @@ export function AgentFormDialog({
   ) => setValue((prev) => ({ ...prev, [key]: val }));
 
   const handleDiscover = async () => {
-    const url = value.agent_card_url.trim();
-    if (!url) {
+    const raw = value.agent_card_url.trim();
+    if (!raw) {
       setError("请先输入 Agent Card URL");
       return;
     }
+    const url = normalizeAgentCardUrl(raw);
     setError(null);
     setDiscovering(true);
     try {
@@ -211,6 +231,7 @@ export function AgentFormDialog({
       setDiscovered(data);
       setValue((prev) => ({
         ...prev,
+        agent_card_url: url,
         name: prev.name || data.name || "",
         description: prev.description || data.description || "",
         endpoint_url: data.endpoint_url || prev.endpoint_url,
@@ -244,13 +265,40 @@ export function AgentFormDialog({
       setError("请选择一个项目");
       return;
     }
+    // 选择了认证方式时，凭据不能为空
+    if (value.auth_type !== "none" && !value.auth_credentials.trim()) {
+      setError("选择了认证方式时凭据不能为空");
+      return;
+    }
+
+    const normalizedCardUrl = normalizeAgentCardUrl(value.agent_card_url.trim());
     setSubmitting(true);
     try {
+      // 注册前校验凭据有效性（新建与编辑模式均在选择了认证方式时执行）。
+      if (
+        validateAuth &&
+        value.auth_type !== "none" &&
+        value.auth_credentials.trim()
+      ) {
+        const result = await validateAuth({
+          endpoint_url: value.endpoint_url.trim(),
+          agent_card_url: normalizedCardUrl,
+          auth_type: value.auth_type,
+          auth_credentials: value.auth_credentials.trim(),
+          auth_header_name: value.auth_header_name.trim(),
+        });
+        if (!result.valid) {
+          setError(`凭据验证失败：${result.error ?? "无法连接到目标服务"}`);
+          setSubmitting(false);
+          return;
+        }
+      }
+
       await onSubmit({
         ...value,
         name: value.name.trim(),
         description: value.description.trim(),
-        agent_card_url: value.agent_card_url.trim(),
+        agent_card_url: normalizedCardUrl,
         endpoint_url: value.endpoint_url.trim(),
         auth_credentials: value.auth_credentials.trim(),
         auth_header_name: value.auth_header_name.trim(),
@@ -292,11 +340,11 @@ export function AgentFormDialog({
           {/* Discover row */}
           <Field
             label="Agent Card URL"
-            hint="例如 https://agent.example.com/.well-known/agent.json"
+            hint="例如 https://your-agent-host.com（自动补全 .well-known/agent.json）"
           >
             <div className="flex items-center gap-2">
               <Input
-                placeholder="https://…/.well-known/agent.json"
+                placeholder="https://your-agent-host.com"
                 value={value.agent_card_url}
                 onChange={(e) => setField("agent_card_url", e.target.value)}
                 className="rounded-lg border-border/50 font-mono text-xs"
