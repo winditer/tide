@@ -47,7 +47,7 @@ function projectName(cwd: string) {
 export function TaskFilters({ value, onChange, onReset }: TaskFiltersProps) {
   const { data: projectsData } = useProjects();
   const { data: groupsData } = useProjectGroups();
-  const { data: agentsData } = useAgents();
+  const { data: agentsData } = useAgents({ scopeFilter: true });
   const { data: sessionsData } = useSessions({
     project: value.project || undefined,
     group_id: value.group_id || undefined,

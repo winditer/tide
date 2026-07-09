@@ -56,20 +56,20 @@ class AgentConfigService:
         offset: int = 0,
     ) -> list[dict]:
         """按条件查询 agent_configs 列表。"""
-        conditions = ["workspace_id = :workspace_id"]
+        conditions = ["ac.workspace_id = :workspace_id"]
         params: dict[str, Any] = {
             "workspace_id": workspace_id,
             "limit": limit,
             "offset": offset,
         }
         if scope is not None:
-            conditions.append("scope = :scope")
+            conditions.append("ac.scope = :scope")
             params["scope"] = scope
         if scope_target is not None:
-            conditions.append("scope_target = :scope_target")
+            conditions.append("ac.scope_target = :scope_target")
             params["scope_target"] = scope_target
         if agent_id is not None:
-            conditions.append("agent_id = :agent_id")
+            conditions.append("ac.agent_id = :agent_id")
             params["agent_id"] = agent_id
 
         where = " AND ".join(conditions)
@@ -77,13 +77,16 @@ class AgentConfigService:
             result = await session.execute(
                 text(
                     f"""
-                    SELECT id, workspace_id, agent_id, scope, scope_target,
-                           enabled, display_name, description,
-                           model_override, timeout_override, config_json,
-                           created_by, created_at, updated_at
-                    FROM agent_configs
+                    SELECT ac.id, ac.workspace_id, ac.agent_id, ac.scope, ac.scope_target,
+                           ac.enabled, ac.display_name, ac.description,
+                           ac.model_override, ac.timeout_override, ac.config_json,
+                           ac.created_by,
+                           COALESCE(u.display_name, u.username, ac.created_by) AS created_by_name,
+                           ac.created_at, ac.updated_at
+                    FROM agent_configs ac
+                    LEFT JOIN users u ON ac.created_by = u.id
                     WHERE {where}
-                    ORDER BY scope ASC, agent_id ASC
+                    ORDER BY ac.scope ASC, ac.agent_id ASC
                     LIMIT :limit OFFSET :offset
                     """
                 ),
@@ -142,6 +145,51 @@ class AgentConfigService:
             config_json_str = config_json_raw
         else:
             config_json_str = None
+
+        # 先按自然键（workspace_id, agent_id, scope, scope_target）查重。
+        # 注意：SQLite 的 UNIQUE 约束对 NULL 视为互不相同，因此 global 作用域
+        # （scope_target 为 NULL）需显式用 IS NULL 匹配，既避免重复报错，
+        # 也避免产生重复的全局配置行。
+        async with async_session_factory() as session:
+            if scope_target is None:
+                dup = await session.execute(
+                    text(
+                        "SELECT id FROM agent_configs "
+                        "WHERE workspace_id = :w AND agent_id = :a "
+                        "AND scope = :s AND scope_target IS NULL"
+                    ),
+                    {"w": workspace_id, "a": agent_id, "s": scope},
+                )
+            else:
+                dup = await session.execute(
+                    text(
+                        "SELECT id FROM agent_configs "
+                        "WHERE workspace_id = :w AND agent_id = :a "
+                        "AND scope = :s AND scope_target = :t"
+                    ),
+                    {"w": workspace_id, "a": agent_id, "s": scope, "t": scope_target},
+                )
+            existing_row = dup.fetchone()
+
+        # 已存在相同作用域配置：改为更新（UPSERT 语义），避免触发唯一约束报错。
+        if existing_row is not None:
+            existing_id = existing_row[0]
+            update_payload: dict[str, Any] = {}
+            for key in (
+                "enabled",
+                "display_name",
+                "description",
+                "model_override",
+                "timeout_override",
+            ):
+                if key in data:
+                    update_payload[key] = data[key]
+            if config_json_str is not None:
+                update_payload["config_json"] = config_json_str
+            updated = await self.update_config(existing_id, update_payload)
+            if updated:
+                return updated
+            return await self.get_config(existing_id)  # type: ignore[return-value]
 
         async with async_session_factory() as session:
             try:

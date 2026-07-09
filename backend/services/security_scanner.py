@@ -17,6 +17,7 @@ from typing import Optional
 
 from sqlalchemy import text
 
+from backend.core.scope_utils import match_project_scope
 from backend.db.engine import async_session_factory
 
 logger = logging.getLogger("tide.security")
@@ -74,42 +75,57 @@ class SecurityScanner:
 
         return findings
 
+    async def _get_project_group_ids(self, project_id: Optional[str]) -> set:
+        """查询指定项目所属的所有项目组 ID 集合（用于作用域组匹配）。"""
+        group_ids: set = set()
+        if not project_id:
+            return group_ids
+        try:
+            async with async_session_factory() as session:
+                rows = await session.execute(
+                    text(
+                        "SELECT group_id FROM project_group_members WHERE project_id = :pid"
+                    ),
+                    {"pid": project_id},
+                )
+                group_ids = {r[0] for r in rows.fetchall()}
+        except Exception as exc:  # noqa: BLE001 - 降级：查询失败时不做组匹配
+            logger.warning("query project_group_members failed: %s", exc)
+        return group_ids
+
     async def _load_rules(self, workspace_id: str, project_id: str = None) -> list[dict]:
         """加载启用的安全规则。
 
-        当 project_id 提供时，加载全局规则 + 项目规则，项目规则同名覆盖全局规则。
+        当 project_id 提供时，加载全局规则 + 作用域匹配的项目/项目组规则，
+        作用域规则同名覆盖全局规则。作用域匹配支持多选（JSON 数组）及 group: 前缀。
         """
         async with async_session_factory() as session:
-            if project_id:
-                rows = (
-                    await session.execute(
-                        text(
-                            "SELECT * FROM security_rules WHERE workspace_id = :ws AND enabled = 1"
-                            " AND (project_id IS NULL OR project_id = :pid)"
-                        ),
-                        {"ws": workspace_id, "pid": project_id},
-                    )
-                ).fetchall()
-                # 合并策略：项目规则同名覆盖全局规则
-                rules_by_name: dict[str, dict] = {}
-                for r in rows:
-                    rule = dict(r._mapping)
-                    name = rule.get("name", "")
-                    existing = rules_by_name.get(name)
-                    if existing is None or rule.get("project_id"):
-                        rules_by_name[name] = rule
-                return list(rules_by_name.values())
-            else:
-                rows = (
-                    await session.execute(
-                        text(
-                            "SELECT * FROM security_rules WHERE workspace_id = :ws AND enabled = 1"
-                            " AND project_id IS NULL"
-                        ),
-                        {"ws": workspace_id},
-                    )
-                ).fetchall()
-                return [dict(r._mapping) for r in rows]
+            rows = (
+                await session.execute(
+                    text(
+                        "SELECT * FROM security_rules WHERE workspace_id = :ws AND enabled = 1"
+                    ),
+                    {"ws": workspace_id},
+                )
+            ).fetchall()
+        all_rules = [dict(r._mapping) for r in rows]
+        if project_id:
+            group_ids = await self._get_project_group_ids(project_id)
+            matched = [
+                rule
+                for rule in all_rules
+                if match_project_scope(rule.get("project_id"), project_id, group_ids)
+            ]
+            # 合并策略：作用域规则同名覆盖全局规则
+            rules_by_name: dict[str, dict] = {}
+            for rule in matched:
+                name = rule.get("name", "")
+                existing = rules_by_name.get(name)
+                if existing is None or rule.get("project_id"):
+                    rules_by_name[name] = rule
+            return list(rules_by_name.values())
+        # 未指定项目：仅全局规则
+        return [rule for rule in all_rules if not rule.get("project_id")]
 
     async def _save_findings(
         self, workspace_id: str, task_id: str, findings: list[SecurityFinding], project_id: str = None
@@ -144,17 +160,16 @@ class SecurityScanner:
     async def list_rules(
         self, workspace_id: str, category: str = None, project_id: str = None
     ) -> list[dict]:
-        """列出安全规则。"""
+        """列出安全规则。
+
+        指定 project_id 时返回全局规则 + 作用域匹配的项目/项目组规则；
+        未指定时仅返回全局规则。作用域匹配支持多选（JSON 数组）及 group: 前缀。
+        """
         conditions = ["workspace_id = :ws"]
         params: dict = {"ws": workspace_id}
         if category:
             conditions.append("category = :category")
             params["category"] = category
-        if project_id:
-            conditions.append("(project_id IS NULL OR project_id = :project_id)")
-            params["project_id"] = project_id
-        else:
-            conditions.append("project_id IS NULL")
         where = " AND ".join(conditions)
         async with async_session_factory() as session:
             rows = (
@@ -165,7 +180,16 @@ class SecurityScanner:
                     params,
                 )
             ).fetchall()
-            return [dict(r._mapping) for r in rows]
+            items = [dict(r._mapping) for r in rows]
+        if project_id:
+            group_ids = await self._get_project_group_ids(project_id)
+            return [
+                rule
+                for rule in items
+                if match_project_scope(rule.get("project_id"), project_id, group_ids)
+            ]
+        # 未指定项目：仅全局规则
+        return [rule for rule in items if not rule.get("project_id")]
 
     async def get_rule(self, workspace_id: str, rule_id: str) -> Optional[dict]:
         """获取单条安全规则。"""

@@ -38,6 +38,7 @@ class DaemonConnection:
     status: str = "online"  # online / offline
     last_heartbeat: float = field(default_factory=time.time)
     registered_at: float = field(default_factory=time.time)
+    created_by: Optional[str] = None
 
 
 class DaemonRegistry:
@@ -85,7 +86,7 @@ class DaemonRegistry:
 
     # ── 注册/断开 ────────────────────────────────────────
 
-    async def register(self, daemon_id: str, ws: WebSocket, payload: dict) -> dict:
+    async def register(self, daemon_id: str, ws: WebSocket, payload: dict, created_by: Optional[str] = None) -> dict:
         """处理 Daemon 的 register 消息，返回 registered 响应载荷。"""
         conn = DaemonConnection(
             daemon_id=daemon_id,
@@ -98,6 +99,7 @@ class DaemonRegistry:
             skills=payload.get("skills", []),
             capability_tags=payload.get("capability_tags", []),
         )
+        conn.created_by = created_by
         # 存储 bridge_name 供 _upsert_daemon_agents 构建显示名
         conn._bridge_name = payload.get("bridge_name", "")
         async with self._lock:
@@ -275,10 +277,10 @@ class DaemonRegistry:
                         INSERT INTO remote_agents
                             (id, name, endpoint_url, agent_card_url, protocol_binding, protocol_version,
                              status, connection_mode, capability_tags, last_heartbeat,
-                             daemon_session_id, created_at, updated_at)
+                             daemon_session_id, created_by, created_at, updated_at)
                         VALUES (:id, :name, :endpoint_url, :agent_card_url, 'JSONRPC', '1.0',
                                 'active', 'ws', :capability_tags, :last_heartbeat,
-                                :session_id, :now, :now)
+                                :session_id, :created_by, :now, :now)
                         ON CONFLICT(id) DO UPDATE SET
                             name = :name,
                             status = 'active',
@@ -286,6 +288,7 @@ class DaemonRegistry:
                             capability_tags = :capability_tags,
                             last_heartbeat = :last_heartbeat,
                             daemon_session_id = :session_id,
+                            created_by = CASE WHEN remote_agents.created_by IS NULL THEN :created_by ELSE remote_agents.created_by END,
                             updated_at = :now
                     """),
                     {
@@ -296,6 +299,7 @@ class DaemonRegistry:
                         "capability_tags": json.dumps(conn.capability_tags),
                         "last_heartbeat": now,
                         "session_id": conn.daemon_id,
+                        "created_by": conn.created_by,
                         "now": now,
                     },
                 )
@@ -345,10 +349,10 @@ class DaemonRegistry:
                             INSERT INTO remote_agents
                                 (id, name, endpoint_url, agent_card_url, protocol_binding, protocol_version,
                                  status, connection_mode, capability_tags, last_heartbeat,
-                                 daemon_session_id, created_at, updated_at)
+                                 daemon_session_id, created_by, created_at, updated_at)
                             VALUES (:id, :name, :endpoint_url, :agent_card_url, 'JSONRPC', '1.0',
                                     'active', 'ws', :capability_tags, :last_heartbeat,
-                                    :session_id, :now, :now)
+                                    :session_id, :created_by, :now, :now)
                             ON CONFLICT(id) DO UPDATE SET
                                 name = :name,
                                 status = 'active',
@@ -356,6 +360,7 @@ class DaemonRegistry:
                                 capability_tags = :capability_tags,
                                 last_heartbeat = :last_heartbeat,
                                 daemon_session_id = :session_id,
+                                created_by = CASE WHEN remote_agents.created_by IS NULL THEN :created_by ELSE remote_agents.created_by END,
                                 updated_at = :now
                         """),
                         {
@@ -366,6 +371,7 @@ class DaemonRegistry:
                             "capability_tags": json.dumps(tags),
                             "last_heartbeat": now,
                             "session_id": conn.daemon_id,
+                            "created_by": conn.created_by,
                             "now": now,
                         },
                     )

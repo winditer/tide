@@ -101,7 +101,7 @@ export function PlanCreateForm({
   );
 
   // 动态 Agent 列表（已过滤禁用项，含本地 + 远程）
-  const { data: agentsData } = useAgents({ projectId: selectedProjectId });
+  const { data: agentsData } = useAgents({ projectId: selectedProjectId, scopeFilter: true });
   const agentOptions = useMemo(() => {
     const list = agentsData?.agents ?? [];
     if (list.length === 0) return FALLBACK_AGENT_OPTIONS;

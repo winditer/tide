@@ -35,6 +35,18 @@ def _ensure_not_viewer(current_user: Optional[dict]) -> None:
         raise HTTPException(status_code=403, detail="Viewers cannot modify resources")
 
 
+def _check_agent_permission(agent: dict, current_user: Optional[dict]) -> None:
+    """admin 可操作所有 agent；创建者可操作自己的 agent；其他人 403。"""
+    if not current_user:
+        return
+    if current_user.get("role") == "admin":
+        return
+    created_by = agent.get("created_by")
+    if created_by and created_by == current_user.get("id"):
+        return
+    raise HTTPException(status_code=403, detail="仅管理员或创建者可操作此 Agent")
+
+
 # ---------------------------------------------------------------------------
 # Pydantic models
 # ---------------------------------------------------------------------------
@@ -547,6 +559,7 @@ async def update_remote_agent(
     existing = await _get_agent_row(agent_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Remote agent not found")
+    _check_agent_permission(existing, current_user)
 
     # 仅更新客户端显式传入的字段（exclude_unset）：
     # 不会根据 scope 变更自动重新生成/覆盖 name，name 仅在客户端显式提交时更新。
@@ -604,6 +617,7 @@ async def delete_remote_agent(
     existing = await _get_agent_row(agent_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Remote agent not found")
+    _check_agent_permission(existing, current_user)
 
     async with async_session_factory() as session:
         await session.execute(

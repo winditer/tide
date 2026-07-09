@@ -30,9 +30,24 @@ async def websocket_daemon(ws: WebSocket, token: str = Query("")):
     - Daemon→服务端：register, heartbeat, capability_update, task_event, task_result
     - 服务端→Daemon：registered, heartbeat_ack, task_dispatch, task_cancel
     """
-    # 鉴权
-    if DAEMON_TOKEN and token != DAEMON_TOKEN:
-        await ws.close(code=4001, reason="Invalid daemon token")
+    from backend.api.daemon_tokens import verify_daemon_token
+
+    # 二阶段认证
+    user_id: str | None = None
+
+    if token:
+        # 1. 优先尝试用户专属 Token
+        user_id = await verify_daemon_token(token)
+
+        if user_id is None:
+            # 2. Fallback：全局 DAEMON_TOKEN
+            if DAEMON_TOKEN and token == DAEMON_TOKEN:
+                pass  # 合法连接，user_id 保持 None
+            else:
+                await ws.close(code=4001, reason="Invalid daemon token")
+                return
+    elif DAEMON_TOKEN:
+        await ws.close(code=4001, reason="Daemon token required")
         return
 
     await ws.accept()
@@ -52,8 +67,8 @@ async def websocket_daemon(ws: WebSocket, token: str = Query("")):
             await ws.close(code=4003, reason="daemon_id required")
             return
 
-        # 注册
-        response = await daemon_registry.register(daemon_id, ws, msg)
+        # 注册（传递 created_by）
+        response = await daemon_registry.register(daemon_id, ws, msg, created_by=user_id)
         await ws.send_text(json.dumps({"type": "registered", **response}))
 
         # 消息循环

@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import text
 
 from backend.core.dependencies import get_optional_user
+from backend.core.scope_utils import match_project_scope
 from backend.db.engine import async_session_factory
 from backend.runtime.adapters import AGENT_ADAPTERS
 from backend.runtime.task_runtime import TASKS
@@ -35,10 +36,13 @@ async def _list_remote_agents() -> list[dict]:
         async with async_session_factory() as session:
             result = await session.execute(
                 text(
-                    "SELECT id, name, description, skills_json,"
-                    " capabilities_streaming, capabilities_push_notifications,"
-                    " scope, scope_target"
-                    " FROM remote_agents WHERE status = 'active'"
+                    "SELECT ra.id, ra.name, ra.description, ra.skills_json,"
+                    " ra.capabilities_streaming, ra.capabilities_push_notifications,"
+                    " ra.scope, ra.scope_target, ra.created_by,"
+                    " COALESCE(u.display_name, u.username, ra.created_by) AS created_by_name"
+                    " FROM remote_agents ra"
+                    " LEFT JOIN users u ON ra.created_by = u.id"
+                    " WHERE ra.status = 'active'"
                 )
             )
             rows = result.fetchall()
@@ -57,6 +61,8 @@ async def _list_remote_agents() -> list[dict]:
             push,
             scope,
             scope_target,
+            created_by,
+            created_by_name,
         ) = row
         try:
             skills = json.loads(skills_json) if skills_json else []
@@ -74,6 +80,8 @@ async def _list_remote_agents() -> list[dict]:
                 # 作为列表作用域图标的兜底来源，避免"未额外配置覆盖"时误显示为灰色。
                 "scope": (scope or "global"),
                 "scope_target": scope_target or None,
+                "created_by": created_by,
+                "created_by_name": created_by_name or created_by,
                 "capabilities": {
                     "streaming": bool(streaming),
                     "pushNotifications": bool(push),
@@ -88,11 +96,13 @@ def _agent_visible_for_scope(
     cfg: Optional[dict],
     project_id: Optional[str],
     user_id: Optional[str],
+    project_group_ids: Optional[set] = None,
 ) -> bool:
     """判断 Agent 是否在当前用户/项目上下文下有权使用（作用域权限过滤）。
 
     - ``global`` 作用域：所有人可见
-    - ``project`` 作用域：仅目标项目（``scope_target == project_id``）成员可见
+    - ``project`` 作用域：仅目标项目（``scope_target == project_id``）成员可见；
+      若 ``scope_target`` 为 ``group:<gid>`` 则匹配项目所属组
     - ``personal`` 作用域：仅目标用户（``scope_target == user_id``）可见
 
     有效作用域优先取 agent_configs 覆盖，其次取 Agent 自带 scope（远程 Agent
@@ -106,7 +116,10 @@ def _agent_visible_for_scope(
         target = agent.get("scope_target")
 
     if scope == "project":
-        return bool(project_id) and target == project_id
+        if not project_id or not target:
+            return False
+        # target 兼容单项目 ID、JSON 数组（多选）、group:<gid> 前端（项目组）
+        return match_project_scope(target, project_id, project_group_ids)
     if scope == "personal":
         return bool(user_id) and target == user_id
     # global 或未知作用域 → 所有人可见
@@ -209,14 +222,60 @@ async def list_agents(
     if overrides and configs:
         agents = _apply_config_overrides(agents, configs)
 
+    # 查询当前项目所属的所有 project group（用于 scope_filter 中的组匹配）
+    project_group_ids: set = set()
+    if scope_filter and project_id:
+        try:
+            async with async_session_factory() as session:
+                rows = await session.execute(
+                    text(
+                        "SELECT group_id FROM project_group_members WHERE project_id = :pid"
+                    ),
+                    {"pid": project_id},
+                )
+                project_group_ids = {r[0] for r in rows.fetchall()}
+        except Exception as exc:
+            logger.warning("query project_group_members failed: %s", exc)
+
     # 按作用域权限过滤：仅保留当前用户/项目有权使用的 Agent
     if scope_filter:
-        agents = [
-            a
-            for a in agents
+        # 获取所有 project-scope 的 configs（不经过 resolve，因为一个 agent 可能有多条）
+        all_project_configs: dict[str, list[dict]] = {}
+        if project_id:
+            try:
+                async with async_session_factory() as session:
+                    rows = await session.execute(
+                        text(
+                            "SELECT agent_id, scope, scope_target FROM agent_configs "
+                            "WHERE workspace_id = 'default' AND scope = 'project'"
+                        ),
+                    )
+                    for r in rows.fetchall():
+                        aid = r[0]
+                        if aid not in all_project_configs:
+                            all_project_configs[aid] = []
+                        all_project_configs[aid].append(
+                            {"scope": r[1], "scope_target": r[2]}
+                        )
+            except Exception as exc:
+                logger.warning("query all project configs failed: %s", exc)
+
+        def is_visible(agent: dict) -> bool:
+            agent_id = agent.get("id", "")
+            # 先检查 resolved config（优先级最高的覆盖）
+            cfg = configs.get(agent_id)
             if _agent_visible_for_scope(
-                a, configs.get(a.get("id", "")), project_id, user_id
-            )
-        ]
+                agent, cfg, project_id, user_id, project_group_ids
+            ):
+                return True
+            # 再检查该 agent 的所有 project configs（多选情况）
+            for pc in all_project_configs.get(agent_id, []):
+                if _agent_visible_for_scope(
+                    agent, pc, project_id, user_id, project_group_ids
+                ):
+                    return True
+            return False
+
+        agents = [a for a in agents if is_visible(a)]
 
     return {"agents": agents}

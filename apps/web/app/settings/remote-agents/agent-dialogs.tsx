@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { apiClient } from "@tide/core";
+import { ProjectMultiScopeSelector } from "@tide/views";
 import {
   Button,
   Dialog,
@@ -67,18 +67,25 @@ const POLICY_OPTIONS = [
   { value: "never", label: "无需审批 (never)" },
 ];
 
-const SCOPE_OPTIONS = [
-  { value: "global", label: "全局" },
-  { value: "project", label: "项目" },
-  { value: "personal", label: "个人" },
-];
-
-interface ProjectOption {
-  id: string;
-  name: string;
+// 作用域目标编解码：兼容 null、单字符串（单项目/组）、JSON 数组（多选）三种存储格式。
+function parseScopeTargets(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed.filter((t): t is string => !!t);
+  } catch {
+    // 非 JSON → 当作单个目标
+  }
+  return [raw];
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────
+function encodeScopeTargets(targets: string[]): string {
+  if (targets.length === 0) return "";
+  if (targets.length === 1) return targets[0];
+  return JSON.stringify(targets);
+}
+
+// ── Helpers ─────────────────────────────────────────
 
 function getApiErrorMessage(err: unknown): string {
   if (!err) return "未知错误";
@@ -175,28 +182,6 @@ export function AgentFormDialog({
   const [submitting, setSubmitting] = useState(false);
   const [discovering, setDiscovering] = useState(false);
   const [discovered, setDiscovered] = useState<DiscoverResult | null>(null);
-  const [projects, setProjects] = useState<ProjectOption[]>([]);
-
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const data = await apiClient.get<{ projects?: ProjectOption[] }>(
-          "/api/projects?workspace_id=default",
-        );
-        const list = data?.projects || (Array.isArray(data) ? (data as ProjectOption[]) : []);
-        if (!cancelled) {
-          setProjects(list.map((p) => ({ id: p.id, name: p.name })));
-        }
-      } catch {
-        // ignore
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [open]);
 
   useEffect(() => {
     if (open) {
@@ -287,7 +272,8 @@ export function AgentFormDialog({
 
   const showAuthHeaderName = value.auth_type === "api-key";
   const showCredentials = value.auth_type !== "none";
-  const scopeInvalid = value.scope === "project" && !value.scope_target;
+  const scopeInvalid =
+    value.scope === "project" && parseScopeTargets(value.scope_target).length === 0;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -383,39 +369,61 @@ export function AgentFormDialog({
             />
           </Field>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <Field
-              label="作用域"
-              hint="全局/项目/个人"
-            >
-              <Select
-                value={value.scope}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setValue((prev) => ({
-                    ...prev,
-                    scope: v,
-                    scope_target: v === "project" ? prev.scope_target : "",
-                  }));
-                }}
-                options={SCOPE_OPTIONS}
-                className="rounded-lg border-border/50"
-              />
-            </Field>
-            {value.scope === "project" && (
-              <Field label="项目" required>
-                <Select
-                  value={value.scope_target}
-                  onChange={(e) => setField("scope_target", e.target.value)}
-                  options={[
-                    { value: "", label: "选择项目…" },
-                    ...projects.map((p) => ({ value: p.id, label: p.name })),
-                  ]}
-                  className={`rounded-lg border-border/50 ${
-                    scopeInvalid ? "border-destructive" : ""
+          <div className="space-y-1.5">
+            <span className="block text-sm font-medium text-foreground">作用域</span>
+            <div className="grid grid-cols-3 gap-2">
+              {(
+                [
+                  { key: "global", title: "全局", desc: "所有项目可用" },
+                  { key: "project", title: "项目", desc: "指定项目 / 项目组" },
+                  { key: "personal", title: "个人", desc: "仅自己可用" },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.key}
+                  type="button"
+                  onClick={() =>
+                    setValue((prev) => ({
+                      ...prev,
+                      scope: opt.key,
+                      scope_target: opt.key === "project" ? prev.scope_target : "",
+                    }))
+                  }
+                  className={`rounded-lg border px-3 py-2 text-sm text-left transition-smooth ${
+                    value.scope === opt.key
+                      ? "border-indigo-500 bg-indigo-500/10 text-foreground"
+                      : "border-border/50 text-muted-foreground hover:border-foreground/30"
                   }`}
+                >
+                  <div className="font-medium">{opt.title}</div>
+                  <div className="text-xs text-muted-foreground">{opt.desc}</div>
+                </button>
+              ))}
+            </div>
+            {value.scope === "project" && (
+              <div className="pt-1">
+                <span className="mb-1.5 block text-sm font-medium text-foreground">
+                  目标项目 / 项目组（多选）
+                  <span className="ml-1 text-destructive">*</span>
+                </span>
+                <ProjectMultiScopeSelector
+                  value={parseScopeTargets(value.scope_target)}
+                  onChange={(targets) =>
+                    setField("scope_target", encodeScopeTargets(targets))
+                  }
+                  showGlobalHint={false}
                 />
-              </Field>
+                {scopeInvalid && (
+                  <p className="mt-1 text-xs text-destructive">
+                    请至少选择一个项目或项目组
+                  </p>
+                )}
+              </div>
+            )}
+            {value.scope === "personal" && (
+              <p className="text-xs text-muted-foreground">
+                个人作用域：仅创建者本人可见与使用
+              </p>
             )}
           </div>
 

@@ -16,7 +16,7 @@ import {
   toast,
 } from "@tide/ui";
 import { apiClient, useAuth } from "@tide/core";
-import { HooksGuide } from "@tide/views";
+import { HooksGuide, ProjectMultiScopeSelector } from "@tide/views";
 import { ProjectScopeSelector } from "@tide/views/components/project-scope-selector";
 import {
   ArrowLeft,
@@ -77,6 +77,22 @@ function eventBadgeClass(event: string): string {
   if (event.startsWith("task.")) return "bg-blue-500/15 text-blue-600 border-blue-500/30";
   if (event.startsWith("workflow.")) return "bg-purple-500/15 text-purple-600 border-purple-500/30";
   return "bg-muted text-muted-foreground";
+}
+
+// project_id 字段兼容 null / 单字符串 / JSON 数组三种格式
+function parseScopeTargets(projectId: string | null | undefined): string[] {
+  if (!projectId) return [];
+  try {
+    const parsed = JSON.parse(projectId);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {}
+  return [projectId];
+}
+
+function encodeScopeTargets(targets: string[]): string | null {
+  if (targets.length === 0) return null;
+  if (targets.length === 1) return targets[0];
+  return JSON.stringify(targets);
 }
 
 // ── Main Page ────────────────────────────────────────────────────────────────
@@ -327,21 +343,10 @@ function HookDialog({
   const [skillSlug, setSkillSlug] = useState("");
   const [conditions, setConditions] = useState("");
   const [priority, setPriority] = useState(0);
-  const [dialogProjectId, setDialogProjectId] = useState<string>("");
-  const [projects, setProjects] = useState<{ id: string; name: string; cwd?: string }[]>([]);
+  const [scopeTargets, setScopeTargets] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch projects for scope selector
-  useEffect(() => {
-    apiClient
-      .get<{ projects?: { id: string; name: string; cwd?: string }[] }>("/api/projects")
-      .then((data) => {
-        const list = data?.projects ?? [];
-        setProjects(Array.isArray(list) ? list : []);
-      })
-      .catch(() => setProjects([]));
-  }, []);
 
   useEffect(() => {
     if (open) {
@@ -357,7 +362,7 @@ function HookDialog({
         setSkillSlug((cfg.skill_slug as string) ?? "");
         setConditions(hook.conditions ? JSON.stringify(hook.conditions, null, 2) : "");
         setPriority(hook.priority ?? 0);
-        setDialogProjectId((hook as any).project_id ?? "");
+        setScopeTargets(parseScopeTargets((hook as any).project_id));
       } else {
         setName("");
         setEvent("task.completed");
@@ -369,7 +374,7 @@ function HookDialog({
         setSkillSlug("");
         setConditions("");
         setPriority(0);
-        setDialogProjectId("");
+        setScopeTargets([]);
       }
       setError(null);
     }
@@ -413,7 +418,7 @@ function HookDialog({
       action_config,
       conditions: parsedConditions,
       priority,
-      ...(dialogProjectId ? { project_id: dialogProjectId } : {}),
+      project_id: encodeScopeTargets(scopeTargets),
     } as any);
     setSaving(false);
   };
@@ -440,18 +445,10 @@ function HookDialog({
           </Field>
 
           <Field label="作用域">
-            <select
-              className="w-full border rounded-md px-3 py-2 text-sm bg-background"
-              value={dialogProjectId}
-              onChange={(e) => setDialogProjectId(e.target.value)}
-            >
-              <option value="">全局</option>
-              {projects.map((p) => (
-                <option key={p.id || p.cwd} value={p.id || p.cwd}>
-                  {p.name || p.cwd}
-                </option>
-              ))}
-            </select>
+            <ProjectMultiScopeSelector
+              value={scopeTargets}
+              onChange={(v) => setScopeTargets(v)}
+            />
           </Field>
 
           <div className="grid grid-cols-2 gap-3">

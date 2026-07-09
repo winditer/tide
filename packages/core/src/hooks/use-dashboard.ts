@@ -30,9 +30,9 @@ export function useRecentTasks(limit = 10) {
   });
 }
 
-export function useAgents(params?: { projectId?: string; overrides?: boolean }) {
+export function useAgents(params?: { projectId?: string; overrides?: boolean; scopeFilter?: boolean }) {
   return useQuery({
-    queryKey: ["agents", params?.projectId ?? null, params?.overrides ?? true],
+    queryKey: ["agents", params?.projectId ?? null, params?.overrides ?? true, params?.scopeFilter ?? false],
     queryFn: () => getAgents(params),
   });
 }

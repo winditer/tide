@@ -84,7 +84,7 @@ class ExpertTeamService:
                     SELECT id, workspace_id, project_id, name, slug, description,
                            agent_id, model, skill_slugs, role_prompt,
                            member_agents, is_squad, leader_strategy, enabled,
-                           created_at, updated_at
+                           created_by, created_at, updated_at
                     FROM expert_teams
                     WHERE {where}
                     ORDER BY updated_at DESC
@@ -107,7 +107,7 @@ class ExpertTeamService:
                     SELECT id, workspace_id, project_id, name, slug, description,
                            agent_id, model, skill_slugs, role_prompt,
                            member_agents, is_squad, leader_strategy, enabled,
-                           created_at, updated_at
+                           created_by, created_at, updated_at
                     FROM expert_teams
                     WHERE workspace_id = :workspace_id
                       AND (project_id = :project_id OR project_id IS NULL)
@@ -133,7 +133,7 @@ class ExpertTeamService:
                     SELECT id, workspace_id, project_id, name, slug, description,
                            agent_id, model, skill_slugs, role_prompt,
                            member_agents, is_squad, leader_strategy, enabled,
-                           created_at, updated_at
+                           created_by, created_at, updated_at
                     FROM expert_teams
                     WHERE id = :id
                     """
@@ -332,11 +332,11 @@ class ExpertTeamService:
                         (id, workspace_id, project_id, name, slug, description,
                          agent_id, model, skill_slugs, role_prompt,
                          member_agents, is_squad, leader_strategy, enabled,
-                         created_at, updated_at)
+                         created_by, created_at, updated_at)
                     VALUES (:id, :workspace_id, :project_id, :name, :slug, :description,
                             :agent_id, :model, :skill_slugs, :role_prompt,
                             :member_agents, :is_squad, :leader_strategy, :enabled,
-                            :created_at, :updated_at)
+                            :created_by, :created_at, :updated_at)
                     """
                 ),
                 {
@@ -354,6 +354,7 @@ class ExpertTeamService:
                     "is_squad": int(data.get("is_squad", 0) or 0),
                     "leader_strategy": data.get("leader_strategy") or "capability_match",
                     "enabled": int(data.get("enabled", 1) or 0),
+                    "created_by": data.get("created_by") or None,
                     "created_at": now,
                     "updated_at": now,
                 },

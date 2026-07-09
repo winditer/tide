@@ -144,7 +144,7 @@ export function KnowledgeGraphCard({ scope, targetId }: KnowledgeGraphCardProps)
   const triggerMutation = useTriggerKnowledgeGenerate();
   const saveMutation = useSaveKnowledgeFile();
   const deleteMutation = useDeleteKnowledgeFile();
-  const agentsQuery = useAgents();
+  const agentsQuery = useAgents({ scopeFilter: true });
 
   const repos: KnowledgeRepoFiles[] = filesQuery.data?.repos ?? [];
 

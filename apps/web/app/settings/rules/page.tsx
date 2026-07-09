@@ -15,7 +15,7 @@ import {
   toast,
 } from "@tide/ui";
 import { apiClient, useAuth } from "@tide/core";
-import { RulesGuide } from "@tide/views";
+import { ProjectMultiScopeSelector, RulesGuide } from "@tide/views";
 import { ProjectScopeSelector } from "@tide/views/components/project-scope-selector";
 import {
   ArrowLeft,
@@ -79,13 +79,23 @@ const LANGUAGE_OPTIONS = [
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-// ─── Page ────────────────────────────────────────────────────────────────────
-
-interface ProjectOption {
-  id: string;
-  name: string;
-  cwd?: string;
+// project_id 字段兼容 null / 单字符串 / JSON 数组三种格式
+function parseScopeTargets(projectId: string | null | undefined): string[] {
+  if (!projectId) return [];
+  try {
+    const parsed = JSON.parse(projectId);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {}
+  return [projectId];
 }
+
+function encodeScopeTargets(targets: string[]): string | null {
+  if (targets.length === 0) return null;
+  if (targets.length === 1) return targets[0];
+  return JSON.stringify(targets);
+}
+
+// ─── Page ────────────────────────────────────────────────────────────────────
 
 export default function SettingsRulesPage() {
   const router = useRouter();
@@ -95,7 +105,7 @@ export default function SettingsRulesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [projectId, setProjectId] = useState<string | null>(null);
-  const [projects, setProjects] = useState<ProjectOption[]>([]);
+
 
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -116,20 +126,6 @@ export default function SettingsRulesPage() {
     }, 250);
     return () => clearTimeout(id);
   }, [search]);
-
-  // Fetch projects
-  useEffect(() => {
-    if (!hydrated) return;
-    (async () => {
-      try {
-        const data = await apiClient.get<{ projects: ProjectOption[] }>("/api/projects?workspace_id=default");
-        const list = data?.projects || (Array.isArray(data) ? data : []);
-        setProjects(list.map((p: any) => ({ id: p.id || p.cwd, name: p.name || p.cwd, cwd: p.cwd })));
-      } catch {
-        // ignore
-      }
-    })();
-  }, [hydrated]);
 
   // Fetch rules
   const fetchRules = async () => {
@@ -198,7 +194,7 @@ export default function SettingsRulesPage() {
     name: string;
     scope: string;
     scope_value: string;
-    project_id: string;
+    project_id: string | null;
     content: string;
     priority: number;
   }) => {
@@ -209,7 +205,7 @@ export default function SettingsRulesPage() {
         name: data.name,
         scope: data.scope || "global",
         scope_value: data.scope_value || null,
-        project_id: data.project_id || projectId || null,
+        project_id: data.project_id ?? null,
         content: data.content,
         priority: data.priority,
       };
@@ -450,7 +446,6 @@ export default function SettingsRulesPage() {
         rule={editing}
         saving={saving}
         onSave={handleSave}
-        projects={projects}
       />
 
       {/* Delete Confirmation Dialog */}
@@ -484,7 +479,6 @@ function RuleDialog({
   rule,
   saving,
   onSave,
-  projects,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
@@ -494,16 +488,15 @@ function RuleDialog({
     name: string;
     scope: string;
     scope_value: string;
-    project_id: string;
+    project_id: string | null;
     content: string;
     priority: number;
   }) => void;
-  projects: ProjectOption[];
 }) {
   const [name, setName] = useState("");
   const [ruleScope, setRuleScope] = useState("global");
   const [scopeValue, setScopeValue] = useState("");
-  const [projectId, setProjectId] = useState("");
+  const [scopeTargets, setScopeTargets] = useState<string[]>([]);
   const [content, setContent] = useState("");
   const [priority, setPriority] = useState(0);
 
@@ -513,14 +506,14 @@ function RuleDialog({
         setName(rule.name);
         setRuleScope(rule.scope || "global");
         setScopeValue(rule.scope_value || "");
-        setProjectId(rule.project_id || "");
+        setScopeTargets(parseScopeTargets(rule.project_id));
         setContent(rule.content);
         setPriority(rule.priority);
       } else {
         setName("");
         setRuleScope("global");
         setScopeValue("");
-        setProjectId("");
+        setScopeTargets([]);
         setContent("");
         setPriority(0);
       }
@@ -537,7 +530,7 @@ function RuleDialog({
       name,
       scope: ruleScope,
       scope_value: scopeValue,
-      project_id: projectId,
+      project_id: ruleScope === "project" ? encodeScopeTargets(scopeTargets) : null,
       content,
       priority,
     });
@@ -594,19 +587,12 @@ function RuleDialog({
 
           {ruleScope === "project" && (
             <div className="space-y-1.5">
-              <label className="text-sm font-medium">项目</label>
-              <select
-                className="w-full border rounded-md px-3 py-2 text-sm bg-background"
-                value={projectId}
-                onChange={(e) => setProjectId(e.target.value)}
-              >
-                <option value="">选择项目</option>
-                {projects.map((p) => (
-                  <option key={p.id || p.cwd} value={p.id || p.cwd}>
-                    {p.name || p.cwd}
-                  </option>
-                ))}
-              </select>
+              <label className="text-sm font-medium">项目 / 项目组</label>
+              <ProjectMultiScopeSelector
+                value={scopeTargets}
+                onChange={(v) => setScopeTargets(v)}
+                className="w-full"
+              />
             </div>
           )}
 

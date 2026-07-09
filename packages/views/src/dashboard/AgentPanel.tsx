@@ -7,7 +7,7 @@ import { useAgents } from "@tide/core";
 const MAX_VISIBLE_AGENTS = 5;
 
 export function AgentPanel() {
-  const { data, isLoading, isError } = useAgents();
+  const { data, isLoading, isError } = useAgents({ scopeFilter: true });
   const agents = data?.agents ?? [];
   const visibleAgents = agents.slice(0, MAX_VISIBLE_AGENTS);
 

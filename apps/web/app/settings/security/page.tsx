@@ -16,8 +16,7 @@ import {
   toast,
 } from "@tide/ui";
 import { apiClient, useAuth, useWs } from "@tide/core";
-import { SecurityGuide } from "@tide/views";
-import { ProjectScopeSelector } from "@tide/views/components/project-scope-selector";
+import { SecurityGuide, ProjectScopeSelector, ProjectMultiScopeSelector } from "@tide/views";
 import {
   ArrowLeft,
   PenLine,
@@ -106,6 +105,24 @@ const STATUS_FILTER_OPTIONS = [
 ];
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+// 作用域字段解析/编码：兼容 null、单字符串、JSON 数组三种存储格式
+function parseScopeTargets(projectId: string | null | undefined): string[] {
+  if (!projectId) return [];
+  try {
+    const parsed = JSON.parse(projectId);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {}
+  return [projectId];
+}
+
+function encodeScopeTargets(targets: string[]): string | null {
+  if (targets.length === 0) return null;
+  if (targets.length === 1) return targets[0];
+  return JSON.stringify(targets);
+}
 
 function severityBadgeClass(severity: string): string {
   switch (severity) {
@@ -226,9 +243,15 @@ function RulesTab({ projectId }: { projectId: string | null }) {
   };
 
   const getProjectName = (pid: string | null | undefined): string => {
-    if (!pid) return "全局";
-    const p = projects.find((x) => (x.id || x.cwd) === pid);
-    return p ? (p.name || p.cwd || pid) : pid.slice(0, 8);
+    const targets = parseScopeTargets(pid);
+    if (targets.length === 0) return "全局";
+    if (targets.length === 1) {
+      const t = targets[0];
+      if (t.startsWith("group:")) return "项目组";
+      const p = projects.find((x) => (x.id || x.cwd) === t);
+      return p ? (p.name || p.cwd || t) : t.slice(0, 8);
+    }
+    return `${targets.length} 个作用域`;
   };
 
   const fetchRules = async () => {
@@ -656,7 +679,7 @@ function RuleDialog({
   const [pattern, setPattern] = useState("");
   const [description, setDescription] = useState("");
   const [remediation, setRemediation] = useState("");
-  const [ruleProjectId, setRuleProjectId] = useState<string | null>(null);
+  const [ruleScopeTargets, setRuleScopeTargets] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -669,7 +692,7 @@ function RuleDialog({
         setPattern(rule.pattern);
         setDescription(rule.description ?? "");
         setRemediation(rule.remediation ?? "");
-        setRuleProjectId(rule.project_id ?? null);
+        setRuleScopeTargets(parseScopeTargets(rule.project_id));
       } else {
         setName("");
         setCategory("secret_detection");
@@ -677,7 +700,7 @@ function RuleDialog({
         setPattern("");
         setDescription("");
         setRemediation("");
-        setRuleProjectId(defaultProjectId);
+        setRuleScopeTargets(parseScopeTargets(defaultProjectId));
       }
       setError(null);
     }
@@ -698,7 +721,7 @@ function RuleDialog({
     setSaving(true);
     await onSave({
       workspace_id: "default",
-      project_id: ruleProjectId,
+      project_id: encodeScopeTargets(ruleScopeTargets),
       name: name.trim(),
       category,
       severity,
@@ -731,10 +754,9 @@ function RuleDialog({
           </Field>
 
           <Field label="作用域">
-            <ProjectScopeSelector
-              value={ruleProjectId}
-              onChange={(v) => setRuleProjectId(v)}
-              className="w-full"
+            <ProjectMultiScopeSelector
+              value={ruleScopeTargets}
+              onChange={setRuleScopeTargets}
             />
           </Field>
 

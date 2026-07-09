@@ -150,7 +150,7 @@ export function FloatingChat() {
   const projects = projectsQuery.data?.projects ?? [];
   const groupsQuery = useProjectGroups();
   const groups = groupsQuery.data?.groups ?? [];
-  const { data: agentsData } = useAgents();
+  const { data: agentsData } = useAgents({ scopeFilter: true });
   const agents = agentsData?.agents ?? [];
   // 防御性过滤：排除已禁用的 Agent。后端默认已过滤 enabled=0，
   // 这里再次排除 status==="disabled" 以防缓存或数据滞后。

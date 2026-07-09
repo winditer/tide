@@ -127,7 +127,7 @@ export function AIDecomposeDialog({
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const { data: agentsData } = useAgents();
+  const { data: agentsData } = useAgents({ scopeFilter: true });
   const agents = agentsData?.agents ?? [];
 
   // ---- Step 2 状态 ----

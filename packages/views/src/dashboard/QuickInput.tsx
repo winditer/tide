@@ -52,7 +52,7 @@ export function QuickInput() {
   const projectBoxRef = useRef<HTMLDivElement>(null);
   const sessionBoxRef = useRef<HTMLDivElement>(null);
 
-  const { data: agentsData } = useAgents();
+  const { data: agentsData } = useAgents({ scopeFilter: true });
   const projectsQuery = useProjects();
   const createMutation = useCreateTaskMutation();
 

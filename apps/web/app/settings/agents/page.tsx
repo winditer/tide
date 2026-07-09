@@ -36,6 +36,7 @@ import {
   User,
 } from "lucide-react";
 import { RemoteAgentGuide } from "@tide/views/remote-agents/RemoteAgentGuide";
+import { ProjectMultiScopeSelector } from "@tide/views";
 import { AgentFormDialog } from "../remote-agents/agent-dialogs";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -57,6 +58,9 @@ interface AgentInfo {
   // 用作列表作用域图标的兜底来源。
   scope?: string | null;
   scope_target?: string | null;
+  created_by?: string | null;
+  // 后端 JOIN users 后回传的创建人显示名（display_name/username），缺失时回退 created_by。
+  created_by_name?: string | null;
 }
 
 interface AgentConfig {
@@ -72,6 +76,7 @@ interface AgentConfig {
   timeout_override?: number | null;
   config_json?: Record<string, any> | null;
   created_by?: string | null;
+  created_by_name?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -81,17 +86,24 @@ interface ProjectOption {
   name: string;
 }
 
+interface GroupOption {
+  id: string;
+  name: string;
+}
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-type ScopeType = "global" | "project" | "personal";
+type ScopeType = "" | "global" | "project" | "personal";
 
 const SCOPE_LABELS: Record<ScopeType, string> = {
+  "": "全部",
   global: "全局",
   project: "项目",
   personal: "个人",
 };
 
 const SCOPE_VARIANT: Record<ScopeType, "default" | "secondary" | "outline"> = {
+  "": "default",
   global: "default",
   project: "secondary",
   personal: "outline",
@@ -117,13 +129,24 @@ export default function SettingsAgentsPage() {
   // 跨所有作用域的配置，仅用于列表图标显示 Agent 的真实作用域
   const [allConfigs, setAllConfigs] = useState<AgentConfig[]>([]);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
+  const [groups, setGroups] = useState<GroupOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
 
-  // Scope state
-  const [scope, setScope] = useState<ScopeType>("global");
-  const [projectTarget, setProjectTarget] = useState<string>("");
+  // Scope filter state（与专家团筛选栏一致：单一 Select，全部/全局/个人 平铺 + 项目组/项目 分组）
+  const [scopeFilter, setScopeFilter] = useState<string>("");
+  // 从统一的 scopeFilter 派生 scope 与 projectTarget，供查询、过滤、弹窗等下游逻辑复用
+  const scope: ScopeType = useMemo(() => {
+    if (scopeFilter === "global") return "global";
+    if (scopeFilter === "personal") return "personal";
+    if (scopeFilter === "") return "";
+    return "project"; // 项目 id 或 group:<id>
+  }, [scopeFilter]);
+  const projectTarget = useMemo(
+    () => (scope === "project" ? scopeFilter : ""),
+    [scope, scopeFilter]
+  );
 
   // Dialog state
   const [editDialogOpen, setEditDialogOpen] = useState(false);
@@ -162,6 +185,22 @@ export default function SettingsAgentsPage() {
     })();
   }, [hydrated]);
 
+  // Fetch project groups
+  useEffect(() => {
+    if (!hydrated) return;
+    (async () => {
+      try {
+        const data = await apiClient.get<{ groups: GroupOption[] }>(
+          "/api/project-groups?workspace_id=default"
+        );
+        const list = data?.groups || (Array.isArray(data) ? data : []);
+        setGroups(list.map((g: any) => ({ id: g.id, name: g.name })));
+      } catch {
+        // ignore
+      }
+    })();
+  }, [hydrated]);
+
   // Fetch agents (raw full list, including disabled ones, for management)
   const fetchAgents = useCallback(async () => {
     setLoading(true);
@@ -180,7 +219,10 @@ export default function SettingsAgentsPage() {
   // Fetch configs for current scope
   const fetchConfigs = useCallback(async () => {
     try {
-      const params = new URLSearchParams({ workspace_id: "default", scope });
+      const params = new URLSearchParams({ workspace_id: "default" });
+      if (scope) {
+        params.set("scope", scope);
+      }
       if (scope === "project" && projectTarget) {
         params.set("scope_target", projectTarget);
       }
@@ -214,14 +256,31 @@ export default function SettingsAgentsPage() {
     }
   }, [hydrated, fetchAgents, fetchConfigs, fetchAllConfigs]);
 
-  // Build config map for current scope
+  // Build config map for current scope。
+  // 同一 Agent 在当前筛选下可能命中多条配置（如“全部作用域”时），
+  // 按 personal > project > global 取最具体的一条，保证编辑弹窗初始作用域
+  // 与列表图标来源确定；同时过滤掉其他用户的个人配置。
   const configMap = useMemo(() => {
+    const order: Record<string, number> = { personal: 3, project: 2, global: 1 };
     const map: Record<string, AgentConfig> = {};
     for (const c of configs) {
-      map[c.agent_id] = c;
+      const s = (c.scope || "global").toLowerCase();
+      if (
+        s === "personal" &&
+        user?.id &&
+        c.scope_target &&
+        c.scope_target !== user.id
+      ) {
+        continue; // 跳过其他用户的个人配置
+      }
+      const existing = map[c.agent_id];
+      const es = existing ? (existing.scope || "global").toLowerCase() : "";
+      if (!existing || (order[s] || 0) > (order[es] || 0)) {
+        map[c.agent_id] = c;
+      }
     }
     return map;
-  }, [configs]);
+  }, [configs, user?.id]);
 
   // 每个 Agent 的真实作用域（跨所有 scope），用于列表图标显示。
   // 同一 Agent 存在多条配置时按 personal > project > global 取最具体的一条；
@@ -266,9 +325,12 @@ export default function SettingsAgentsPage() {
   const filtered = useMemo(() => {
     let list = mergedAgents;
 
-    // 作用域筛选：全局展示完整注册表；项目/个人仅展示在该作用域下配置过的 Agent。
-    // configMap 已由后端按当前 scope 精确返回，故 a.config 存在即代表匹配当前作用域。
-    if (scope === "project") {
+    // 作用域筛选
+    if (scope === "global") {
+      // 仅显示真实作用域为全局的 Agent（含无任何配置覆盖的默认全局）；
+      // 已显式配置为项目/个人作用域的 Agent 不应出现在全局列表。
+      list = list.filter((a) => (agentScopeMap[a.id] || "global") === "global");
+    } else if (scope === "project") {
       list = list.filter(
         (a) =>
           !!a.config &&
@@ -276,8 +338,9 @@ export default function SettingsAgentsPage() {
           (!projectTarget || a.config.scope_target === projectTarget)
       );
     } else if (scope === "personal") {
-      list = list.filter((a) => !!a.config && a.config.scope === "personal");
+      list = list.filter((a) => agentScopeMap[a.id] === "personal");
     }
+    // scope === "" 时展示全部，不过滤
 
     if (debounced) {
       const q = debounced.toLowerCase();
@@ -290,23 +353,34 @@ export default function SettingsAgentsPage() {
     }
 
     return list;
-  }, [mergedAgents, debounced, scope, projectTarget]);
+  }, [mergedAgents, debounced, scope, projectTarget, agentScopeMap]);
 
-  // Check if current scope is editable
+  // 判断当前用户是否可编辑某个 agent
+  const canEditAgent = useCallback(
+    (agent: AgentInfo) => {
+      if (!user) return true; // no auth mode
+      if (user.role === "viewer") return false;
+      if (isAdmin) return true;
+      // 创建者可编辑自己创建的 agent
+      const cfg = configMap[agent.id];
+      const createdBy = cfg?.created_by || (agent as any).created_by;
+      return createdBy === user.id;
+    },
+    [user, isAdmin, configMap]
+  );
+
+  // 全局操作按钮（如“注册 Agent”）是否可用
   const canEdit = useMemo(() => {
-    if (scope === "project" && !projectTarget) return false; // 必须先选择项目
-    if (!user) return true; // no auth mode
-    if (scope === "global") return isAdmin;
-    if (scope === "personal") return true;
-    return true; // project scope with a selected project
-  }, [user, scope, isAdmin, projectTarget]);
+    if (!user) return true;
+    if (user.role === "viewer") return false;
+    return true; // admin 和 member 都能注册
+  }, [user]);
 
   // 禁用编辑时的提示文案
   const editDisabledReason = useMemo(() => {
-    if (scope === "project" && !projectTarget) return "请先选择一个项目";
-    if (scope === "global") return "仅管理员可操作全局配置";
-    return "无操作权限";
-  }, [scope, projectTarget]);
+    if (user?.role === "viewer") return "查看者无法编辑";
+    return "仅管理员或创建者可操作";
+  }, [user]);
 
   // Toggle agent enabled/disabled
   const handleToggle = async (agent: AgentInfo, currentCfg: AgentConfig | null) => {
@@ -318,13 +392,20 @@ export default function SettingsAgentsPage() {
           enabled: newEnabled,
         });
       } else {
-        // Create a new config with enabled=0 (to disable it)
+        // Create a new config with enabled=0 (to disable it)。
+        // 列表处于「全部作用域」筛选时 scope 为空字符串，后端会报 "Invalid scope"，
+        // 因此这里空值回退为 global，保证 toggle 始终携带合法作用域。
+        const effectiveScope: Exclude<ScopeType, ""> = scope || "global";
         const scopeTarget =
-          scope === "project" ? projectTarget : scope === "personal" ? user?.id : null;
+          effectiveScope === "project"
+            ? projectTarget
+            : effectiveScope === "personal"
+              ? user?.id
+              : null;
         await apiClient.post("/api/agent-configs", {
           workspace_id: "default",
           agent_id: agent.id,
-          scope,
+          scope: effectiveScope,
           scope_target: scopeTarget || null,
           enabled: 0,
         });
@@ -357,32 +438,95 @@ export default function SettingsAgentsPage() {
     timeout_override: string;
     scope: ScopeType;
     scope_target: string | null;
+    scope_targets?: string[];
   }) => {
     setSaving(true);
     try {
-      const body: any = {
-        workspace_id: "default",
-        agent_id: editingAgent!.id,
-        scope: data.scope,
-        scope_target: data.scope_target || null,
+      const agentId = editingAgent!.id;
+      const uid = user?.id || null;
+      // 该 agent 现有的全部配置（个人作用域仅取当前用户的），
+      // 用于精确判定应 PUT（更新）还是 POST（创建），以及切换作用域后清理旧配置。
+      const ownConfigs = allConfigs.filter(
+        (c) =>
+          c.agent_id === agentId &&
+          !(c.scope === "personal" && c.scope_target && c.scope_target !== uid)
+      );
+
+      const common = {
         display_name: data.display_name || null,
         description: data.description || null,
         model_override: data.model_override || null,
-        timeout_override: data.timeout_override ? parseInt(data.timeout_override) : null,
+        timeout_override: data.timeout_override
+          ? parseInt(data.timeout_override)
+          : null,
       };
 
-      if (editConfig) {
-        await apiClient.put(`/api/agent-configs/${editConfig.id}`, body);
+      if (
+        data.scope === "project" &&
+        data.scope_targets &&
+        data.scope_targets.length > 0
+      ) {
+        // 批量模式：batch 端点负责项目作用域的创建/删除/更新（按 scope_targets 差集处理）
+        await apiClient.post("/api/agent-configs/batch", {
+          workspace_id: "default",
+          agent_id: agentId,
+          scope: "project",
+          scope_targets: data.scope_targets,
+          ...common,
+        });
+        // 切换到项目作用域后，清理所有非项目作用域的旧配置（含 global/personal 残留）
+        const stale = ownConfigs.filter((c) => c.scope !== "project");
+        for (const c of stale) {
+          try {
+            await apiClient.del(`/api/agent-configs/${c.id}`);
+          } catch {
+            // ignore
+          }
+        }
       } else {
-        body.enabled = 1;
-        await apiClient.post("/api/agent-configs", body);
+        // 单目标模式（global / personal）：采用「先 upsert 新作用域配置 → 再删除其余全部旧配置」
+        // 的替换语义，既保证作用域切换真正生效，又能清理历史遗留的同作用域重复配置。
+        const scopeTarget = data.scope_target || null;
+        // 目标作用域已有的配置（可能因历史数据存在多条重复）
+        const matching = ownConfigs.filter(
+          (c) =>
+            c.scope === data.scope && (c.scope_target || null) === scopeTarget
+        );
+        const body: any = {
+          workspace_id: "default",
+          agent_id: agentId,
+          scope: data.scope,
+          scope_target: scopeTarget,
+          ...common,
+        };
+        // 保留下来的目标配置 id：更新时为被更新那条，新建时为新记录，删除时据此跳过。
+        let keepId: string | null = null;
+        if (matching.length > 0) {
+          // 已存在目标作用域配置：更新第一条，其余重复项后续删除
+          await apiClient.put(`/api/agent-configs/${matching[0].id}`, body);
+          keepId = matching[0].id;
+        } else {
+          // 目标作用域下尚无配置：创建新配置（默认启用）
+          body.enabled = 1;
+          const created = await apiClient.post<AgentConfig>(
+            "/api/agent-configs",
+            body
+          );
+          keepId = created?.id || null;
+        }
+        // 删除除保留项之外的所有旧配置（跨作用域残留 + 同作用域重复项）
+        for (const c of ownConfigs) {
+          if (c.id === keepId) continue;
+          try {
+            await apiClient.del(`/api/agent-configs/${c.id}`);
+          } catch {
+            // ignore
+          }
+        }
       }
       toast({ title: "已保存", description: editingAgent!.name });
       setEditDialogOpen(false);
       setEditingAgent(null);
-      // 切换到保存的作用域，确保用户立即看到结果
-      setScope(data.scope);
-      setProjectTarget(data.scope === "project" ? data.scope_target || "" : "");
       fetchConfigs();
       fetchAllConfigs();
       invalidateAgents();
@@ -436,16 +580,26 @@ export default function SettingsAgentsPage() {
     }
   };
 
-  // Scope selector options
-  const scopeOptions = [
+  // 筛选栏作用域选项（与专家团一致）：全部 / 全局 / 个人（平铺）+ 项目组 / 项目（optgroup 分区）。
+  // 选中项目时 value 为项目 id，选中项目组时 value 形如 group:<group_id>，二者均作为 project 作用域的目标。
+  const scopeFilterOptions = [
+    { value: "", label: "全部作用域" },
     { value: "global", label: "全局" },
-    { value: "project", label: "项目" },
-    { value: "personal", label: "个人" },
+    { value: "personal", label: "个人（我的）" },
   ];
-
-  const projectOptions = [
-    { value: "", label: "选择项目…" },
-    ...projects.map((p) => ({ value: p.id, label: p.name })),
+  const scopeFilterGroups = [
+    ...(groups.length > 0
+      ? [
+          {
+            label: "项目组",
+            options: groups.map((g) => ({ value: `group:${g.id}`, label: g.name })),
+          },
+        ]
+      : []),
+    {
+      label: "项目",
+      options: projects.map((p) => ({ value: p.id, label: p.name })),
+    },
   ];
 
   return (
@@ -501,19 +655,12 @@ export default function SettingsAgentsPage() {
               />
             </div>
             <Select
-              value={scope}
-              onChange={(e) => setScope(e.target.value as ScopeType)}
-              className="w-full sm:w-32"
-              options={scopeOptions}
+              value={scopeFilter}
+              onChange={(e) => setScopeFilter(e.target.value)}
+              className="w-full sm:w-56"
+              options={scopeFilterOptions}
+              groups={scopeFilterGroups}
             />
-            {scope === "project" && (
-              <Select
-                value={projectTarget}
-                onChange={(e) => setProjectTarget(e.target.value)}
-                className="w-full sm:w-56"
-                options={projectOptions}
-              />
-            )}
           </div>
         </div>
 
@@ -643,7 +790,7 @@ export default function SettingsAgentsPage() {
                         </td>
                         {/* Status */}
                         <td className="px-4 py-3">
-                          {canEdit ? (
+                          {canEditAgent(agent) ? (
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <Button
@@ -700,7 +847,7 @@ export default function SettingsAgentsPage() {
                         {/* Actions */}
                         <td className="px-4 py-3 text-right">
                           <div className="flex items-center justify-end gap-1">
-                            {canEdit ? (
+                            {canEditAgent(agent) ? (
                               <>
                                 <Tooltip>
                                   <TooltipTrigger asChild>
@@ -791,6 +938,8 @@ export default function SettingsAgentsPage() {
                 : ""
           }
           projects={projects}
+          groups={groups}
+          allConfigs={allConfigs}
           userId={user?.id}
           isNew={!editConfig}
           saving={saving}
@@ -891,6 +1040,8 @@ interface EditAgentDialogProps {
   scope: ScopeType;
   scopeTarget: string;
   projects: ProjectOption[];
+  groups: GroupOption[];
+  allConfigs: AgentConfig[];
   userId?: string;
   isNew: boolean;
   saving: boolean;
@@ -901,6 +1052,7 @@ interface EditAgentDialogProps {
     timeout_override: string;
     scope: ScopeType;
     scope_target: string | null;
+    scope_targets?: string[];
   }) => void;
 }
 
@@ -912,6 +1064,8 @@ function EditAgentDialog({
   scope,
   scopeTarget,
   projects,
+  groups,
+  allConfigs,
   userId,
   isNew,
   saving,
@@ -922,37 +1076,53 @@ function EditAgentDialog({
   const [modelOverride, setModelOverride] = useState("");
   const [timeoutOverride, setTimeoutOverride] = useState("");
   const [localScope, setLocalScope] = useState<ScopeType>(scope);
-  const [localProject, setLocalProject] = useState("");
+  const [localTargets, setLocalTargets] = useState<string[]>([]);
 
   useEffect(() => {
     if (open && agent) {
-      setDisplayName(config?.display_name || agent.name || "");
-      setDescription(config?.description || agent.description || "");
+      // 名称独立于作用域：预填当前配置的 display_name，未自定义时回退到 agent 原始名称。
+      // 切换作用域时该字段值保持不变（不在作用域变更处重置），
+      // 保存时所有作用域配置行写入相同的 display_name，保证同一 Agent 名称一致。
+      setDisplayName(config?.display_name || agent.name);
+      setDescription(config?.description || "");
       setModelOverride(config?.model_override || "");
       setTimeoutOverride(config?.timeout_override?.toString() || "");
-      const initScope = (config?.scope as ScopeType) || scope;
+      const initScope = (config?.scope as ScopeType) || "global";
       setLocalScope(initScope);
-      setLocalProject(
-        initScope === "project"
-          ? config?.scope_target || (scope === "project" ? scopeTarget : "") || ""
-          : ""
+      // 聚合该 agent 所有 scope="project" 的 config 作为初始多选目标
+      const projectConfigs = allConfigs.filter(
+        (c) => c.agent_id === agent.id && c.scope === "project"
       );
+      const targets = projectConfigs
+        .map((c) => c.scope_target)
+        .filter(Boolean) as string[];
+      setLocalTargets(targets);
     }
-  }, [open, agent, config, scope, scopeTarget]);
+  }, [open, agent, config, allConfigs]);
 
   if (!agent) return null;
 
-  const scopeInvalid = localScope === "project" && !localProject;
+  const scopeInvalid = localScope === "project" && localTargets.length === 0;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (scopeInvalid) return;
+    if (localScope === "project") {
+      onSave({
+        display_name: displayName,
+        description,
+        model_override: modelOverride,
+        timeout_override: timeoutOverride,
+        scope: localScope,
+        scope_target: null,
+        scope_targets: localTargets,
+      });
+      return;
+    }
     const scope_target =
-      localScope === "project"
-        ? localProject
-        : localScope === "personal"
-          ? config?.scope_target || userId || null
-          : null;
+      localScope === "personal"
+        ? config?.scope_target || userId || null
+        : null;
     onSave({
       display_name: displayName,
       description,
@@ -965,10 +1135,10 @@ function EditAgentDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
-            编辑 Agent 配置 — {agent.name}
+            {isNew ? "新建 Agent 配置" : "编辑 Agent 配置"} — {agent.name}
           </DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -987,37 +1157,49 @@ function EditAgentDialog({
 
           <div className="space-y-1.5">
             <label className="text-sm font-medium">作用域</label>
-            <Select
-              value={localScope}
-              onChange={(e) => {
-                const v = e.target.value as ScopeType;
-                setLocalScope(v);
-                if (v !== "project") setLocalProject("");
-              }}
-              options={[
-                { value: "global", label: "全局" },
-                { value: "project", label: "项目" },
-                { value: "personal", label: "个人" },
-              ]}
-            />
-            <p className="text-xs text-muted-foreground">
-              选择该配置生效的范围：全局对所有人生效，项目仅对指定项目生效，个人仅对自己生效
-            </p>
+            <div className="grid grid-cols-3 gap-2">
+              {(
+                [
+                  { key: "global", title: "全局", desc: "对所有人生效" },
+                  { key: "project", title: "项目", desc: "指定项目 / 项目组" },
+                  { key: "personal", title: "个人", desc: "仅对自己生效" },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.key}
+                  type="button"
+                  onClick={() => {
+                    setLocalScope(opt.key);
+                    if (opt.key !== "project") setLocalTargets([]);
+                  }}
+                  className={`rounded-lg border px-3 py-2 text-sm text-left transition-smooth ${
+                    localScope === opt.key
+                      ? "border-indigo-500 bg-indigo-500/10 text-foreground"
+                      : "border-border/50 text-muted-foreground hover:border-foreground/30"
+                  }`}
+                >
+                  <div className="font-medium">{opt.title}</div>
+                  <div className="text-xs text-muted-foreground">{opt.desc}</div>
+                </button>
+              ))}
+            </div>
+            {localScope === "personal" && (
+              <p className="text-xs text-muted-foreground">
+                个人作用域：仅创建者本人可见与使用
+              </p>
+            )}
           </div>
 
           {localScope === "project" && (
             <div className="space-y-1.5">
-              <label className="text-sm font-medium">项目</label>
-              <Select
-                value={localProject}
-                onChange={(e) => setLocalProject(e.target.value)}
-                options={[
-                  { value: "", label: "选择项目…" },
-                  ...projects.map((p) => ({ value: p.id, label: p.name })),
-                ]}
+              <label className="text-sm font-medium">目标项目/项目组（多选）</label>
+              <ProjectMultiScopeSelector
+                value={localTargets}
+                onChange={setLocalTargets}
+                showGlobalHint={false}
               />
-              {scopeInvalid && (
-                <p className="text-xs text-destructive">请选择一个项目</p>
+              {localTargets.length === 0 && (
+                <p className="text-xs text-destructive">请至少选择一个项目或项目组</p>
               )}
             </div>
           )}
@@ -1030,7 +1212,7 @@ function EditAgentDialog({
               placeholder={agent.name}
             />
             <p className="text-xs text-muted-foreground">
-              留空则使用默认名称
+              该名称对所有作用域生效，修改后所有作用域配置将使用同一名称
             </p>
           </div>
 
@@ -1039,7 +1221,7 @@ function EditAgentDialog({
             <Input
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Agent 描述信息…"
+              placeholder={agent.description || "Agent 描述信息…"}
             />
           </div>
 
@@ -1061,6 +1243,26 @@ function EditAgentDialog({
               type="number"
               min="1"
             />
+          </div>
+
+          {/* 创建人与 Agent ID（只读） */}
+          <div className="border-t border-border/30 pt-3 mt-2 space-y-1 text-xs text-muted-foreground">
+            <div className="flex items-center gap-2">
+              <span className="text-muted-foreground/70">创建人:</span>
+              <code className="rounded bg-muted px-1.5 py-0.5 font-mono">
+                {config?.created_by_name ||
+                  config?.created_by ||
+                  (agent as any).created_by_name ||
+                  (agent as any).created_by ||
+                  "系统"}
+              </code>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-muted-foreground/70">Agent ID:</span>
+              <code className="max-w-[280px] truncate rounded bg-muted px-1.5 py-0.5 font-mono">
+                {agent.id}
+              </code>
+            </div>
           </div>
 
           <DialogFooter className="gap-2 sm:gap-0">

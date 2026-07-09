@@ -50,6 +50,7 @@ from backend.api.expert_teams import router as expert_teams_router
 from backend.api.agent_configs import router as agent_configs_router
 from backend.api.settings import router as settings_router
 from backend.api.notifications import router as notifications_router
+from backend.api.daemon_tokens import router as daemon_tokens_router
 from backend.services.auth_service import auth_service
 
 logger = logging.getLogger("tide.main")
@@ -196,6 +197,7 @@ app.include_router(expert_teams_router)
 app.include_router(agent_configs_router)
 app.include_router(settings_router)
 app.include_router(notifications_router)
+app.include_router(daemon_tokens_router)
 
 
 @app.get("/health")

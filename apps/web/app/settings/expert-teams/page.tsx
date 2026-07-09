@@ -15,6 +15,7 @@ import {
   toast,
 } from "@tide/ui";
 import { apiClient, useAuth } from "@tide/core";
+import { ProjectMultiScopeSelector } from "@tide/views";
 import {
   ArrowLeft,
   ChevronLeft,
@@ -48,6 +49,7 @@ interface ExpertTeam {
   member_agents?: SquadMember[];
   leader_strategy?: string;
   enabled: number;
+  created_by?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -76,6 +78,22 @@ interface ProjectOption {
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
+
+// 作用域字段解析/编码：兼容 null、单字符串、JSON 数组三种存储格式
+function parseScopeTargets(projectId: string | null | undefined): string[] {
+  if (!projectId) return [];
+  try {
+    const parsed = JSON.parse(projectId);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {}
+  return [projectId];
+}
+
+function encodeScopeTargets(targets: string[]): string | null {
+  if (targets.length === 0) return null;
+  if (targets.length === 1) return targets[0];
+  return JSON.stringify(targets);
+}
 
 const MODEL_OPTIONS = [
   "gpt-5.4",
@@ -107,6 +125,7 @@ export default function SettingsExpertTeamsPage() {
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [skills, setSkills] = useState<SkillOption[]>([]);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
+  const [groups, setGroups] = useState<{ id: string; name: string }[]>([]);
 
   const [selectedProject, setSelectedProject] = useState<string>("");
   const [search, setSearch] = useState("");
@@ -173,13 +192,32 @@ export default function SettingsExpertTeamsPage() {
     })();
   }, [hydrated]);
 
+  // Fetch project groups
+  useEffect(() => {
+    if (!hydrated) return;
+    (async () => {
+      try {
+        const data = await apiClient.get<any>("/api/project-groups?workspace_id=default");
+        const list = data?.groups || (Array.isArray(data) ? data : []);
+        setGroups(list.map((g: any) => ({ id: g.id, name: g.name })));
+      } catch {
+        // ignore
+      }
+    })();
+  }, [hydrated]);
+
   // Fetch expert teams
   const fetchTeams = async () => {
     setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams({ workspace_id: "default" });
-      if (selectedProject) params.set("project_id", selectedProject);
+      // 仅“项目”作用域走后端过滤；全局/个人作用域在前端本地过滤
+      const isProjectScope =
+        selectedProject &&
+        selectedProject !== "__global__" &&
+        selectedProject !== "__personal__";
+      if (isProjectScope) params.set("project_id", selectedProject);
       const data = await apiClient.get<ExpertTeam[]>(`/api/expert-teams?${params}`);
       setTeams(Array.isArray(data) ? data : []);
     } catch (e: any) {
@@ -193,17 +231,24 @@ export default function SettingsExpertTeamsPage() {
     if (hydrated) fetchTeams();
   }, [hydrated, selectedProject]);
 
-  // Filter by search
+  // Filter by scope + search
   const filtered = useMemo(() => {
-    if (!debounced) return teams;
+    let base = teams;
+    if (selectedProject === "__global__") {
+      base = base.filter((t) => parseScopeTargets(t.project_id).length === 0);
+    } else if (selectedProject === "__personal__") {
+      const mine = user?.id ? `personal:${user.id}` : null;
+      base = base.filter((t) => !!mine && t.project_id === mine);
+    }
+    if (!debounced) return base;
     const q = debounced.toLowerCase();
-    return teams.filter(
+    return base.filter(
       (t) =>
         t.name.toLowerCase().includes(q) ||
         (t.description || "").toLowerCase().includes(q) ||
         t.agent_id.toLowerCase().includes(q)
     );
-  }, [teams, debounced]);
+  }, [teams, debounced, selectedProject, user?.id]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const paged = filtered.slice((page - 1) * pageSize, page * pageSize);
@@ -287,10 +332,48 @@ export default function SettingsExpertTeamsPage() {
     return agent?.name || agentId;
   };
 
-  // Project selector options
-  const projectOptions = [
-    { value: "", label: "全局（所有项目）" },
-    ...projects.map((p) => ({ value: p.id, label: p.name })),
+  // 作用域标签：全局 / 项目名 / 项目组 / N 个作用域
+  const scopeLabel = (pid?: string | null): string => {
+    const targets = parseScopeTargets(pid);
+    if (targets.length === 0) return "全局";
+    if (targets.length === 1) {
+      const t = targets[0];
+      if (t.startsWith("personal:")) return "个人";
+      if (t.startsWith("group:")) return "项目组";
+      return projects.find((p) => p.id === t)?.name || "项目级";
+    }
+    return `${targets.length} 个作用域`;
+  };
+
+  // 是否有权编辑/删除该专家团（与后端 _check_permission 一致）
+  const canManage = (team: ExpertTeam): boolean => {
+    const pid = team.project_id;
+    if (!pid) return user?.role === "admin"; // 全局配置仅 admin
+    if (pid.startsWith("personal:")) {
+      return user?.role === "admin" || pid.split(":")[1] === user?.id;
+    }
+    return true; // 项目 / 项目组：交由后端做角色校验
+  };
+
+  // 筛选栏作用域选项：全部 / 全局 / 个人（平铺）+ 项目组 / 项目（optgroup 分区）
+  const scopeFilterOptions = [
+    { value: "", label: "全部作用域" },
+    { value: "__global__", label: "全局" },
+    { value: "__personal__", label: "个人（我的）" },
+  ];
+  const scopeFilterGroups = [
+    ...(groups.length > 0
+      ? [
+          {
+            label: "项目组",
+            options: groups.map((g) => ({ value: `group:${g.id}`, label: g.name })),
+          },
+        ]
+      : []),
+    {
+      label: "项目",
+      options: projects.map((p) => ({ value: p.id, label: p.name })),
+    },
   ];
 
   return (
@@ -349,7 +432,8 @@ export default function SettingsExpertTeamsPage() {
               setPage(1);
             }}
             className="w-full sm:w-56"
-            options={projectOptions}
+            options={scopeFilterOptions}
+            groups={scopeFilterGroups}
           />
         </div>
       </div>
@@ -439,17 +523,15 @@ export default function SettingsExpertTeamsPage() {
                     </td>
                     <td className="px-4 py-3">
                       <Badge variant={team.project_id ? "default" : "outline"}>
-                        {team.project_id
-                          ? projects.find((p) => p.id === team.project_id)?.name || "项目级"
-                          : "全局"}
+                        {scopeLabel(team.project_id)}
                       </Badge>
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
                         <button
                           type="button"
-                          disabled={!team.project_id && user?.role !== "admin"}
-                          title={!team.project_id && user?.role !== "admin" ? "仅管理员可操作全局配置" : "编辑"}
+                          disabled={!canManage(team)}
+                          title={!canManage(team) ? "无权操作此作用域的配置" : "编辑"}
                           onClick={() => {
                             setEditing(team);
                             setDialogOpen(true);
@@ -460,8 +542,8 @@ export default function SettingsExpertTeamsPage() {
                         </button>
                         <button
                           type="button"
-                          disabled={!team.project_id && user?.role !== "admin"}
-                          title={!team.project_id && user?.role !== "admin" ? "仅管理员可操作全局配置" : "删除"}
+                          disabled={!canManage(team)}
+                          title={!canManage(team) ? "无权操作此作用域的配置" : "删除"}
                           onClick={() => setDeleting(team)}
                           className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-smooth hover:bg-destructive/10 hover:text-destructive disabled:opacity-40 disabled:pointer-events-none"
                         >
@@ -521,6 +603,7 @@ export default function SettingsExpertTeamsPage() {
         agents={agents}
         skills={skills}
         projects={projects}
+        currentUserId={user?.id || null}
       />
 
       {/* Delete Confirmation Dialog */}
@@ -557,6 +640,7 @@ function ExpertTeamDialog({
   agents,
   skills,
   projects,
+  currentUserId,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
@@ -578,6 +662,7 @@ function ExpertTeamDialog({
   agents: AgentOption[];
   skills: SkillOption[];
   projects: ProjectOption[];
+  currentUserId: string | null;
 }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -586,7 +671,8 @@ function ExpertTeamDialog({
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [skillSearch, setSkillSearch] = useState("");
   const [rolePrompt, setRolePrompt] = useState("");
-  const [projectId, setProjectId] = useState<string>("");
+  const [scopeTargets, setScopeTargets] = useState<string[]>([]);
+  const [scopeType, setScopeType] = useState<"global" | "project" | "personal">("global");
   const [enabled, setEnabled] = useState(1);
   const [isSquad, setIsSquad] = useState(false);
   const [memberAgents, setMemberAgents] = useState<string[]>([]);
@@ -602,7 +688,17 @@ function ExpertTeamDialog({
         setSelectedSkills(team.skill_slugs || []);
         setSkillSearch("");
         setRolePrompt(team.role_prompt || "");
-        setProjectId(team.project_id || "");
+        const pid = team.project_id;
+        if (!pid) {
+          setScopeType("global");
+          setScopeTargets([]);
+        } else if (pid.startsWith("personal:")) {
+          setScopeType("personal");
+          setScopeTargets([]);
+        } else {
+          setScopeType("project");
+          setScopeTargets(parseScopeTargets(pid));
+        }
         setEnabled(team.enabled);
         setIsSquad(!!team.is_squad);
         setMemberAgents(
@@ -619,7 +715,8 @@ function ExpertTeamDialog({
         setSelectedSkills([]);
         setSkillSearch("");
         setRolePrompt("");
-        setProjectId("");
+        setScopeType("global");
+        setScopeTargets([]);
         setEnabled(1);
         setIsSquad(false);
         setMemberAgents([]);
@@ -642,6 +739,16 @@ function ExpertTeamDialog({
       toast({ title: "小队模式需至少选择一个成员 Agent", variant: "destructive" });
       return;
     }
+    if (scopeType === "personal" && !currentUserId) {
+      toast({ title: "无法确定当前用户，无法创建个人作用域专家团", variant: "destructive" });
+      return;
+    }
+    const projectId =
+      scopeType === "personal"
+        ? `personal:${currentUserId}`
+        : scopeType === "project"
+        ? encodeScopeTargets(scopeTargets)
+        : null;
     onSave({
       name,
       description,
@@ -649,7 +756,7 @@ function ExpertTeamDialog({
       model,
       skill_slugs: selectedSkills,
       role_prompt: rolePrompt,
-      project_id: projectId || null,
+      project_id: projectId,
       enabled,
       is_squad: isSquad ? 1 : 0,
       member_agents: memberAgents.map((id) => ({ agent_id: id })),
@@ -668,11 +775,6 @@ function ExpertTeamDialog({
       prev.includes(slug) ? prev.filter((s) => s !== slug) : [...prev, slug]
     );
   };
-
-  const scopeOptions = [
-    { value: "", label: "全局" },
-    ...projects.map((p) => ({ value: p.id, label: p.name })),
-  ];
 
   const agentOptions = agents.map((a) => ({
     value: a.id,
@@ -741,26 +843,50 @@ function ExpertTeamDialog({
             </div>
           </div>
 
-          {/* Agent (single mode) + Scope */}
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            {!isSquad && (
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">Agent *</label>
-                <Select
-                  value={agentId}
-                  onChange={(e) => setAgentId(e.target.value)}
-                  options={agentOptions}
-                />
-              </div>
-            )}
+          {/* Agent (single mode) */}
+          {!isSquad && (
             <div className="space-y-1.5">
-              <label className="text-sm font-medium">作用域</label>
+              <label className="text-sm font-medium">Agent *</label>
               <Select
-                value={projectId}
-                onChange={(e) => setProjectId(e.target.value)}
-                options={scopeOptions}
+                value={agentId}
+                onChange={(e) => setAgentId(e.target.value)}
+                options={agentOptions}
               />
             </div>
+          )}
+
+          {/* Scope: 全局 / 项目 / 个人 */}
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">作用域</label>
+            <div className="grid grid-cols-3 gap-2">
+              {([
+                { key: "global", title: "全局", desc: "所有项目可用" },
+                { key: "project", title: "项目", desc: "指定项目 / 项目组" },
+                { key: "personal", title: "个人", desc: "仅自己可用" },
+              ] as const).map((opt) => (
+                <button
+                  key={opt.key}
+                  type="button"
+                  onClick={() => setScopeType(opt.key)}
+                  className={`rounded-lg border px-3 py-2 text-sm text-left transition-smooth ${
+                    scopeType === opt.key
+                      ? "border-indigo-500 bg-indigo-500/10 text-foreground"
+                      : "border-border/50 text-muted-foreground hover:border-foreground/30"
+                  }`}
+                >
+                  <div className="font-medium">{opt.title}</div>
+                  <div className="text-xs text-muted-foreground">{opt.desc}</div>
+                </button>
+              ))}
+            </div>
+            {scopeType === "project" && (
+              <ProjectMultiScopeSelector value={scopeTargets} onChange={setScopeTargets} />
+            )}
+            {scopeType === "personal" && (
+              <p className="text-xs text-muted-foreground">
+                个人作用域：仅创建者本人可见与使用
+              </p>
+            )}
           </div>
 
           {/* Squad fields */}
@@ -917,6 +1043,23 @@ function ExpertTeamDialog({
               />
             </button>
           </div>
+
+          {team && (
+            <div className="border-t pt-3 mt-3 space-y-1 text-xs text-muted-foreground">
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground/70">创建人:</span>
+                <code className="rounded bg-muted px-1.5 py-0.5 font-mono">
+                  {team.created_by || "系统"}
+                </code>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground/70">ID:</span>
+                <code className="max-w-[280px] truncate rounded bg-muted px-1.5 py-0.5 font-mono">
+                  {team.id}
+                </code>
+              </div>
+            </div>
+          )}
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>

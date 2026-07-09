@@ -1,0 +1,1530 @@
+[
+  {
+    "slug": "accessibility",
+    "category": "general"
+  },
+  {
+    "slug": "agent-architecture-audit",
+    "category": "general"
+  },
+  {
+    "slug": "agent-eval",
+    "category": "general"
+  },
+  {
+    "slug": "agent-harness-construction",
+    "category": "general"
+  },
+  {
+    "slug": "agent-introspection-debugging",
+    "category": "general"
+  },
+  {
+    "slug": "agent-payment-x402",
+    "category": "general"
+  },
+  {
+    "slug": "agent-self-evaluation",
+    "category": "general"
+  },
+  {
+    "slug": "high-score-example",
+    "category": "general"
+  },
+  {
+    "slug": "low-score-example",
+    "category": "general"
+  },
+  {
+    "slug": "evaluation-criteria",
+    "category": "general"
+  },
+  {
+    "slug": "hook-integration",
+    "category": "general"
+  },
+  {
+    "slug": "evaluation-report",
+    "category": "general"
+  },
+  {
+    "slug": "agent-sort",
+    "category": "general"
+  },
+  {
+    "slug": "agentic-engineering",
+    "category": "general"
+  },
+  {
+    "slug": "agentic-os",
+    "category": "general"
+  },
+  {
+    "slug": "ai-first-engineering",
+    "category": "general"
+  },
+  {
+    "slug": "ai-regression-testing",
+    "category": "general"
+  },
+  {
+    "slug": "android-clean-architecture",
+    "category": "general"
+  },
+  {
+    "slug": "angular-developer",
+    "category": "general"
+  },
+  {
+    "slug": "angular-animations",
+    "category": "general"
+  },
+  {
+    "slug": "angular-aria",
+    "category": "general"
+  },
+  {
+    "slug": "cli",
+    "category": "general"
+  },
+  {
+    "slug": "component-harnesses",
+    "category": "general"
+  },
+  {
+    "slug": "component-styling",
+    "category": "general"
+  },
+  {
+    "slug": "components",
+    "category": "general"
+  },
+  {
+    "slug": "creating-services",
+    "category": "general"
+  },
+  {
+    "slug": "data-resolvers",
+    "category": "general"
+  },
+  {
+    "slug": "define-routes",
+    "category": "general"
+  },
+  {
+    "slug": "defining-providers",
+    "category": "general"
+  },
+  {
+    "slug": "di-fundamentals",
+    "category": "general"
+  },
+  {
+    "slug": "e2e-testing",
+    "category": "general"
+  },
+  {
+    "slug": "effects",
+    "category": "general"
+  },
+  {
+    "slug": "hierarchical-injectors",
+    "category": "general"
+  },
+  {
+    "slug": "host-elements",
+    "category": "general"
+  },
+  {
+    "slug": "injection-context",
+    "category": "general"
+  },
+  {
+    "slug": "inputs",
+    "category": "general"
+  },
+  {
+    "slug": "linked-signal",
+    "category": "general"
+  },
+  {
+    "slug": "loading-strategies",
+    "category": "general"
+  },
+  {
+    "slug": "mcp",
+    "category": "general"
+  },
+  {
+    "slug": "navigate-to-routes",
+    "category": "general"
+  },
+  {
+    "slug": "outputs",
+    "category": "general"
+  },
+  {
+    "slug": "reactive-forms",
+    "category": "general"
+  },
+  {
+    "slug": "rendering-strategies",
+    "category": "general"
+  },
+  {
+    "slug": "resource",
+    "category": "general"
+  },
+  {
+    "slug": "route-animations",
+    "category": "general"
+  },
+  {
+    "slug": "route-guards",
+    "category": "general"
+  },
+  {
+    "slug": "router-lifecycle",
+    "category": "general"
+  },
+  {
+    "slug": "router-testing",
+    "category": "general"
+  },
+  {
+    "slug": "show-routes-with-outlets",
+    "category": "general"
+  },
+  {
+    "slug": "signal-forms",
+    "category": "general"
+  },
+  {
+    "slug": "signals-overview",
+    "category": "general"
+  },
+  {
+    "slug": "tailwind-css",
+    "category": "general"
+  },
+  {
+    "slug": "template-driven-forms",
+    "category": "general"
+  },
+  {
+    "slug": "testing-fundamentals",
+    "category": "general"
+  },
+  {
+    "slug": "api-connector-builder",
+    "category": "general"
+  },
+  {
+    "slug": "api-design",
+    "category": "general"
+  },
+  {
+    "slug": "architecture-decision-records",
+    "category": "general"
+  },
+  {
+    "slug": "article-writing",
+    "category": "general"
+  },
+  {
+    "slug": "automation-audit-ops",
+    "category": "general"
+  },
+  {
+    "slug": "autonomous-agent-harness",
+    "category": "general"
+  },
+  {
+    "slug": "autonomous-loops",
+    "category": "general"
+  },
+  {
+    "slug": "backend-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "benchmark",
+    "category": "general"
+  },
+  {
+    "slug": "benchmark-methodology",
+    "category": "general"
+  },
+  {
+    "slug": "benchmark-optimization-loop",
+    "category": "general"
+  },
+  {
+    "slug": "blender-motion-state-inspection",
+    "category": "general"
+  },
+  {
+    "slug": "blueprint",
+    "category": "general"
+  },
+  {
+    "slug": "brand-discovery",
+    "category": "general"
+  },
+  {
+    "slug": "10-purpose-why",
+    "category": "general"
+  },
+  {
+    "slug": "20-positioning",
+    "category": "general"
+  },
+  {
+    "slug": "30-audience-niche",
+    "category": "general"
+  },
+  {
+    "slug": "40-personality-archetype",
+    "category": "general"
+  },
+  {
+    "slug": "50-voice-tone",
+    "category": "general"
+  },
+  {
+    "slug": "60-narrative-story",
+    "category": "general"
+  },
+  {
+    "slug": "70-founder-tension",
+    "category": "general"
+  },
+  {
+    "slug": "90-synthesis",
+    "category": "general"
+  },
+  {
+    "slug": "brand-voice",
+    "category": "general"
+  },
+  {
+    "slug": "voice-profile-schema",
+    "category": "general"
+  },
+  {
+    "slug": "browser-qa",
+    "category": "general"
+  },
+  {
+    "slug": "bun-runtime",
+    "category": "general"
+  },
+  {
+    "slug": "canary-watch",
+    "category": "general"
+  },
+  {
+    "slug": "carrier-relationship-management",
+    "category": "general"
+  },
+  {
+    "slug": "cisco-ios-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "ck",
+    "category": "general"
+  },
+  {
+    "slug": "claude-devfleet",
+    "category": "general"
+  },
+  {
+    "slug": "click-path-audit",
+    "category": "general"
+  },
+  {
+    "slug": "clickhouse-io",
+    "category": "general"
+  },
+  {
+    "slug": "code-tour",
+    "category": "general"
+  },
+  {
+    "slug": "codebase-onboarding",
+    "category": "general"
+  },
+  {
+    "slug": "codehealth-mcp",
+    "category": "general"
+  },
+  {
+    "slug": "coding-standards",
+    "category": "general"
+  },
+  {
+    "slug": "competitive-platform-analysis",
+    "category": "general"
+  },
+  {
+    "slug": "competitive-report-structure",
+    "category": "general"
+  },
+  {
+    "slug": "compose-multiplatform-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "config-gc",
+    "category": "general"
+  },
+  {
+    "slug": "configure-ecc",
+    "category": "general"
+  },
+  {
+    "slug": "connections-optimizer",
+    "category": "general"
+  },
+  {
+    "slug": "content-engine",
+    "category": "general"
+  },
+  {
+    "slug": "content-hash-cache-pattern",
+    "category": "general"
+  },
+  {
+    "slug": "context-budget",
+    "category": "general"
+  },
+  {
+    "slug": "continuous-agent-loop",
+    "category": "general"
+  },
+  {
+    "slug": "continuous-learning",
+    "category": "general"
+  },
+  {
+    "slug": "continuous-learning-v2",
+    "category": "general"
+  },
+  {
+    "slug": "observer",
+    "category": "general"
+  },
+  {
+    "slug": "cost-aware-llm-pipeline",
+    "category": "general"
+  },
+  {
+    "slug": "cost-tracking",
+    "category": "general"
+  },
+  {
+    "slug": "council",
+    "category": "general"
+  },
+  {
+    "slug": "cpp-coding-standards",
+    "category": "general"
+  },
+  {
+    "slug": "cpp-testing",
+    "category": "general"
+  },
+  {
+    "slug": "crosspost",
+    "category": "general"
+  },
+  {
+    "slug": "csharp-testing",
+    "category": "general"
+  },
+  {
+    "slug": "customer-billing-ops",
+    "category": "general"
+  },
+  {
+    "slug": "customs-trade-compliance",
+    "category": "general"
+  },
+  {
+    "slug": "dart-flutter-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "dashboard-builder",
+    "category": "general"
+  },
+  {
+    "slug": "data-scraper-agent",
+    "category": "general"
+  },
+  {
+    "slug": "data-throughput-accelerator",
+    "category": "general"
+  },
+  {
+    "slug": "database-migrations",
+    "category": "general"
+  },
+  {
+    "slug": "deep-research",
+    "category": "general"
+  },
+  {
+    "slug": "defi-amm-security",
+    "category": "general"
+  },
+  {
+    "slug": "deployment-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "design-system",
+    "category": "general"
+  },
+  {
+    "slug": "django-celery",
+    "category": "general"
+  },
+  {
+    "slug": "django-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "django-security",
+    "category": "general"
+  },
+  {
+    "slug": "django-tdd",
+    "category": "general"
+  },
+  {
+    "slug": "django-verification",
+    "category": "general"
+  },
+  {
+    "slug": "dmux-workflows",
+    "category": "general"
+  },
+  {
+    "slug": "docker-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "documentation-lookup",
+    "category": "general"
+  },
+  {
+    "slug": "dotnet-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "dynamic-workflow-mode",
+    "category": "general"
+  },
+  {
+    "slug": "ecc-guide",
+    "category": "general"
+  },
+  {
+    "slug": "ecc-tools-cost-audit",
+    "category": "general"
+  },
+  {
+    "slug": "email-ops",
+    "category": "general"
+  },
+  {
+    "slug": "energy-procurement",
+    "category": "general"
+  },
+  {
+    "slug": "enterprise-agent-ops",
+    "category": "general"
+  },
+  {
+    "slug": "error-handling",
+    "category": "general"
+  },
+  {
+    "slug": "eval-harness",
+    "category": "general"
+  },
+  {
+    "slug": "evm-token-decimals",
+    "category": "general"
+  },
+  {
+    "slug": "exa-search",
+    "category": "general"
+  },
+  {
+    "slug": "fal-ai-media",
+    "category": "general"
+  },
+  {
+    "slug": "fastapi-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "finance-billing-ops",
+    "category": "general"
+  },
+  {
+    "slug": "flox-environments",
+    "category": "general"
+  },
+  {
+    "slug": "flutter-dart-code-review",
+    "category": "general"
+  },
+  {
+    "slug": "foundation-models-on-device",
+    "category": "general"
+  },
+  {
+    "slug": "frontend-a11y",
+    "category": "general"
+  },
+  {
+    "slug": "frontend-design-direction",
+    "category": "general"
+  },
+  {
+    "slug": "frontend-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "frontend-slides",
+    "category": "general"
+  },
+  {
+    "slug": "style-presets",
+    "category": "general"
+  },
+  {
+    "slug": "animation-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "html-template",
+    "category": "general"
+  },
+  {
+    "slug": "fsharp-testing",
+    "category": "general"
+  },
+  {
+    "slug": "gan-style-harness",
+    "category": "general"
+  },
+  {
+    "slug": "gateguard",
+    "category": "general"
+  },
+  {
+    "slug": "generating-python-installer",
+    "category": "general"
+  },
+  {
+    "slug": "git-workflow",
+    "category": "general"
+  },
+  {
+    "slug": "github-ops",
+    "category": "general"
+  },
+  {
+    "slug": "golang-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "golang-testing",
+    "category": "general"
+  },
+  {
+    "slug": "google-workspace-ops",
+    "category": "general"
+  },
+  {
+    "slug": "healthcare-cdss-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "healthcare-emr-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "healthcare-eval-harness",
+    "category": "general"
+  },
+  {
+    "slug": "healthcare-phi-compliance",
+    "category": "general"
+  },
+  {
+    "slug": "hermes-imports",
+    "category": "general"
+  },
+  {
+    "slug": "hexagonal-architecture",
+    "category": "general"
+  },
+  {
+    "slug": "hipaa-compliance",
+    "category": "general"
+  },
+  {
+    "slug": "homelab-network-readiness",
+    "category": "general"
+  },
+  {
+    "slug": "homelab-network-setup",
+    "category": "general"
+  },
+  {
+    "slug": "homelab-pihole-dns",
+    "category": "general"
+  },
+  {
+    "slug": "homelab-vlan-segmentation",
+    "category": "general"
+  },
+  {
+    "slug": "homelab-wireguard-vpn",
+    "category": "general"
+  },
+  {
+    "slug": "hookify-rules",
+    "category": "general"
+  },
+  {
+    "slug": "inherit-legacy-style",
+    "category": "general"
+  },
+  {
+    "slug": "intent-driven-development",
+    "category": "general"
+  },
+  {
+    "slug": "inventory-demand-planning",
+    "category": "general"
+  },
+  {
+    "slug": "investor-materials",
+    "category": "general"
+  },
+  {
+    "slug": "investor-outreach",
+    "category": "general"
+  },
+  {
+    "slug": "ios-icon-gen",
+    "category": "general"
+  },
+  {
+    "slug": "iterative-retrieval",
+    "category": "general"
+  },
+  {
+    "slug": "ito-basket-compare",
+    "category": "general"
+  },
+  {
+    "slug": "ito-data-atlas-agent",
+    "category": "general"
+  },
+  {
+    "slug": "ito-market-intelligence",
+    "category": "general"
+  },
+  {
+    "slug": "ito-trade-planner",
+    "category": "general"
+  },
+  {
+    "slug": "java-coding-standards",
+    "category": "general"
+  },
+  {
+    "slug": "jira-integration",
+    "category": "general"
+  },
+  {
+    "slug": "jpa-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "knowledge-ops",
+    "category": "general"
+  },
+  {
+    "slug": "kotlin-coroutines-flows",
+    "category": "general"
+  },
+  {
+    "slug": "kotlin-exposed-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "kotlin-ktor-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "kotlin-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "kotlin-testing",
+    "category": "general"
+  },
+  {
+    "slug": "kubernetes-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "laravel-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "laravel-plugin-discovery",
+    "category": "general"
+  },
+  {
+    "slug": "laravel-security",
+    "category": "general"
+  },
+  {
+    "slug": "laravel-tdd",
+    "category": "general"
+  },
+  {
+    "slug": "laravel-verification",
+    "category": "general"
+  },
+  {
+    "slug": "latency-critical-systems",
+    "category": "general"
+  },
+  {
+    "slug": "lead-intelligence",
+    "category": "general"
+  },
+  {
+    "slug": "enrichment-agent",
+    "category": "general"
+  },
+  {
+    "slug": "mutual-mapper",
+    "category": "general"
+  },
+  {
+    "slug": "outreach-drafter",
+    "category": "general"
+  },
+  {
+    "slug": "signal-scorer",
+    "category": "general"
+  },
+  {
+    "slug": "liquid-glass-design",
+    "category": "general"
+  },
+  {
+    "slug": "llm-trading-agent-security",
+    "category": "general"
+  },
+  {
+    "slug": "logistics-exception-management",
+    "category": "general"
+  },
+  {
+    "slug": "make-interfaces-feel-better",
+    "category": "general"
+  },
+  {
+    "slug": "manim-video",
+    "category": "general"
+  },
+  {
+    "slug": "market-research",
+    "category": "general"
+  },
+  {
+    "slug": "marketing-campaign",
+    "category": "general"
+  },
+  {
+    "slug": "mcp-server-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "messages-ops",
+    "category": "general"
+  },
+  {
+    "slug": "ml-adoption-playbook",
+    "category": "general"
+  },
+  {
+    "slug": "mle-workflow",
+    "category": "general"
+  },
+  {
+    "slug": "motion-advanced",
+    "category": "frontend"
+  },
+  {
+    "slug": "motion-foundations",
+    "category": "frontend"
+  },
+  {
+    "slug": "motion-patterns",
+    "category": "frontend"
+  },
+  {
+    "slug": "motion-ui",
+    "category": "general"
+  },
+  {
+    "slug": "mysql-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "nanoclaw-repl",
+    "category": "general"
+  },
+  {
+    "slug": "nestjs-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "netmiko-ssh-automation",
+    "category": "general"
+  },
+  {
+    "slug": "network-bgp-diagnostics",
+    "category": "general"
+  },
+  {
+    "slug": "network-config-validation",
+    "category": "general"
+  },
+  {
+    "slug": "network-interface-health",
+    "category": "general"
+  },
+  {
+    "slug": "nextjs-turbopack",
+    "category": "general"
+  },
+  {
+    "slug": "nodejs-keccak256",
+    "category": "general"
+  },
+  {
+    "slug": "nutrient-document-processing",
+    "category": "general"
+  },
+  {
+    "slug": "nuxt4-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "openclaw-persona-forge",
+    "category": "general"
+  },
+  {
+    "slug": "avatar-style",
+    "category": "general"
+  },
+  {
+    "slug": "boundary-rules",
+    "category": "general"
+  },
+  {
+    "slug": "identity-tension",
+    "category": "general"
+  },
+  {
+    "slug": "naming-system",
+    "category": "general"
+  },
+  {
+    "slug": "output-template",
+    "category": "general"
+  },
+  {
+    "slug": "opensource-pipeline",
+    "category": "general"
+  },
+  {
+    "slug": "orch-add-feature",
+    "category": "general"
+  },
+  {
+    "slug": "orch-build-mvp",
+    "category": "general"
+  },
+  {
+    "slug": "orch-change-feature",
+    "category": "general"
+  },
+  {
+    "slug": "orch-fix-defect",
+    "category": "general"
+  },
+  {
+    "slug": "orch-pipeline",
+    "category": "general"
+  },
+  {
+    "slug": "orch-refine-code",
+    "category": "general"
+  },
+  {
+    "slug": "parallel-execution-optimizer",
+    "category": "general"
+  },
+  {
+    "slug": "perl-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "perl-security",
+    "category": "general"
+  },
+  {
+    "slug": "perl-testing",
+    "category": "general"
+  },
+  {
+    "slug": "plan-orchestrate",
+    "category": "general"
+  },
+  {
+    "slug": "plankton-code-quality",
+    "category": "general"
+  },
+  {
+    "slug": "postgres-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "prediction-market-oracle-research",
+    "category": "general"
+  },
+  {
+    "slug": "prediction-market-risk-review",
+    "category": "general"
+  },
+  {
+    "slug": "prisma-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "product-capability",
+    "category": "general"
+  },
+  {
+    "slug": "product-lens",
+    "category": "general"
+  },
+  {
+    "slug": "production-audit",
+    "category": "general"
+  },
+  {
+    "slug": "production-scheduling",
+    "category": "general"
+  },
+  {
+    "slug": "project-flow-ops",
+    "category": "general"
+  },
+  {
+    "slug": "prompt-optimizer",
+    "category": "general"
+  },
+  {
+    "slug": "python-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "python-testing",
+    "category": "general"
+  },
+  {
+    "slug": "pytorch-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "quality-nonconformance",
+    "category": "general"
+  },
+  {
+    "slug": "quarkus-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "quarkus-security",
+    "category": "general"
+  },
+  {
+    "slug": "quarkus-tdd",
+    "category": "general"
+  },
+  {
+    "slug": "quarkus-verification",
+    "category": "general"
+  },
+  {
+    "slug": "ralphinho-rfc-pipeline",
+    "category": "general"
+  },
+  {
+    "slug": "react-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "react-performance",
+    "category": "general"
+  },
+  {
+    "slug": "react-testing",
+    "category": "general"
+  },
+  {
+    "slug": "recsys-pipeline-architect",
+    "category": "general"
+  },
+  {
+    "slug": "recursive-decision-ledger",
+    "category": "general"
+  },
+  {
+    "slug": "redis-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "regex-vs-llm-structured-text",
+    "category": "general"
+  },
+  {
+    "slug": "remotion-video-creation",
+    "category": "general"
+  },
+  {
+    "slug": "3d",
+    "category": "general"
+  },
+  {
+    "slug": "animations",
+    "category": "general"
+  },
+  {
+    "slug": "assets",
+    "category": "general"
+  },
+  {
+    "slug": "audio",
+    "category": "general"
+  },
+  {
+    "slug": "calculate-metadata",
+    "category": "general"
+  },
+  {
+    "slug": "can-decode",
+    "category": "general"
+  },
+  {
+    "slug": "charts",
+    "category": "general"
+  },
+  {
+    "slug": "compositions",
+    "category": "general"
+  },
+  {
+    "slug": "display-captions",
+    "category": "general"
+  },
+  {
+    "slug": "extract-frames",
+    "category": "general"
+  },
+  {
+    "slug": "fonts",
+    "category": "general"
+  },
+  {
+    "slug": "get-audio-duration",
+    "category": "general"
+  },
+  {
+    "slug": "get-video-dimensions",
+    "category": "general"
+  },
+  {
+    "slug": "get-video-duration",
+    "category": "general"
+  },
+  {
+    "slug": "gif",
+    "category": "general"
+  },
+  {
+    "slug": "images",
+    "category": "general"
+  },
+  {
+    "slug": "import-srt-captions",
+    "category": "general"
+  },
+  {
+    "slug": "lottie",
+    "category": "general"
+  },
+  {
+    "slug": "measuring-dom-nodes",
+    "category": "general"
+  },
+  {
+    "slug": "measuring-text",
+    "category": "general"
+  },
+  {
+    "slug": "sequencing",
+    "category": "general"
+  },
+  {
+    "slug": "tailwind",
+    "category": "general"
+  },
+  {
+    "slug": "text-animations",
+    "category": "general"
+  },
+  {
+    "slug": "timing",
+    "category": "general"
+  },
+  {
+    "slug": "transcribe-captions",
+    "category": "general"
+  },
+  {
+    "slug": "transitions",
+    "category": "general"
+  },
+  {
+    "slug": "trimming",
+    "category": "general"
+  },
+  {
+    "slug": "videos",
+    "category": "general"
+  },
+  {
+    "slug": "repo-scan",
+    "category": "general"
+  },
+  {
+    "slug": "research-ops",
+    "category": "general"
+  },
+  {
+    "slug": "returns-reverse-logistics",
+    "category": "general"
+  },
+  {
+    "slug": "rules-distill",
+    "category": "general"
+  },
+  {
+    "slug": "rust-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "rust-testing",
+    "category": "general"
+  },
+  {
+    "slug": "safety-guard",
+    "category": "general"
+  },
+  {
+    "slug": "santa-method",
+    "category": "general"
+  },
+  {
+    "slug": "pubmed-database",
+    "category": "general"
+  },
+  {
+    "slug": "uspto-database",
+    "category": "general"
+  },
+  {
+    "slug": "gget",
+    "category": "general"
+  },
+  {
+    "slug": "literature-review",
+    "category": "general"
+  },
+  {
+    "slug": "scholar-evaluation",
+    "category": "general"
+  },
+  {
+    "slug": "search-first",
+    "category": "general"
+  },
+  {
+    "slug": "security-bounty-hunter",
+    "category": "general"
+  },
+  {
+    "slug": "security-review",
+    "category": "general"
+  },
+  {
+    "slug": "cloud-infrastructure-security",
+    "category": "general"
+  },
+  {
+    "slug": "security-scan",
+    "category": "general"
+  },
+  {
+    "slug": "seo",
+    "category": "general"
+  },
+  {
+    "slug": "skill-comply",
+    "category": "general"
+  },
+  {
+    "slug": "classifier",
+    "category": "general"
+  },
+  {
+    "slug": "scenario-generator",
+    "category": "general"
+  },
+  {
+    "slug": "spec-generator",
+    "category": "general"
+  },
+  {
+    "slug": "skill-scout",
+    "category": "general"
+  },
+  {
+    "slug": "skill-stocktake",
+    "category": "general"
+  },
+  {
+    "slug": "social-graph-ranker",
+    "category": "general"
+  },
+  {
+    "slug": "social-publisher",
+    "category": "general"
+  },
+  {
+    "slug": "springboot-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "springboot-security",
+    "category": "general"
+  },
+  {
+    "slug": "springboot-tdd",
+    "category": "general"
+  },
+  {
+    "slug": "springboot-verification",
+    "category": "general"
+  },
+  {
+    "slug": "strategic-compact",
+    "category": "general"
+  },
+  {
+    "slug": "swift-actor-persistence",
+    "category": "general"
+  },
+  {
+    "slug": "swift-concurrency-6-2",
+    "category": "general"
+  },
+  {
+    "slug": "swift-protocol-di-testing",
+    "category": "general"
+  },
+  {
+    "slug": "swiftui-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "taste",
+    "category": "general"
+  },
+  {
+    "slug": "genre-taxonomy",
+    "category": "general"
+  },
+  {
+    "slug": "tdd-workflow",
+    "category": "general"
+  },
+  {
+    "slug": "team-agent-orchestration",
+    "category": "general"
+  },
+  {
+    "slug": "team-builder",
+    "category": "general"
+  },
+  {
+    "slug": "terminal-ops",
+    "category": "general"
+  },
+  {
+    "slug": "tinystruct-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "architecture",
+    "category": "general"
+  },
+  {
+    "slug": "data-handling",
+    "category": "general"
+  },
+  {
+    "slug": "database",
+    "category": "general"
+  },
+  {
+    "slug": "routing",
+    "category": "general"
+  },
+  {
+    "slug": "system-usage",
+    "category": "general"
+  },
+  {
+    "slug": "testing",
+    "category": "general"
+  },
+  {
+    "slug": "token-budget-advisor",
+    "category": "general"
+  },
+  {
+    "slug": "ui-demo",
+    "category": "general"
+  },
+  {
+    "slug": "ui-to-vue",
+    "category": "general"
+  },
+  {
+    "slug": "uncloud",
+    "category": "general"
+  },
+  {
+    "slug": "unified-notifications-ops",
+    "category": "general"
+  },
+  {
+    "slug": "verification-loop",
+    "category": "general"
+  },
+  {
+    "slug": "video-editing",
+    "category": "general"
+  },
+  {
+    "slug": "videodb",
+    "category": "general"
+  },
+  {
+    "slug": "api-reference",
+    "category": "general"
+  },
+  {
+    "slug": "capture-reference",
+    "category": "general"
+  },
+  {
+    "slug": "capture",
+    "category": "general"
+  },
+  {
+    "slug": "editor",
+    "category": "general"
+  },
+  {
+    "slug": "generative",
+    "category": "general"
+  },
+  {
+    "slug": "rtstream-reference",
+    "category": "general"
+  },
+  {
+    "slug": "rtstream",
+    "category": "general"
+  },
+  {
+    "slug": "search",
+    "category": "general"
+  },
+  {
+    "slug": "streaming",
+    "category": "general"
+  },
+  {
+    "slug": "use-cases",
+    "category": "general"
+  },
+  {
+    "slug": "readme",
+    "category": "general"
+  },
+  {
+    "slug": "visa-doc-translate",
+    "category": "general"
+  },
+  {
+    "slug": "vite-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "vue-patterns",
+    "category": "general"
+  },
+  {
+    "slug": "windows-desktop-e2e",
+    "category": "general"
+  },
+  {
+    "slug": "workspace-surface-audit",
+    "category": "general"
+  },
+  {
+    "slug": "x-api",
+    "category": "general"
+  }
+]

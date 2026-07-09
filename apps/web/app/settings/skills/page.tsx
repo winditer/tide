@@ -17,6 +17,7 @@ import {
 import { apiClient, useAuth } from "@tide/core";
 import { SimpleMarkdown } from "@tide/views/shared/SimpleMarkdown";
 import { ProjectScopeSelector } from "@tide/views/components/project-scope-selector";
+import { ProjectMultiScopeSelector } from "@tide/views";
 import {
   ArrowLeft,
   ChevronLeft,
@@ -51,26 +52,44 @@ interface Skill {
 const CATEGORY_OPTIONS = [
   { value: "", label: "全部分类" },
   { value: "general", label: "通用 (general)" },
-  { value: "development", label: "开发 (development)" },
-  { value: "security", label: "安全 (security)" },
-  { value: "review", label: "审查 (review)" },
-  { value: "deployment", label: "部署 (deployment)" },
+  { value: "ai-agent", label: "AI 智能体 (ai-agent)" },
+  { value: "frontend", label: "前端开发 (frontend)" },
+  { value: "backend", label: "后端开发 (backend)" },
+  { value: "mobile", label: "移动开发 (mobile)" },
+  { value: "devops", label: "DevOps (devops)" },
+  { value: "security", label: "安全合规 (security)" },
+  { value: "testing", label: "测试质量 (testing)" },
+  { value: "data", label: "数据与ML (data)" },
+  { value: "media", label: "媒体创作 (media)" },
+  { value: "business", label: "业务运营 (business)" },
 ];
 
 const CATEGORY_LABELS: Record<string, string> = {
   general: "通用",
-  development: "开发",
+  "ai-agent": "AI 智能体",
+  frontend: "前端",
+  backend: "后端",
+  mobile: "移动",
+  devops: "DevOps",
   security: "安全",
-  review: "审查",
-  deployment: "部署",
+  testing: "测试",
+  data: "数据",
+  media: "媒体",
+  business: "业务",
 };
 
 const CATEGORY_VARIANT: Record<string, "default" | "secondary" | "outline"> = {
   general: "secondary",
-  development: "default",
+  "ai-agent": "default",
+  frontend: "default",
+  backend: "default",
+  mobile: "outline",
+  devops: "outline",
   security: "outline",
-  review: "secondary",
-  deployment: "outline",
+  testing: "secondary",
+  data: "secondary",
+  media: "secondary",
+  business: "outline",
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -80,6 +99,22 @@ function slugify(name: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-")
     .replace(/^-|-$/g, "");
+}
+
+// project_id 字段兼容 null / 单字符串 / JSON 数组三种格式
+function parseScopeTargets(projectId: string | null | undefined): string[] {
+  if (!projectId) return [];
+  try {
+    const parsed = JSON.parse(projectId);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {}
+  return [projectId];
+}
+
+function encodeScopeTargets(targets: string[]): string | null {
+  if (targets.length === 0) return null;
+  if (targets.length === 1) return targets[0];
+  return JSON.stringify(targets);
 }
 
 // ─── Page ────────────────────────────────────────────────────────────────────
@@ -200,7 +235,7 @@ export default function SettingsSkillsPage() {
           .filter(Boolean),
         content: data.content,
       };
-      if (data.project_id) body.project_id = data.project_id;
+      if (data.project_id !== undefined) body.project_id = data.project_id;
       if (editing) {
         await apiClient.put<Skill>(`/api/skills/${editing.id}?workspace_id=default`, body);
       } else {
@@ -508,7 +543,7 @@ function SkillDialog({
   const [cat, setCat] = useState("general");
   const [tags, setTags] = useState("");
   const [content, setContent] = useState("");
-  const [dialogProjectId, setDialogProjectId] = useState<string | null>(null);
+  const [dialogProjectId, setDialogProjectId] = useState<string[]>([]);
   const [slugManual, setSlugManual] = useState(false);
   const [preview, setPreview] = useState(true);
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -522,7 +557,7 @@ function SkillDialog({
         setCat(skill.category || "general");
         setTags(skill.tags.join(", "));
         setContent(skill.content);
-        setDialogProjectId((skill as any).project_id || null);
+        setDialogProjectId(parseScopeTargets((skill as any).project_id));
         setSlugManual(true);
         setPreview(true);
       } else {
@@ -532,7 +567,7 @@ function SkillDialog({
         setCat("general");
         setTags("");
         setContent("");
-        setDialogProjectId(null);
+        setDialogProjectId([]);
         setSlugManual(false);
         setPreview(false);
       }
@@ -559,7 +594,7 @@ function SkillDialog({
           category: cat,
           tags,
           content: newContent,
-          project_id: dialogProjectId,
+          project_id: encodeScopeTargets(dialogProjectId),
         });
       }, 1500);
     },
@@ -577,7 +612,7 @@ function SkillDialog({
       category: cat,
       tags,
       content,
-      project_id: dialogProjectId,
+      project_id: encodeScopeTargets(dialogProjectId),
     });
   }, [skill, name, slug, description, cat, tags, content, dialogProjectId, onSave]);
 
@@ -593,7 +628,7 @@ function SkillDialog({
       toast({ title: "请填写必填字段", variant: "destructive" });
       return;
     }
-    onSave({ name, slug: slug || slugify(name), description, category: cat, tags, content, project_id: dialogProjectId });
+    onSave({ name, slug: slug || slugify(name), description, category: cat, tags, content, project_id: encodeScopeTargets(dialogProjectId) });
   };
 
   return (
@@ -637,10 +672,16 @@ function SkillDialog({
                 onChange={(e) => setCat(e.target.value)}
                 options={[
                   { value: "general", label: "通用 (general)" },
-                  { value: "development", label: "开发 (development)" },
-                  { value: "security", label: "安全 (security)" },
-                  { value: "review", label: "审查 (review)" },
-                  { value: "deployment", label: "部署 (deployment)" },
+                  { value: "ai-agent", label: "AI 智能体 (ai-agent)" },
+                  { value: "frontend", label: "前端开发 (frontend)" },
+                  { value: "backend", label: "后端开发 (backend)" },
+                  { value: "mobile", label: "移动开发 (mobile)" },
+                  { value: "devops", label: "DevOps (devops)" },
+                  { value: "security", label: "安全合规 (security)" },
+                  { value: "testing", label: "测试质量 (testing)" },
+                  { value: "data", label: "数据与ML (data)" },
+                  { value: "media", label: "媒体创作 (media)" },
+                  { value: "business", label: "业务运营 (business)" },
                 ]}
               />
             </div>
@@ -655,7 +696,7 @@ function SkillDialog({
           </div>
           <div className="space-y-1.5">
             <label className="text-sm font-medium">作用域</label>
-            <ProjectScopeSelector
+            <ProjectMultiScopeSelector
               value={dialogProjectId}
               onChange={(v) => setDialogProjectId(v)}
               className="w-full"

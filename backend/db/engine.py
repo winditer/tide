@@ -290,6 +290,9 @@ async def init_db():
             await db.execute("ALTER TABLE expert_teams ADD COLUMN is_squad INTEGER DEFAULT 0")
         if et_columns and "leader_strategy" not in et_columns:
             await db.execute("ALTER TABLE expert_teams ADD COLUMN leader_strategy TEXT DEFAULT 'capability_match'")
+        # expert_teams 补列 created_by（个人作用域归属 / 创建人展示）
+        if et_columns and "created_by" not in et_columns:
+            await db.execute("ALTER TABLE expert_teams ADD COLUMN created_by TEXT")
 
         # workflows 表补列 created_by（工作流权限模型）
         cursor = await db.execute("PRAGMA table_info(workflows)")

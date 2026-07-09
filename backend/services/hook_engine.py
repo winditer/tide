@@ -20,6 +20,7 @@ from typing import Any, Optional
 
 from sqlalchemy import text
 
+from backend.core.scope_utils import match_project_scope
 from backend.db.engine import async_session_factory
 
 logger = logging.getLogger("tide.hook_engine")
@@ -27,6 +28,18 @@ logger = logging.getLogger("tide.hook_engine")
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+async def _get_project_group_ids(project_id: Optional[str]) -> set[str]:
+    """查询指定项目所属的所有项目组 ID 集合。"""
+    if not project_id:
+        return set()
+    async with async_session_factory() as session:
+        result = await session.execute(
+            text("SELECT group_id FROM project_group_members WHERE project_id = :pid"),
+            {"pid": project_id},
+        )
+        return {r[0] for r in result.fetchall()}
 
 
 def _safe_json_loads(raw: Any, default: Any) -> Any:
@@ -315,9 +328,6 @@ class HookEngine:
         if enabled is not None:
             conditions.append("enabled = :enabled")
             params["enabled"] = int(bool(enabled))
-        if project_id is not None:
-            conditions.append("project_id = :project_id")
-            params["project_id"] = project_id
         where = " AND ".join(conditions)
         async with async_session_factory() as session:
             result = await session.execute(
@@ -334,7 +344,17 @@ class HookEngine:
                 params,
             )
             rows = result.fetchall()
-        return [self._row_to_dict(r) for r in rows]
+        items = [self._row_to_dict(r) for r in rows]
+        # project_id 提供时用 match_project_scope 在 Python 层过滤，
+        # 以支持多选作用域（单项目 / JSON 数组 / 项目组 group: 前缀）。
+        if project_id is not None:
+            group_ids = await _get_project_group_ids(project_id)
+            items = [
+                it
+                for it in items
+                if match_project_scope(it.get("project_id"), project_id, group_ids)
+            ]
+        return items
 
     async def get_hook(self, workspace_id: str, hook_id: str) -> Optional[dict]:
         async with async_session_factory() as session:

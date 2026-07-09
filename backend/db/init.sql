@@ -594,6 +594,7 @@ CREATE TABLE IF NOT EXISTS expert_teams (
     is_squad INTEGER DEFAULT 0,
     leader_strategy TEXT DEFAULT 'capability_match',
     enabled INTEGER DEFAULT 1,
+    created_by TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(workspace_id, slug)
@@ -636,3 +637,18 @@ CREATE TABLE IF NOT EXISTS notifications (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_notif_recipient ON notifications(recipient_id, is_read, created_at DESC);
+
+-- ── Daemon Tokens ──────────────────────────────────────
+CREATE TABLE IF NOT EXISTS daemon_tokens (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    name TEXT,
+    status TEXT DEFAULT 'active',
+    last_used_at TIMESTAMP,
+    expires_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_daemon_tokens_user_id ON daemon_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_daemon_tokens_hash ON daemon_tokens(token_hash);

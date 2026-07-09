@@ -131,6 +131,12 @@ export { DiffViewer as CodeDiffViewer } from "./code-editor/DiffViewer";
 export { ConflictEditor } from "./code-editor/ConflictEditor";
 export { MergeConflictPanel } from "./code-editor/MergeConflictPanel";
 
+// Project scope selectors
+export {
+  ProjectScopeSelector,
+  ProjectMultiScopeSelector,
+} from "./components/project-scope-selector";
+
 // Git audit
 export {
   GitAuditPage,
