@@ -13,7 +13,7 @@ COPY packages/core/package.json ./packages/core/package.json
 COPY packages/ui/package.json ./packages/ui/package.json
 COPY packages/views/package.json ./packages/views/package.json
 
-RUN yarn install --frozen-lockfile
+RUN yarn install --frozen-lockfile --ignore-engines && yarn cache clean
 
 # 复制源码
 COPY apps ./apps
@@ -34,6 +34,8 @@ ENV NEXT_PUBLIC_BASE_PATH=${NEXT_PUBLIC_BASE_PATH}
 # 构建（next.config.ts 中 outputFileTracingRoot=../.. 指向 monorepo 根）
 RUN yarn workspace @tide/web build
 
+# 清理中间缓存释放空间
+RUN rm -rf /app/apps/web/.next/cache /app/node_modules/.cache /usr/local/share/.cache/yarn
 
 # ============== Stage 2: runner ==============
 FROM node:20-alpine AS runner
