@@ -108,6 +108,16 @@ class LarkBridge:
             return None
         return await asyncio.to_thread(self._send_card_sync, chat_id, card_dict)
 
+    async def send_card_to_user(self, open_id: str, card_dict: dict) -> Optional[str]:
+        """发送交互卡片到用户私聊（通过 open_id）。"""
+        if not open_id or not card_dict:
+            logger.warning("send_card_to_user skipped: open_id or card_dict empty")
+            return None
+        if not self.is_configured:
+            logger.warning("send_card_to_user skipped: Lark not configured")
+            return None
+        return await asyncio.to_thread(self._send_card_to_user_sync, open_id, card_dict)
+
     async def update_card(self, message_id: str, card_dict: dict) -> bool:
         """patch 已发送消息卡片。"""
         if not message_id or not card_dict:
@@ -202,6 +212,51 @@ class LarkBridge:
             return mid or None
         except Exception:
             logger.exception("send_card exception chat=%s", chat_id)
+            return None
+
+    def _send_card_to_user_sync(self, open_id: str, card_dict: dict) -> Optional[str]:
+        client = self._get_client()
+        if client is None:
+            return None
+        try:
+            from lark_oapi.api.im.v1 import (  # type: ignore
+                CreateMessageRequest,
+                CreateMessageRequestBody,
+            )
+        except ImportError:
+            logger.warning("lark_oapi.api.im.v1 not available")
+            return None
+        try:
+            with self._send_lock:
+                body = (
+                    CreateMessageRequestBody.builder()
+                    .receive_id(open_id)
+                    .msg_type("interactive")
+                    .content(json.dumps(card_dict, ensure_ascii=False))
+                    .build()
+                )
+                req = (
+                    CreateMessageRequest.builder()
+                    .receive_id_type("open_id")
+                    .request_body(body)
+                    .build()
+                )
+                resp = client.im.v1.message.create(req)
+            if not _response_ok(resp):
+                logger.error(
+                    "send_card_to_user failed: code=%s msg=%s",
+                    getattr(resp, "code", None),
+                    getattr(resp, "msg", None),
+                )
+                return None
+            mid = _find_message_id(resp)
+            if mid:
+                logger.info("send_card_to_user ok open_id=%s message=%s", open_id, mid)
+            else:
+                logger.warning("send_card_to_user ok but no message_id parsed")
+            return mid or None
+        except Exception:
+            logger.exception("send_card_to_user exception open_id=%s", open_id)
             return None
 
     def _update_card_sync(self, message_id: str, card_dict: dict) -> bool:

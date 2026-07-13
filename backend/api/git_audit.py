@@ -14,7 +14,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 from sqlalchemy import text as sa_text
 
-from backend.core.dependencies import get_optional_user
+from backend.core.dependencies import get_optional_user, check_project_write_permission_with_group
 from backend.runtime.git_utils import (
     git_command, git_log_files, git_diff_full,
     git_push, git_fetch, git_ensure_remote,
@@ -1338,6 +1338,7 @@ async def create_branch(
     current_user: Optional[dict] = Depends(get_optional_user),
 ):
     """创建本地分支。"""
+    await check_project_write_permission_with_group(project_id, current_user)
     cwd = _decode_project_path(project_id)
     if not Path(cwd).is_dir():
         raise HTTPException(status_code=404, detail=f"项目路径不存在: {cwd}")
@@ -1364,6 +1365,7 @@ async def delete_branch(
     
     如果分支被 worktree 占用，会先移除 worktree 再删除分支。
     """
+    await check_project_write_permission_with_group(project_id, current_user)
     cwd = _decode_project_path(project_id)
     if not Path(cwd).is_dir():
         raise HTTPException(status_code=404, detail=f"项目路径不存在: {cwd}")

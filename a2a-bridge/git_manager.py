@@ -26,6 +26,8 @@ class GitContext:
     task_branch: str = ""              # 任务分支名，为空则自动生成
     commit_message: str = ""           # 提交信息，为空则自动生成
     auth_token: Optional[str] = None   # HTTPS token（可选，优先用环境变量）
+    git_username: Optional[str] = None   # HTTPS 用户名（可选）
+    git_password: Optional[str] = None   # HTTPS 密码（可选）
 
     @classmethod
     def from_dict(cls, data: dict) -> Optional["GitContext"]:
@@ -50,6 +52,8 @@ class GitContext:
             task_branch=str(data.get("taskBranch") or data.get("task_branch") or ""),
             commit_message=str(data.get("commitMessage") or data.get("commit_message") or ""),
             auth_token=data.get("authToken") or data.get("auth_token") or None,
+            git_username=data.get("gitUsername") or data.get("git_username") or None,
+            git_password=data.get("gitPassword") or data.get("git_password") or None,
         )
 
 
@@ -125,7 +129,7 @@ class GitManager:
         repo_path.parent.mkdir(parents=True, exist_ok=True)
 
         # 构建 clone URL（注入 token if HTTPS）
-        clone_url = self._inject_auth(ctx.repo_url, ctx.auth_token)
+        clone_url = self._inject_auth(ctx.repo_url, ctx.auth_token, ctx.git_username, ctx.git_password)
 
         code, out, err = await self._run_git("clone", clone_url, str(repo_path))
         if code != 0:
@@ -266,15 +270,22 @@ class GitManager:
         logger.info("Cleaned up branch: %s", ctx.task_branch)
 
     def _inject_auth(
-        self, repo_url: str, token: Optional[str] = None
+        self, repo_url: str, token: Optional[str] = None,
+        username: Optional[str] = None, password: Optional[str] = None
     ) -> str:
-        """为 HTTPS URL 注入认证 token。"""
+        """为 HTTPS URL 注入认证信息（token 或 username:password）。"""
+        from urllib.parse import quote
+
         token = token or os.environ.get("GIT_AUTH_TOKEN") or ""
-        if not token:
-            return repo_url
         if repo_url.startswith("https://"):
-            # https://github.com/... → https://token@github.com/...
-            return repo_url.replace("https://", f"https://{token}@", 1)
+            if token:
+                return repo_url.replace("https://", f"https://{token}@", 1)
+            elif username and password:
+                encoded_user = quote(username, safe="")
+                encoded_pass = quote(password, safe="")
+                return repo_url.replace(
+                    "https://", f"https://{encoded_user}:{encoded_pass}@", 1
+                )
         return repo_url
 
 

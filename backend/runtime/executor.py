@@ -6,6 +6,7 @@ AgentExecutor: 异步 Agent CLI 执行器
 """
 import asyncio
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import AsyncGenerator, Optional
@@ -15,6 +16,7 @@ from backend.runtime.cli_env import build_subprocess_env
 from backend.runtime.adapters import (
     AGENT_ADAPTERS,
     A2AAdapter,
+    _build_prompt_with_skills,
     approved_permission_mode,
     should_create_approval,
     try_parse_claude_result,
@@ -147,6 +149,18 @@ class AgentExecutor:
             else:
                 model = resolve_auto_model(model)
                 logger.info("[executor] task=%s resolved model 'auto' → %r", task_id, model)
+        # ── 解析 prompt 中的 /slug 标记并注入 Skills ──
+        if "# Active Skills" not in prompt:
+            _slug_pattern = r'(?:^|(?<=\s))/([a-z0-9](?:[a-z0-9\-]*[a-z0-9])?)'
+            _slug_matches = re.findall(_slug_pattern, prompt)
+            if _slug_matches:
+                try:
+                    prompt = await _build_prompt_with_skills(
+                        prompt, _slug_matches, "default", None
+                    )
+                except Exception as _e:  # noqa: BLE001
+                    logger.warning("[executor] _build_prompt_with_skills failed: %s", _e)
+
         # ── A2A 远程 Agent 路由 ──
         if agent_id and agent_id.startswith("a2a:"):
             async for ev in self._run_remote_a2a(

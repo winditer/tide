@@ -75,9 +75,11 @@ class ProjectCreate(BaseModel):
     repo_url: Optional[str] = None  # clone 模式必填
     branch: Optional[str] = None  # 可选指定分支
     tags: Optional[list[str]] = None
-    credential_type: Optional[str] = None  # ssh_agent | ssh_key | token
+    credential_type: Optional[str] = None  # ssh_agent | ssh_key | token | username_password
     ssh_key_path: Optional[str] = None
     access_token: Optional[str] = None
+    git_username: Optional[str] = None
+    git_password: Optional[str] = None
 
 
 def _parse_project_roots() -> list[str]:
@@ -618,6 +620,10 @@ async def create_project(
             git_config["ssh_key_path"] = body.ssh_key_path
         if body.credential_type == "token" and body.access_token:
             git_config["access_token"] = body.access_token
+        if body.credential_type == "username_password" and body.git_username:
+            git_config["git_username"] = body.git_username
+        if body.credential_type == "username_password" and body.git_password:
+            git_config["git_password"] = body.git_password
         try:
             settings = await work_item_service.get_project_settings(project_id)
             metadata = (settings or {}).get("metadata") or {}
@@ -883,11 +889,13 @@ async def remove_project_workflow(
 class GitConfigUpdate(BaseModel):
     repo_url: str = ""
     default_branch: str = "main"
-    # ssh_agent | ssh_key | token
-    credential_type: Literal["ssh_agent", "ssh_key", "token"] = "ssh_agent"
+    # ssh_agent | ssh_key | token | username_password
+    credential_type: Literal["ssh_agent", "ssh_key", "token", "username_password"] = "ssh_agent"
     auto_push: bool = True
     ssh_key_path: Optional[str] = None  # ssh_key 模式时的私钥路径
     access_token: Optional[str] = None  # token 模式时的 Personal Access Token
+    git_username: Optional[str] = None  # username_password 模式时的用户名
+    git_password: Optional[str] = None  # username_password 模式时的密码
 
 
 @router.put("/{project_id}/git-config")
@@ -914,6 +922,9 @@ async def set_project_git_config(
         git_config["ssh_key_path"] = None
     if cred_type != "token":
         git_config["access_token"] = None
+    if cred_type != "username_password":
+        git_config["git_username"] = None
+        git_config["git_password"] = None
     metadata["git_config"] = git_config
     await work_item_service.update_project_metadata(project_id, metadata)
     return {"ok": True, "git_config": git_config}

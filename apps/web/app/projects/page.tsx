@@ -474,9 +474,11 @@ function ProjectDialog({
   const [repoUrl, setRepoUrl] = useState("");
   const [branch, setBranch] = useState("");
   const [tagsRaw, setTagsRaw] = useState("");
-  const [credentialType, setCredentialType] = useState<"ssh_agent" | "ssh_key" | "token">("ssh_agent");
+  const [credentialType, setCredentialType] = useState<"ssh_agent" | "ssh_key" | "token" | "username_password">("ssh_agent");
   const [sshKeyPath, setSshKeyPath] = useState("");
   const [accessToken, setAccessToken] = useState("");
+  const [gitUsername, setGitUsername] = useState("");
+  const [gitPassword, setGitPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const title = mode === "new" ? "新建项目" : "添加已有项目";
@@ -517,6 +519,10 @@ function ProjectDialog({
         if (credentialType === "token" && accessToken.trim()) {
           input.access_token = accessToken.trim();
         }
+        if (credentialType === "username_password") {
+          if (gitUsername.trim()) input.git_username = gitUsername.trim();
+          if (gitPassword.trim()) input.git_password = gitPassword.trim();
+        }
       }
       await onSubmit(input);
     } catch (e) {
@@ -530,10 +536,10 @@ function ProjectDialog({
       onClick={onClose}
     >
       <div
-        className="relative w-full max-w-lg rounded-xl shadow-2xl border border-border/50 bg-card"
+        className="relative w-full max-w-lg max-h-[90vh] flex flex-col rounded-xl shadow-2xl border border-border/50 bg-card"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-border/50 px-5 py-3">
+        <div className="flex-shrink-0 flex items-center justify-between border-b border-border/50 px-5 py-3">
           <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
             {mode === "new" ? "NEW · PROJECT" : "CLONE · PROJECT"}
           </span>
@@ -544,7 +550,7 @@ function ProjectDialog({
             ✕
           </button>
         </div>
-        <div className="space-y-5 p-6">
+        <div className="flex-1 min-h-0 overflow-y-auto space-y-5 p-6">
           <div>
             <h2 className="text-xl font-semibold tracking-tight">{title}</h2>
             <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
@@ -583,17 +589,19 @@ function ProjectDialog({
               <Field label="认证方式">
                 <select
                   value={credentialType}
-                  onChange={(e) => setCredentialType(e.target.value as "ssh_agent" | "ssh_key" | "token")}
+                  onChange={(e) => setCredentialType(e.target.value as "ssh_agent" | "ssh_key" | "token" | "username_password")}
                   className="w-full rounded-lg border border-border/50 bg-background px-3 py-2 text-sm focus:ring-2 focus:ring-ring"
                 >
                   <option value="ssh_agent">SSH Agent（默认）</option>
                   <option value="ssh_key">SSH 私钥文件</option>
                   <option value="token">HTTPS Access Token</option>
+                  <option value="username_password">HTTPS 用户名+密码</option>
                 </select>
                 <p className="mt-1 text-[11px] text-muted-foreground">
                   {credentialType === "ssh_agent" && "使用宿主机上已加载的 ssh-agent，无需额外配置"}
                   {credentialType === "ssh_key" && "指定容器内可访问的 SSH 私钥文件路径"}
                   {credentialType === "token" && "使用 Git 平台的 Personal Access Token（HTTPS）"}
+                  {credentialType === "username_password" && "使用用户名和密码进行 HTTPS 认证（如 Azure DevOps）"}
                 </p>
               </Field>
 
@@ -603,7 +611,7 @@ function ProjectDialog({
                 const isSshUrl = url.startsWith("git@");
                 const isHttpUrl = url.startsWith("https://") || url.startsWith("http://");
                 const isSshAuth = credentialType === "ssh_agent" || credentialType === "ssh_key";
-                const isHttpAuth = credentialType === "token";
+                const isHttpAuth = credentialType === "token" || credentialType === "username_password";
 
                 if (isSshAuth && isHttpUrl) {
                   return (
@@ -644,6 +652,32 @@ function ProjectDialog({
                   />
                 </Field>
               )}
+
+              {credentialType === "username_password" && (
+                <>
+                  <Field label="用户名">
+                    <Input
+                      placeholder="user@example.com"
+                      value={gitUsername}
+                      onChange={(e) => setGitUsername(e.target.value)}
+                      className="rounded-lg border-border/50 focus:ring-2 focus:ring-ring font-mono text-sm"
+                    />
+                  </Field>
+                  <Field label="密码">
+                    <Input
+                      type="password"
+                      placeholder="输入密码"
+                      value={gitPassword}
+                      onChange={(e) => setGitPassword(e.target.value)}
+                      className="rounded-lg border-border/50 focus:ring-2 focus:ring-ring font-mono text-sm"
+                      autoComplete="new-password"
+                    />
+                    <span className="mt-1 block text-[11px] text-amber-600/80">
+                      凭据以明文形式存储于项目设置中，请注意安全风险。
+                    </span>
+                  </Field>
+                </>
+              )}
             </>
           )}
 
@@ -662,14 +696,14 @@ function ProjectDialog({
             </div>
           )}
 
-          <div className="flex justify-end gap-2 border-t border-border/50 pt-4">
-            <Button variant="outline" onClick={onClose}>
-              取消
-            </Button>
-            <Button disabled={isPending} onClick={submit}>
-              {isPending ? "保存中…" : mode === "new" ? "创建" : "克隆"}
-            </Button>
-          </div>
+        </div>
+        <div className="flex-shrink-0 flex justify-end gap-2 border-t border-border/50 px-6 py-4">
+          <Button variant="outline" onClick={onClose}>
+            取消
+          </Button>
+          <Button disabled={isPending} onClick={submit}>
+            {isPending ? "保存中…" : mode === "new" ? "创建" : "克隆"}
+          </Button>
         </div>
       </div>
     </div>

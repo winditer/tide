@@ -10,6 +10,7 @@ import {
   type ChangeEvent,
   type DragEvent,
 } from "react";
+import { SkillCommandPopover } from "../common/SkillCommandPopover";
 import {
   useAgents,
   useChat,
@@ -44,13 +45,14 @@ const MAX_W_VW = 0.9;
 const MAX_H_VH = 0.85;
 
 const IMAGE_RE = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
-const MAX_CHAT_IMAGES = 10;
-const MAX_CHAT_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB
+const MAX_CHAT_ATTACHMENTS = 10;
+const MAX_CHAT_ATTACHMENT_SIZE = 20 * 1024 * 1024; // 20MB
 
 interface PendingAttachment {
   id: string;
   file: File;
-  previewUrl: string;
+  previewUrl: string; // for images: object URL; for non-images: empty string
+  isImage: boolean;
 }
 
 function isImageFile(file: File): boolean {
@@ -122,6 +124,9 @@ export function FloatingChat() {
   const [imageUploadError, setImageUploadError] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const chatTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const [showSkillPopover, setShowSkillPopover] = useState(false);
+  const [skillQuery, setSkillQuery] = useState("");
 
   // hydrate
   useEffect(() => {
@@ -186,26 +191,27 @@ export function FloatingChat() {
   const addPendingFiles = useCallback(
     (files: FileList | File[] | null) => {
       if (!files) return;
-      const incoming = Array.from(files).filter(isImageFile);
-      if (!incoming.length) {
-        setImageUploadError("仅支持图片文件");
-        return;
-      }
-      const oversized = incoming.find((f) => f.size > MAX_CHAT_IMAGE_SIZE);
+      const incoming = Array.from(files);
+      if (!incoming.length) return;
+      const oversized = incoming.find((f) => f.size > MAX_CHAT_ATTACHMENT_SIZE);
       if (oversized) {
-        setImageUploadError(`图片 ${oversized.name} 超过 10MB 上限`);
+        setImageUploadError(`文件 ${oversized.name} 超过 20MB 上限`);
         return;
       }
-      if (pendingAttachments.length + incoming.length > MAX_CHAT_IMAGES) {
-        setImageUploadError(`最多上传 ${MAX_CHAT_IMAGES} 张图片`);
+      if (pendingAttachments.length + incoming.length > MAX_CHAT_ATTACHMENTS) {
+        setImageUploadError(`最多上传 ${MAX_CHAT_ATTACHMENTS} 个文件`);
         return;
       }
       setImageUploadError(null);
-      const newItems: PendingAttachment[] = incoming.map((file) => ({
-        id: genAttachmentId(),
-        file,
-        previewUrl: URL.createObjectURL(file),
-      }));
+      const newItems: PendingAttachment[] = incoming.map((file) => {
+        const img = isImageFile(file);
+        return {
+          id: genAttachmentId(),
+          file,
+          previewUrl: img ? URL.createObjectURL(file) : "",
+          isImage: img,
+        };
+      });
       setPendingAttachments((prev) => [...prev, ...newItems]);
     },
     [pendingAttachments.length]
@@ -214,7 +220,7 @@ export function FloatingChat() {
   const removePendingAttachment = useCallback((id: string) => {
     setPendingAttachments((prev) => {
       const target = prev.find((a) => a.id === id);
-      if (target) {
+      if (target && target.previewUrl) {
         URL.revokeObjectURL(target.previewUrl);
       }
       return prev.filter((a) => a.id !== id);
@@ -275,13 +281,15 @@ export function FloatingChat() {
         setIsUploadingImages(true);
         const files = pendingAttachments.map((a) => a.file);
         const res = await uploadTaskAttachments(files);
-        messageAttachments = files.map((file, idx) => ({
+        messageAttachments = pendingAttachments.map((att, idx) => ({
           id: genAttachmentId(),
           path: res.attachments[idx] ?? "",
-          name: file.name,
-          type: "image" as const,
+          name: att.file.name,
+          type: att.isImage ? ("image" as const) : ("file" as const),
         }));
-        pendingAttachments.forEach((a) => URL.revokeObjectURL(a.previewUrl));
+        pendingAttachments.forEach((a) => {
+          if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+        });
         setPendingAttachments([]);
         setIsUploadingImages(false);
       }
@@ -292,7 +300,7 @@ export function FloatingChat() {
         attachments: messageAttachments,
       });
     } catch (err) {
-      const errMsg = err instanceof Error ? err.message : "图片上传失败";
+      const errMsg = err instanceof Error ? err.message : "文件上传失败";
       setImageUploadError(errMsg);
     } finally {
       setIsUploadingImages(false);
@@ -302,18 +310,25 @@ export function FloatingChat() {
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (showSkillPopover && e.key === "Escape") {
+        e.preventDefault();
+        setShowSkillPopover(false);
+        return;
+      }
       if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         void handleSend();
       }
     },
-    [handleSend]
+    [handleSend, showSkillPopover]
   );
 
-  // 释放未发送图片的预览 URL
+  // 释放未发送附件的预览 URL
   useEffect(() => {
     return () => {
-      pendingAttachments.forEach((a) => URL.revokeObjectURL(a.previewUrl));
+      pendingAttachments.forEach((a) => {
+        if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+      });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -721,14 +736,39 @@ export function FloatingChat() {
                   {pendingAttachments.map((att) => (
                     <div
                       key={att.id}
-                      className="group relative h-8 w-8 shrink-0 overflow-hidden rounded border border-border/50 bg-muted"
+                      className="group relative shrink-0 overflow-hidden rounded border border-border/50 bg-muted"
                     >
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={att.previewUrl}
-                        alt="待发送图片"
-                        className="h-full w-full object-cover"
-                      />
+                      {att.isImage ? (
+                        <div className="h-8 w-8">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={att.previewUrl}
+                            alt="待发送图片"
+                            className="h-full w-full object-cover"
+                          />
+                        </div>
+                      ) : (
+                        <div className="flex h-8 items-center gap-1 px-1.5">
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="12"
+                            height="12"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            className="shrink-0 text-muted-foreground"
+                          >
+                            <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+                            <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+                          </svg>
+                          <span className="max-w-[80px] truncate text-[10px] text-muted-foreground">
+                            {att.file.name}
+                          </span>
+                        </div>
+                      )}
                       <button
                         type="button"
                         onClick={() => removePendingAttachment(att.id)}
@@ -757,18 +797,48 @@ export function FloatingChat() {
 
               <div className="flex items-end gap-1.5">
                 <div className="relative flex-1">
+                  {showSkillPopover && (
+                    <SkillCommandPopover
+                      open={showSkillPopover}
+                      query={skillQuery}
+                      projectId={projectCwd}
+                      onSelect={(skill) => {
+                        const caret = chatTextareaRef.current?.selectionStart ?? draftInput.length;
+                        const before = draftInput.slice(0, caret);
+                        const after = draftInput.slice(caret);
+                        const replaced = before.replace(/\/[a-z0-9\-]*$/i, `/${skill.slug} `);
+                        setDraftInput(replaced + after);
+                        setShowSkillPopover(false);
+                        chatTextareaRef.current?.focus();
+                      }}
+                      onClose={() => setShowSkillPopover(false)}
+                    />
+                  )}
                   <textarea
+                    ref={chatTextareaRef}
                     rows={2}
                     value={draftInput}
-                    onChange={(e) => setDraftInput(e.target.value)}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setDraftInput(value);
+                      const caret = e.target.selectionStart ?? value.length;
+                      const before = value.slice(0, caret);
+                      const match = before.match(/\/([a-z0-9\-]*)$/i);
+                      if (match) {
+                        setSkillQuery(match[1]);
+                        setShowSkillPopover(true);
+                      } else {
+                        setShowSkillPopover(false);
+                      }
+                    }}
                     onKeyDown={handleKeyDown}
                     onPaste={handlePaste}
                     placeholder={
                       selectedGroup
-                        ? `在项目组「${selectedGroup.name}」中执行... (⌘+Enter，可粘贴/拖拽图片)`
+                        ? `在项目组「${selectedGroup.name}」中执行... (⌘+Enter，可粘贴图片/拖拽文件)`
                         : selectedProject
-                          ? `在「${selectedProject.name}」中执行... (⌘+Enter，可粘贴/拖拽图片)`
-                          : "输入消息开始对话... (⌘+Enter，可粘贴/拖拽图片)"
+                          ? `在「${selectedProject.name}」中执行... (⌘+Enter，可粘贴图片/拖拽文件)`
+                          : "输入消息开始对话... (⌘+Enter，可粘贴图片/拖拽文件)"
                     }
                     className="min-h-[60px] max-h-[200px] w-full resize-y rounded-lg border-0 bg-muted/50 px-3 py-2 pr-10 text-sm leading-snug text-foreground placeholder:text-muted-foreground transition-shadow focus:outline-none focus:ring-2 focus:ring-ring"
                   />
@@ -782,7 +852,6 @@ export function FloatingChat() {
                 <input
                   ref={imageInputRef}
                   type="file"
-                  accept="image/*"
                   multiple
                   className="hidden"
                   onChange={handleImagePick}
@@ -792,7 +861,7 @@ export function FloatingChat() {
                   onClick={() => imageInputRef.current?.click()}
                   disabled={isUploadingImages || chat.isSending}
                   className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground transition-smooth hover:bg-muted/80 disabled:cursor-not-allowed disabled:opacity-50"
-                  title="发送图片"
+                  title="添加附件"
                 >
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
@@ -806,9 +875,7 @@ export function FloatingChat() {
                     strokeLinejoin="round"
                     aria-hidden="true"
                   >
-                    <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
-                    <circle cx="9" cy="9" r="2" />
-                    <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
+                    <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
                   </svg>
                 </button>
                 <button

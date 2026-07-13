@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 
 from backend.core.dependencies import (
-    check_project_write_permission,
+    check_project_write_permission_with_group,
     get_accessible_project_ids,
     get_optional_user,
 )
@@ -91,7 +91,7 @@ async def create_version(
 ):
     """创建版本。"""
     _ensure_not_viewer(current_user)
-    await check_project_write_permission(body.project_id, current_user)
+    await check_project_write_permission_with_group(body.project_id, current_user)
 
     name = (body.name or "").strip()
     if not name:
@@ -166,7 +166,7 @@ async def update_version(
             raise HTTPException(status_code=404, detail="Version not found")
 
         existing_dict = dict(existing._mapping)
-        await check_project_write_permission(
+        await check_project_write_permission_with_group(
             existing_dict.get("project_id"), current_user
         )
 
@@ -236,7 +236,7 @@ async def delete_version(
         if not existing:
             raise HTTPException(status_code=404, detail="Version not found")
 
-        await check_project_write_permission(existing[1], current_user)
+        await check_project_write_permission_with_group(existing[1], current_user)
 
         # 解关联工作项
         await session.execute(

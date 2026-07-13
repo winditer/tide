@@ -2,7 +2,7 @@
 
 
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
-import { Pencil, Trash2, AlertTriangle, GitMerge, GitBranch, Maximize2, Minimize2, CheckCircle2, ArrowRight, Clock, Image as ImageIcon, X, Link2, Check } from "lucide-react";
+import { Pencil, Trash2, AlertTriangle, GitMerge, GitBranch, Maximize2, Minimize2, CheckCircle2, ArrowRight, Clock, X, Link2, Check, Upload, FileText, Paperclip } from "lucide-react";
 import { Button, Badge, Input, Select } from "@tide/ui";
 import { AIOptimizeButton } from "./AIOptimizeButton";
 import { CommentThread } from "./CommentThread";
@@ -24,6 +24,8 @@ import {
   useWorkItemContext,
   useAddWorkItemContext,
   uploadWorkItemAttachments,
+  deleteWorkItemAttachment,
+  useDeleteWorkItemAttachment,
   appPath,
   type WorkItem,
   type WorkItemUpdate,
@@ -33,14 +35,15 @@ import {
   type Approval,
   type WorkItemAttachment,
 } from "@tide/core";
+import { useQueryClient } from "@tanstack/react-query";
 import { CrossRepoResults } from "./CrossRepoResults";
 import { MergeConflictPanel } from "../code-editor/MergeConflictPanel";
 
 const TERMINAL_STATUSES = new Set(["completed", "stopped"]);
 
 const EDIT_IMAGE_RE = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
-const MAX_EDIT_IMAGES = 10;
-const MAX_EDIT_IMAGE_SIZE = 10 * 1024 * 1024;
+const MAX_EDIT_ATTACHMENTS = 10;
+const MAX_EDIT_FILE_SIZE = 20 * 1024 * 1024; // 20MB
 
 interface EditPendingAttachment {
   id: string;
@@ -125,6 +128,7 @@ export function WorkItemDetailPanel({
   itemId,
   onClose,
 }: WorkItemDetailPanelProps) {
+  const queryClient = useQueryClient();
   const { data: item, isLoading } = useWorkItem(itemId);
   const { data: transitions } = useWorkItemTransitions(itemId);
   const { data: workflow } = useWorkflow(item?.workflow_id || "");
@@ -200,25 +204,22 @@ export function WorkItemDetailPanel({
   const addEditFiles = useCallback(
     (files: FileList | File[] | null) => {
       if (!files) return;
-      const incoming = Array.from(files).filter(isEditImageFile);
-      if (!incoming.length) {
-        setEditImageError("仅支持图片文件");
-        return;
-      }
-      const oversized = incoming.find((f) => f.size > MAX_EDIT_IMAGE_SIZE);
+      const incoming = Array.from(files);
+      if (!incoming.length) return;
+      const oversized = incoming.find((f) => f.size > MAX_EDIT_FILE_SIZE);
       if (oversized) {
-        setEditImageError(`图片 ${oversized.name} 超过 10MB 上限`);
+        setEditImageError(`文件 ${oversized.name} 超过 20MB 上限`);
         return;
       }
-      if (editPendingAttachments.length + incoming.length > MAX_EDIT_IMAGES) {
-        setEditImageError(`最多上传 ${MAX_EDIT_IMAGES} 张图片`);
+      if (editPendingAttachments.length + incoming.length > MAX_EDIT_ATTACHMENTS) {
+        setEditImageError(`最多上传 ${MAX_EDIT_ATTACHMENTS} 个文件`);
         return;
       }
       setEditImageError(null);
       const newItems: EditPendingAttachment[] = incoming.map((file) => ({
         id: genEditAttachmentId(),
         file,
-        previewUrl: URL.createObjectURL(file),
+        previewUrl: isEditImageFile(file) ? URL.createObjectURL(file) : "",
       }));
       setEditPendingAttachments((prev) => [...prev, ...newItems]);
     },
@@ -228,7 +229,7 @@ export function WorkItemDetailPanel({
   const removeEditAttachment = useCallback((id: string) => {
     setEditPendingAttachments((prev) => {
       const target = prev.find((a) => a.id === id);
-      if (target) URL.revokeObjectURL(target.previewUrl);
+      if (target && target.previewUrl) URL.revokeObjectURL(target.previewUrl);
       return prev.filter((a) => a.id !== id);
     });
   }, []);
@@ -260,18 +261,15 @@ export function WorkItemDetailPanel({
   const handleEditPaste = (e: React.ClipboardEvent<HTMLDivElement | HTMLTextAreaElement>) => {
     const files = e.clipboardData?.files;
     if (files && files.length > 0) {
-      const images = Array.from(files).filter(isEditImageFile);
-      if (images.length > 0) {
-        e.preventDefault();
-        addEditFiles(files);
-      }
+      e.preventDefault();
+      addEditFiles(files);
     }
   };
 
-  // 清理编辑图片 URL
+  // 清理编辑附件 URL
   useEffect(() => {
     return () => {
-      editPendingAttachments.forEach((a) => URL.revokeObjectURL(a.previewUrl));
+      editPendingAttachments.forEach((a) => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl); });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -293,10 +291,12 @@ export function WorkItemDetailPanel({
             item.id,
             editPendingAttachments.map((a) => a.file),
           );
-          editPendingAttachments.forEach((a) => URL.revokeObjectURL(a.previewUrl));
+          editPendingAttachments.forEach((a) => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl); });
           setEditPendingAttachments([]);
+          // 上传完成后刷新工作项数据以展示新附件
+          await queryClient.invalidateQueries({ queryKey: ["work-items"] });
         } catch (e) {
-          setEditImageError(e instanceof Error ? e.message : "图片上传失败");
+          setEditImageError(e instanceof Error ? e.message : "附件上传失败");
           setEditUploadingImages(false);
           return;
         } finally {
@@ -355,7 +355,7 @@ export function WorkItemDetailPanel({
                 onPaste={handleEditPaste}
                 rows={4}
                 className="w-full rounded-lg border-0 bg-muted/50 px-3 py-2 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                placeholder="描述（可粘贴图片）"
+                placeholder="描述（可粘贴文件）"
               />
               <AIOptimizeButton
                 description={editDescription}
@@ -365,11 +365,10 @@ export function WorkItemDetailPanel({
               />
             </div>
 
-            {/* 编辑模式图片附件上传 */}
+            {/* 编辑模式附件上传 */}
             <input
               ref={editImageInputRef}
               type="file"
-              accept="image/*"
               multiple
               className="hidden"
               onChange={handleEditImagePick}
@@ -377,7 +376,7 @@ export function WorkItemDetailPanel({
             <div
               tabIndex={0}
               role="button"
-              aria-label="编辑模式图片上传区域"
+              aria-label="编辑模式文件上传区域"
               onClick={() => editImageInputRef.current?.click()}
               onDragOver={handleEditDragOver}
               onDragLeave={handleEditDragLeave}
@@ -390,9 +389,9 @@ export function WorkItemDetailPanel({
                   : "border-border/60 bg-muted/30 hover:bg-muted/50")
               }
             >
-              <ImageIcon className="mx-auto h-4 w-4 text-muted-foreground" />
+              <Paperclip className="mx-auto h-4 w-4 text-muted-foreground" />
               <p className="mt-1 text-[11px] text-muted-foreground">
-                点击、拖拽或粘贴添加图片
+                点击、拖拽或粘贴添加文件
               </p>
             </div>
 
@@ -403,12 +402,18 @@ export function WorkItemDetailPanel({
                     key={att.id}
                     className="group relative h-8 w-8 overflow-hidden rounded border border-border/50 bg-muted"
                   >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={att.previewUrl}
-                      alt={att.file.name}
-                      className="h-full w-full object-cover"
-                    />
+                    {att.previewUrl ? (
+                      /* eslint-disable-next-line @next/next/no-img-element */
+                      <img
+                        src={att.previewUrl}
+                        alt={att.file.name}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center" title={att.file.name}>
+                        <FileText className="h-4 w-4 text-muted-foreground" />
+                      </div>
+                    )}
                     <button
                       type="button"
                       onClick={() => removeEditAttachment(att.id)}
@@ -440,7 +445,7 @@ export function WorkItemDetailPanel({
                 size="sm"
                 variant="outline"
                 onClick={() => {
-                  editPendingAttachments.forEach((a) => URL.revokeObjectURL(a.previewUrl));
+                  editPendingAttachments.forEach((a) => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl); });
                   setEditPendingAttachments([]);
                   setEditImageError(null);
                   setEditing(false);
@@ -485,8 +490,8 @@ export function WorkItemDetailPanel({
               </div>
             </div>
             {item.description && (
-              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                {item.description}
+              <p className="mt-2 text-sm leading-relaxed text-muted-foreground whitespace-pre-wrap break-words">
+                <LarkAwareText text={item.description} />
               </p>
             )}
 
@@ -580,16 +585,12 @@ export function WorkItemDetailPanel({
         {/* 产物 Artifacts */}
         <WorkItemArtifactsSection item={item} />
 
-        {item.flow_mode === "freeform" ? (
-          /* Freeform 模式：展示分配与共享上下文，替代工作流节点/流转历史 */
-          <WorkItemFreeformSection item={item} currentUserId={user?.id} />
-        ) : (
-          /* Transitions */
+        {/* 流转历史（仅工作流模式且有数据） */}
+        {item.flow_mode !== "freeform" && transitions && transitions.length > 0 && (
           <div>
           <div className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
             流转历史
           </div>
-          {transitions && transitions.length > 0 ? (
             <div className="space-y-2">
               {transitions.map((t: WorkItemTransition) => {
                 // 流转记录中可能包含关联任务（agent 节点会触发 task），
@@ -710,28 +711,26 @@ export function WorkItemDetailPanel({
                 );
               })}
             </div>
-          ) : (
-            <div className="rounded-lg border border-dashed border-border/60 bg-muted/20 px-4 py-6 text-center text-xs text-muted-foreground">
-              暂无流转记录
-            </div>
-          )}
           </div>
         )}
+
+        {/* 协作评论+共享上下文（所有模式） */}
+        <WorkItemCollaborationSection item={item} currentUserId={user?.id} />
       </div>
     </PanelShell>
   );
 }
 
-interface WorkItemFreeformSectionProps {
+interface WorkItemCollaborationSectionProps {
   item: WorkItem;
   currentUserId?: string;
 }
 
 /**
- * Freeform 模式下的协作区：评论线程（@mention 触发 Agent） + 共享上下文面板。
- * 评论替换了原分配面板，成为 freeform 模式的核心交互。
+ * 协作区：评论线程（@mention 触发 Agent） + 共享上下文面板。
+ * 评论是工作项的核心交互，所有模式通用。
  */
-function WorkItemFreeformSection({ item, currentUserId }: WorkItemFreeformSectionProps) {
+function WorkItemCollaborationSection({ item, currentUserId }: WorkItemCollaborationSectionProps) {
   const { data: contextEntries } = useWorkItemContext(item.id);
   const addContextMutation = useAddWorkItemContext();
 
@@ -775,14 +774,116 @@ function getAttachmentContentUrl(itemId: string, att: WorkItemAttachment): strin
   return `/api/work-items/${encodeURIComponent(itemId)}/attachments/${encodeURIComponent(att.id)}/content`;
 }
 
+const LARK_DOC_RE = /https?:\/\/[^/]*\.(feishu\.cn|larkoffice\.com|larksuite\.com)\/(docx|wiki|sheets|base|slides)\/([a-zA-Z0-9]+)/;
+
+/** Generic URL regex for splitting text into plain text + URL segments */
+const URL_RE = /https?:\/\/[^\s<>"'\]\)]+/g;
+
+/**
+ * Renders text with Lark document URLs highlighted with special styling.
+ * Non-Lark URLs are rendered as plain clickable links.
+ * Plain text is rendered as-is.
+ */
+function LarkAwareText({ text }: { text: string }) {
+  const segments: Array<{ type: "text" | "lark_url" | "url"; value: string }> = [];
+  let lastIndex = 0;
+  const urlRegex = new RegExp(URL_RE.source, "g");
+  let match: RegExpExecArray | null;
+
+  while ((match = urlRegex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      segments.push({ type: "text", value: text.slice(lastIndex, match.index) });
+    }
+    const url = match[0];
+    const { isLark } = detectLarkUrl(url);
+    segments.push({ type: isLark ? "lark_url" : "url", value: url });
+    lastIndex = urlRegex.lastIndex;
+  }
+  if (lastIndex < text.length) {
+    segments.push({ type: "text", value: text.slice(lastIndex) });
+  }
+
+  if (segments.length === 0) return <>{text}</>;
+
+  return (
+    <>
+      {segments.map((seg, i) => {
+        if (seg.type === "text") {
+          return <span key={i}>{seg.value}</span>;
+        }
+        if (seg.type === "lark_url") {
+          return (
+            <a
+              key={i}
+              href={seg.value}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400 hover:underline hover:text-blue-700 dark:hover:text-blue-300 transition-colors"
+            >
+              <LarkDocIcon />
+              <span>{seg.value}</span>
+              <span className="text-[10px] rounded bg-blue-50 dark:bg-blue-900/30 px-1 py-0.5 text-blue-600 dark:text-blue-400 font-medium">
+                飞书文档
+              </span>
+            </a>
+          );
+        }
+        // Regular URL
+        return (
+          <a
+            key={i}
+            href={seg.value}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-primary hover:underline transition-colors"
+          >
+            {seg.value}
+          </a>
+        );
+      })}
+    </>
+  );
+}
+
+function detectLarkUrl(url: string): { isLark: boolean; docToken?: string } {
+  const match = url.match(LARK_DOC_RE);
+  if (match) return { isLark: true, docToken: match[3] };
+  return { isLark: false };
+}
+
+function inferLabelFromUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    const parts = u.pathname.split("/").filter(Boolean);
+    if (parts.length > 0) return decodeURIComponent(parts[parts.length - 1]);
+    return u.hostname;
+  } catch {
+    return url.slice(0, 40);
+  }
+}
+
+function LarkDocIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="shrink-0">
+      <path d="M4 4h10l6 6v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4z" stroke="currentColor" strokeWidth="1.5" fill="none" />
+      <path d="M14 4v6h6" stroke="currentColor" strokeWidth="1.5" fill="none" />
+      <path d="M8 13h8M8 17h5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function WorkItemArtifactsSection({ item }: WorkItemArtifactsSectionProps) {
   const { user } = useAuth();
   const isViewer = user?.role === "viewer";
+  const isTerminal = TERMINAL_STATUSES.has(item.status || "");
+  const canEdit = !isViewer && !isTerminal;
   const addMutation = useAddArtifact();
-  const [showForm, setShowForm] = useState(false);
-  const [label, setLabel] = useState("");
-  const [url, setUrl] = useState("");
-  const [stage, setStage] = useState("");
+  const [showLinkForm, setShowLinkForm] = useState(false);
+  const [linkLabel, setLinkLabel] = useState("");
+  const [linkUrl, setLinkUrl] = useState("");
+  const [linkStage, setLinkStage] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const artifacts: WorkItemArtifact[] = (() => {
     const meta = item.metadata;
@@ -810,16 +911,74 @@ function WorkItemArtifactsSection({ item }: WorkItemArtifactsSectionProps) {
   );
   const groupedEntries = Object.entries(grouped);
 
-  const handleAdd = async () => {
-    if (!label.trim() || !url.trim()) return;
+  // Auto-detect Lark URL and set label
+  const handleLinkUrlChange = (value: string) => {
+    setLinkUrl(value);
+    if (value.trim() && !linkLabel.trim()) {
+      const { isLark } = detectLarkUrl(value.trim());
+      if (isLark) {
+        setLinkLabel("飞书文档");
+      }
+    }
+  };
+
+  const handleAddLink = async () => {
+    const trimmedUrl = linkUrl.trim();
+    const trimmedLabel = linkLabel.trim() || inferLabelFromUrl(trimmedUrl);
+    if (!trimmedUrl) return;
+
+    const { isLark } = detectLarkUrl(trimmedUrl);
+    const type = isLark ? "lark_doc" : "link";
+
     await addMutation.mutateAsync({
       workItemId: item.id,
-      data: { label: label.trim(), url: url.trim(), stage: stage.trim() },
+      data: {
+        label: trimmedLabel,
+        url: trimmedUrl,
+        stage: linkStage.trim() || undefined,
+        type,
+      },
     });
-    setLabel("");
-    setUrl("");
-    setStage("");
-    setShowForm(false);
+    setLinkLabel("");
+    setLinkUrl("");
+    setLinkStage("");
+    setShowLinkForm(false);
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    setUploading(true);
+    try {
+      const res = await uploadWorkItemAttachments(item.id, Array.from(files));
+      // Add each uploaded file as a "file" type artifact
+      for (const att of res.attachments) {
+        const fileUrl = `/api/work-items/${encodeURIComponent(item.id)}/attachments/${encodeURIComponent(att.id)}/content`;
+        await addMutation.mutateAsync({
+          workItemId: item.id,
+          data: {
+            label: att.name || att.path || "文件",
+            url: fileUrl,
+            type: "file",
+          },
+        });
+      }
+    } catch {
+      // error handled by mutation
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const getArtifactIcon = (artifact: WorkItemArtifact) => {
+    if (artifact.type === "lark_doc") {
+      return <LarkDocIcon />;
+    }
+    if (artifact.type === "file") {
+      return <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />;
+    }
+    return <span className="text-xs text-muted-foreground">•</span>;
   };
 
   return (
@@ -828,40 +987,63 @@ function WorkItemArtifactsSection({ item }: WorkItemArtifactsSectionProps) {
         <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
           产物
         </div>
-        {!isViewer && (
-          <button
-            onClick={() => setShowForm(!showForm)}
-            className="text-xs font-medium text-primary hover:text-primary/80 transition-smooth"
-          >
-            {showForm ? "取消" : "+ 添加"}
-          </button>
+        {canEdit && (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowLinkForm(!showLinkForm)}
+              className="flex items-center gap-1 text-xs font-medium text-primary hover:text-primary/80 transition-smooth"
+            >
+              <Link2 className="h-3 w-3" />
+              {showLinkForm ? "取消" : "添加链接"}
+            </button>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              className="flex items-center gap-1 text-xs font-medium text-primary hover:text-primary/80 transition-smooth disabled:opacity-50"
+            >
+              <Upload className="h-3 w-3" />
+              {uploading ? "上传中…" : "上传文件"}
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={handleFileUpload}
+            />
+          </div>
         )}
       </div>
 
-      {showForm && (
+      {showLinkForm && (
         <div className="mb-3 space-y-2 rounded-lg border border-border/50 bg-muted/30 p-3">
           <Input
-            value={label}
-            onChange={(e) => setLabel(e.target.value)}
-            placeholder="产物名称"
+            value={linkUrl}
+            onChange={(e) => handleLinkUrlChange(e.target.value)}
+            placeholder="链接地址 (支持飞书文档链接)"
+            className="h-8 text-sm"
+          />
+          {linkUrl.trim() && detectLarkUrl(linkUrl.trim()).isLark && (
+            <p className="text-[11px] text-green-600 flex items-center gap-1">
+              <LarkDocIcon /> 已识别为飞书文档
+            </p>
+          )}
+          <Input
+            value={linkLabel}
+            onChange={(e) => setLinkLabel(e.target.value)}
+            placeholder="显示名称（可选，自动推断）"
             className="h-8 text-sm"
           />
           <Input
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="链接地址 (https://...)"
-            className="h-8 text-sm"
-          />
-          <Input
-            value={stage}
-            onChange={(e) => setStage(e.target.value)}
+            value={linkStage}
+            onChange={(e) => setLinkStage(e.target.value)}
             placeholder="阶段名称（可选）"
             className="h-8 text-sm"
           />
           <Button
             size="sm"
-            onClick={handleAdd}
-            disabled={!label.trim() || !url.trim() || addMutation.isPending}
+            onClick={handleAddLink}
+            disabled={!linkUrl.trim() || addMutation.isPending}
           >
             {addMutation.isPending ? "添加中…" : "确认添加"}
           </Button>
@@ -883,15 +1065,24 @@ function WorkItemArtifactsSection({ item }: WorkItemArtifactsSectionProps) {
                     key={artifact.id}
                     className="group flex items-center gap-2 rounded-md px-2 py-1 transition-smooth hover:bg-muted/50"
                   >
-                    <span className="text-xs text-muted-foreground">•</span>
+                    {getArtifactIcon(artifact)}
                     <a
-                      href={appPath(artifact.url)}
+                      href={artifact.type === "lark_doc" ? artifact.url : appPath(artifact.url)}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="flex-1 truncate text-sm text-primary hover:underline"
+                      className={`flex-1 truncate text-sm hover:underline ${
+                        artifact.type === "lark_doc"
+                          ? "text-blue-600 dark:text-blue-400"
+                          : "text-primary"
+                      }`}
                     >
                       {artifact.label}
                     </a>
+                    {artifact.type === "lark_doc" && (
+                      <span className="text-[10px] rounded bg-blue-50 dark:bg-blue-900/30 px-1 py-0.5 text-blue-600 dark:text-blue-400">
+                        飞书
+                      </span>
+                    )}
                   </div>
                 ))}
               </div>
@@ -917,6 +1108,11 @@ interface WorkItemAttachmentsSectionProps {
 
 function WorkItemAttachmentsSection({ item }: WorkItemAttachmentsSectionProps) {
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const { user } = useAuth();
+  const isViewer = user?.role === "viewer";
+  const isTerminal = TERMINAL_STATUSES.has(item.status || "");
+  const canDelete = !isViewer && !isTerminal;
+  const deleteMutation = useDeleteWorkItemAttachment();
 
   const attachments: WorkItemAttachment[] = (() => {
     const meta = item.metadata;
@@ -928,6 +1124,11 @@ function WorkItemAttachmentsSection({ item }: WorkItemAttachmentsSectionProps) {
 
   const images = attachments.filter(isImageAttachment);
   const files = attachments.filter((a) => !isImageAttachment(a));
+
+  const handleDelete = (attId: string, attName: string) => {
+    if (!confirm(`确定删除附件「${attName}」？`)) return;
+    deleteMutation.mutate({ workItemId: item.id, attachmentId: attId });
+  };
 
   useEffect(() => {
     if (!lightboxUrl) return;
@@ -945,7 +1146,7 @@ function WorkItemAttachmentsSection({ item }: WorkItemAttachmentsSectionProps) {
   return (
     <div>
       <div className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-        图片附件
+        附件
       </div>
 
       {images.length > 0 && (
@@ -953,23 +1154,35 @@ function WorkItemAttachmentsSection({ item }: WorkItemAttachmentsSectionProps) {
           {images.map((att) => {
             const url = getAttachmentContentUrl(item.id, att);
             return (
-              <button
-                key={att.id}
-                type="button"
-                onClick={() => setLightboxUrl(url)}
-                className="group relative h-12 w-12 overflow-hidden rounded border border-border/50 bg-muted transition-smooth hover:border-primary/40"
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={url}
-                  alt={att.name}
-                  className="h-full w-full object-cover"
-                  loading="lazy"
-                />
-                <span className="absolute inset-0 flex items-center justify-center bg-black/50 text-[8px] text-white opacity-0 transition-opacity group-hover:opacity-100">
-                  查看
-                </span>
-              </button>
+              <div key={att.id} className="group relative h-12 w-12">
+                <button
+                  type="button"
+                  onClick={() => setLightboxUrl(url)}
+                  className="h-full w-full overflow-hidden rounded border border-border/50 bg-muted transition-smooth hover:border-primary/40"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={url}
+                    alt={att.name}
+                    className="h-full w-full object-cover"
+                    loading="lazy"
+                  />
+                  <span className="absolute inset-0 flex items-center justify-center bg-black/50 text-[8px] text-white opacity-0 transition-opacity group-hover:opacity-100">
+                    查看
+                  </span>
+                </button>
+                {canDelete && (
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(att.id, att.name)}
+                    className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-destructive/90"
+                    aria-label="删除"
+                    title="删除附件"
+                  >
+                    <X className="h-2.5 w-2.5" />
+                  </button>
+                )}
+              </div>
             );
           })}
         </div>
@@ -980,16 +1193,28 @@ function WorkItemAttachmentsSection({ item }: WorkItemAttachmentsSectionProps) {
           {files.map((att) => {
             const url = getAttachmentContentUrl(item.id, att);
             return (
-              <a
-                key={att.id}
-                href={url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 rounded-md border border-border/50 bg-muted/30 px-2.5 py-1.5 text-xs text-foreground transition-smooth hover:bg-muted/50"
-              >
-                <ImageIcon className="h-3.5 w-3.5 text-muted-foreground" />
-                <span className="max-w-[160px] truncate">{att.name}</span>
-              </a>
+              <div key={att.id} className="group relative inline-flex items-center gap-1.5 rounded-md border border-border/50 bg-muted/30 px-2.5 py-1.5 text-xs text-foreground transition-smooth hover:bg-muted/50">
+                <a
+                  href={url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5"
+                >
+                  <FileText className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span className="max-w-[160px] truncate">{att.name}</span>
+                </a>
+                {canDelete && (
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(att.id, att.name)}
+                    className="ml-1 flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive"
+                    aria-label="删除"
+                    title="删除附件"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+              </div>
             );
           })}
         </div>

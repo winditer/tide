@@ -92,6 +92,61 @@ async def check_project_write_permission(
         )
 
 
+async def check_project_write_permission_with_group(
+    project_id: Optional[str],
+    current_user: Optional[dict],
+) -> None:
+    """检查用户对指定项目是否有写权限（含项目组兜底）。
+
+    在 ``check_project_write_permission`` 基础上，增加项目组admin/owner/member兜底：
+    当用户在项目级角色为 viewer 被拒绝时，若该用户在包含此项目的任一项目组中
+    拥有 owner 或 member 角色，则仍然放行。
+    """
+    if not current_user:
+        return
+    if current_user.get("role") == "admin":
+        return
+    if not project_id:
+        return
+
+    # 先查项目级角色
+    async with async_session_factory() as session:
+        result = await session.execute(
+            text(
+                "SELECT role FROM project_members"
+                " WHERE project_id = :pid AND user_id = :uid LIMIT 1"
+            ),
+            {"pid": project_id, "uid": current_user["id"]},
+        )
+        row = result.fetchone()
+
+    # 非 viewer 或无记录 → 放行
+    if not row or row[0] != "viewer":
+        return
+
+    # viewer 被拒绝前，检查项目组兜底
+    async with async_session_factory() as session:
+        result = await session.execute(
+            text(
+                "SELECT pgum.role FROM project_group_user_members pgum"
+                " JOIN project_group_members pgm ON pgm.group_id = pgum.group_id"
+                " WHERE pgm.project_id = :pid AND pgum.user_id = :uid"
+                " LIMIT 1"
+            ),
+            {"pid": project_id, "uid": current_user["id"]},
+        )
+        group_row = result.fetchone()
+
+    # 项目组 owner/member → 放行；viewer 或无记录 → 拒绝
+    if group_row and group_row[0] in ("owner", "member"):
+        return
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Viewer role has read-only access",
+    )
+
+
 async def check_cwd_write_permission(
     cwd: Optional[str],
     current_user: Optional[dict],

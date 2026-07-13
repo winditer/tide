@@ -9,6 +9,7 @@ import {
   type ChangeEvent,
   type DragEvent,
 } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Button, Input, Select, type SelectOptionGroup } from "@tide/ui";
 import {
   useCreateWorkItem,
@@ -20,7 +21,7 @@ import {
   uploadWorkItemAttachments,
 } from "@tide/core";
 import { AIOptimizeButton } from "./AIOptimizeButton";
-import { ImagePlus, X } from "lucide-react";
+import { Paperclip, X, FileText } from "lucide-react";
 
 interface WorkItemCreateDialogProps {
   /**
@@ -52,17 +53,17 @@ const SCOPE_PROJECT_PREFIX = "project:";
 const SCOPE_GROUP_PREFIX = "group:";
 
 const IMAGE_RE = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
-const MAX_WI_IMAGES = 10;
-const MAX_WI_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB
+const MAX_WI_ATTACHMENTS = 10;
+const MAX_WI_FILE_SIZE = 20 * 1024 * 1024; // 20MB
+
+function isImageFile(file: File): boolean {
+  return file.type.startsWith("image/") || IMAGE_RE.test(file.name);
+}
 
 interface PendingAttachment {
   id: string;
   file: File;
   previewUrl: string;
-}
-
-function isImageFile(file: File): boolean {
-  return file.type.startsWith("image/") || IMAGE_RE.test(file.name);
 }
 
 function genAttachmentId(): string {
@@ -86,6 +87,7 @@ export function WorkItemCreateDialog({
   onClose,
   onSuccess,
 }: WorkItemCreateDialogProps) {
+  const queryClient = useQueryClient();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState("0");
@@ -192,25 +194,22 @@ export function WorkItemCreateDialog({
   const addPendingFiles = useCallback(
     (files: FileList | File[] | null) => {
       if (!files) return;
-      const incoming = Array.from(files).filter(isImageFile);
-      if (!incoming.length) {
-        setImageError("仅支持图片文件");
-        return;
-      }
-      const oversized = incoming.find((f) => f.size > MAX_WI_IMAGE_SIZE);
+      const incoming = Array.from(files);
+      if (!incoming.length) return;
+      const oversized = incoming.find((f) => f.size > MAX_WI_FILE_SIZE);
       if (oversized) {
-        setImageError(`图片 ${oversized.name} 超过 10MB 上限`);
+        setImageError(`文件 ${oversized.name} 超过 20MB 上限`);
         return;
       }
-      if (pendingAttachments.length + incoming.length > MAX_WI_IMAGES) {
-        setImageError(`最多上传 ${MAX_WI_IMAGES} 张图片`);
+      if (pendingAttachments.length + incoming.length > MAX_WI_ATTACHMENTS) {
+        setImageError(`最多上传 ${MAX_WI_ATTACHMENTS} 个文件`);
         return;
       }
       setImageError(null);
       const newItems: PendingAttachment[] = incoming.map((file) => ({
         id: genAttachmentId(),
         file,
-        previewUrl: URL.createObjectURL(file),
+        previewUrl: isImageFile(file) ? URL.createObjectURL(file) : "",
       }));
       setPendingAttachments((prev) => [...prev, ...newItems]);
     },
@@ -220,7 +219,7 @@ export function WorkItemCreateDialog({
   const removePendingAttachment = useCallback((id: string) => {
     setPendingAttachments((prev) => {
       const target = prev.find((a) => a.id === id);
-      if (target) URL.revokeObjectURL(target.previewUrl);
+      if (target && target.previewUrl) URL.revokeObjectURL(target.previewUrl);
       return prev.filter((a) => a.id !== id);
     });
   }, []);
@@ -252,11 +251,8 @@ export function WorkItemCreateDialog({
   const handlePaste = (e: React.ClipboardEvent<HTMLDivElement | HTMLTextAreaElement>) => {
     const files = e.clipboardData?.files;
     if (files && files.length > 0) {
-      const images = Array.from(files).filter(isImageFile);
-      if (images.length > 0) {
-        e.preventDefault();
-        addPendingFiles(files);
-      }
+      e.preventDefault();
+      addPendingFiles(files);
     }
   };
 
@@ -321,10 +317,12 @@ export function WorkItemCreateDialog({
             item.id,
             pendingAttachments.map((a) => a.file),
           );
-          pendingAttachments.forEach((a) => URL.revokeObjectURL(a.previewUrl));
+          pendingAttachments.forEach((a) => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl); });
           setPendingAttachments([]);
+          // 上传完成后刷新工作项数据以展示新附件
+          await queryClient.invalidateQueries({ queryKey: ["work-items"] });
         } catch (e) {
-          setImageError(e instanceof Error ? e.message : "图片上传失败");
+          setImageError(e instanceof Error ? e.message : "附件上传失败");
           setIsUploadingImages(false);
           // 工作项已创建，仍触发 onSuccess 但保留弹窗让用户看到错误
           onSuccess?.();
@@ -407,7 +405,7 @@ export function WorkItemCreateDialog({
           <Field label="描述">
             <div className="relative">
               <textarea
-                placeholder="可选的详细描述（可粘贴图片）"
+                placeholder="可选的详细描述（可粘贴文件）"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 onPaste={handlePaste}
@@ -422,11 +420,10 @@ export function WorkItemCreateDialog({
               />
             </div>
 
-            {/* 图片附件上传紧靠描述区域 */}
+            {/* 附件上传紧靠描述区域 */}
             <input
               ref={imageInputRef}
               type="file"
-              accept="image/*"
               multiple
               className="hidden"
               onChange={handleImagePick}
@@ -434,7 +431,7 @@ export function WorkItemCreateDialog({
             <div
               tabIndex={0}
               role="button"
-              aria-label="图片上传区域，支持点击、拖拽或粘贴"
+              aria-label="文件上传区域，支持点击、拖拽或粘贴"
               onClick={() => imageInputRef.current?.click()}
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}
@@ -447,9 +444,9 @@ export function WorkItemCreateDialog({
                   : "border-border/60 bg-muted/30 hover:bg-muted/50")
               }
             >
-              <ImagePlus className="mx-auto h-4 w-4 text-muted-foreground" />
+              <Paperclip className="mx-auto h-4 w-4 text-muted-foreground" />
               <p className="mt-1 text-[11px] text-muted-foreground">
-                点击、拖拽或粘贴上传图片，最多 {MAX_WI_IMAGES} 张，单张 ≤10MB
+                点击、拖拽或粘贴上传文件，最多 {MAX_WI_ATTACHMENTS} 个，单个 ≤20MB
               </p>
             </div>
 
@@ -460,12 +457,18 @@ export function WorkItemCreateDialog({
                     key={att.id}
                     className="group relative h-8 w-8 overflow-hidden rounded border border-border/50 bg-muted"
                   >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={att.previewUrl}
-                      alt={att.file.name}
-                      className="h-full w-full object-cover"
-                    />
+                    {att.previewUrl ? (
+                      /* eslint-disable-next-line @next/next/no-img-element */
+                      <img
+                        src={att.previewUrl}
+                        alt={att.file.name}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center" title={att.file.name}>
+                        <FileText className="h-4 w-4 text-muted-foreground" />
+                      </div>
+                    )}
                     <button
                       type="button"
                       onClick={() => removePendingAttachment(att.id)}

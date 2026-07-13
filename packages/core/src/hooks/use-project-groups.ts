@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addGroupMember,
+  createGroupBranch,
+  createGroupVersion,
   createProjectGroup,
   deleteGroupWorkflow,
   deleteProjectGroup,
@@ -250,6 +252,20 @@ export function useGroupBranches(groupId: string | undefined) {
   });
 }
 
+/**
+ * 为项目组内子项目创建分支 mutation。
+ */
+export function useCreateGroupBranch(groupId: string | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ branchName, startPoint, projectIds }: { branchName: string; startPoint?: string; projectIds?: string[] }) =>
+      createGroupBranch(groupId!, branchName, startPoint, projectIds),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["project-group", groupId, "branches"] });
+    },
+  });
+}
+
 export function useGroupCommits(
   groupId: string | undefined,
   params?: { since?: string; until?: string; limit?: number },
@@ -269,5 +285,19 @@ export function useGroupChanges(
     queryKey: groupChangesKey(groupId ?? "", params),
     queryFn: () => getGroupChanges(groupId as string, params),
     enabled: !!groupId,
+  });
+}
+
+/**
+ * 为项目组内子项目创建同名版本 mutation。
+ */
+export function useCreateGroupVersion(groupId: string | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ name, description, projectIds }: { name: string; description?: string; projectIds?: string[] }) =>
+      createGroupVersion(groupId!, name, description, projectIds),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["project-group", groupId, "versions"] });
+    },
   });
 }

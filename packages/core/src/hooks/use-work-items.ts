@@ -23,6 +23,7 @@ import {
   setGlobalFreeformStatus,
   addArtifact,
   removeArtifact,
+  deleteWorkItemAttachment,
   aiDecomposeWorkItems,
   batchCreateWorkItems,
   resolveMerge,
@@ -248,8 +249,25 @@ export function useAddArtifact() {
       data,
     }: {
       workItemId: string;
-      data: { label: string; url: string; stage?: string };
+      data: { label: string; url: string; stage?: string; type?: string };
     }) => addArtifact(workItemId, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["work-items"] });
+    },
+  });
+}
+
+/** 删除工作项附件 */
+export function useDeleteWorkItemAttachment() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      workItemId,
+      attachmentId,
+    }: {
+      workItemId: string;
+      attachmentId: string;
+    }) => deleteWorkItemAttachment(workItemId, attachmentId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["work-items"] });
     },
@@ -416,11 +434,13 @@ export function useCreateWorkItemComment() {
       workItemId,
       content,
       mentions,
+      skills,
     }: {
       workItemId: string;
       content: string;
       mentions?: MentionItem[];
-    }) => createWorkItemComment(workItemId, { content, mentions }),
+      skills?: {slug: string, name: string}[];
+    }) => createWorkItemComment(workItemId, { content, mentions, skills }),
     onSuccess: (_data, { workItemId }) => {
       queryClient.invalidateQueries({ queryKey: ["work-items", "comments", workItemId] });
     },

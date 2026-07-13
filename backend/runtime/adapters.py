@@ -878,10 +878,10 @@ class AgentAdapter:
         return session_id if agent_id == self.id else value
 
     def prepare_attachments(self, task: CodexTaskRuntime) -> None:
-        """把任务 attachments 中的图片附件复制到 cwd，并在 prompt 顶部追加引用说明。
+        """把任务 attachments 中的附件复制到 cwd，并在 prompt 顶部追加引用说明。
 
-        仅处理本地存在的图片类附件；复制失败时记录 warning 并跳过。
-        如果 prompt 中已存在 ``## 附件图片`` 标记，则不再重复注入。
+        处理所有本地存在的附件文件；复制失败时记录 warning 并跳过。
+        如果 prompt 中已存在 ``## 附件文件`` 标记，则不再重复注入。
         """
         attachments = getattr(task, "attachments", None) or []
         if not attachments:
@@ -907,9 +907,6 @@ class AgentAdapter:
             if not src_path.exists() or not src_path.is_file():
                 logger.warning("Task attachment not found: %s", src)
                 continue
-            is_image = att_type == "image" or src_path.suffix.lower() in image_suffixes
-            if not is_image:
-                continue
             dst = cwd / src_path.name
             if dst.exists():
                 stem, suffix = dst.stem, dst.suffix
@@ -926,10 +923,10 @@ class AgentAdapter:
                     "Failed to copy task attachment %s to %s: %s", src, cwd, exc
                 )
 
-        if copied and "## 附件图片" not in (task.prompt or ""):
+        if copied and "## 附件文件" not in (task.prompt or ""):
             task.prompt = (
-                "## 附件图片\n"
-                "以下图片已复制到当前工作目录，请按需读取并参考：\n"
+                "## 附件文件\n"
+                "以下文件已复制到当前工作目录，请按需读取并参考：\n"
                 + "\n".join(f"- ./{p}" for p in copied)
                 + "\n\n---\n\n"
                 + (task.prompt or "")

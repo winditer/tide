@@ -19,12 +19,13 @@ import { AtSign, Send, Users, Bot, Clock } from "lucide-react";
 import { Button } from "@tide/ui";
 import { apiClient, useProjectMembers, useWorkItemComments } from "@tide/core";
 import type { MentionItem } from "@tide/core";
+import { SkillCommandPopover } from "../common/SkillCommandPopover";
 
 export interface MentionInputProps {
   projectId?: string;
   /** 当前工作项 id，用于「历史协作过的对象优先」排序 */
   workItemId?: string;
-  onSubmit: (content: string, mentions: MentionItem[]) => void;
+  onSubmit: (content: string, mentions: MentionItem[], skills?: {slug: string, name: string}[]) => void;
   placeholder?: string;
   submitting?: boolean;
 }
@@ -152,6 +153,9 @@ export function MentionInput({
   const [recent, setRecent] = useState<RecentEntry[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [showSkillPopover, setShowSkillPopover] = useState(false);
+  const [skillQuery, setSkillQuery] = useState("");
+  const [pickedSkills, setPickedSkills] = useState<{slug: string, name: string}[]>([]);
 
   const { data: membersResp } = useProjectMembers(projectId);
   const { data: commentsData } = useWorkItemComments(workItemId);
@@ -282,12 +286,21 @@ export function MentionInput({
     setText(value);
     const caret = textareaRef.current?.selectionStart ?? value.length;
     const before = value.slice(0, caret);
-    const match = before.match(/@([^\s@]*)$/);
-    if (match) {
-      setQuery(match[1]);
+
+    const mentionMatch = before.match(/@([^\s@]*)$/);
+    const skillMatch = before.match(/\/([a-z0-9\-]*)$/i);
+
+    if (mentionMatch) {
+      setQuery(mentionMatch[1]);
       setShowDropdown(true);
+      setShowSkillPopover(false);
+    } else if (skillMatch) {
+      setSkillQuery(skillMatch[1]);
+      setShowSkillPopover(true);
+      setShowDropdown(false);
     } else {
       setShowDropdown(false);
+      setShowSkillPopover(false);
     }
   };
 
@@ -314,7 +327,29 @@ export function MentionInput({
     textareaRef.current?.focus();
   };
 
+  const handleSkillSelect = (skill: {slug: string, name: string}) => {
+    const caret = textareaRef.current?.selectionStart ?? text.length;
+    const before = text.slice(0, caret);
+    const after = text.slice(caret);
+    const replaced = before.replace(/\/[a-z0-9\-]*$/i, `/${skill.slug} `);
+    setText(replaced + after);
+    setShowSkillPopover(false);
+    setSkillQuery("");
+    setPickedSkills(prev =>
+      prev.some(s => s.slug === skill.slug) ? prev : [...prev, skill]
+    );
+    textareaRef.current?.focus();
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (showSkillPopover) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setShowSkillPopover(false);
+        return;
+      }
+      // SkillCommandPopover internally handles other keyboard events
+    }
     if (showDropdown && flatItems.length > 0) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -349,16 +384,29 @@ export function MentionInput({
     if (!content || submitting) return;
     // 仅保留仍出现在文本中的 mention
     const mentions = picked.filter((m) => m.name && content.includes(`@${m.name}`));
-    onSubmit(content, mentions);
+    const skills = pickedSkills.filter(s => content.includes(`/${s.slug}`));
+    onSubmit(content, mentions, skills);
     setText("");
     setPicked([]);
+    setPickedSkills([]);
     setShowDropdown(false);
+    setShowSkillPopover(false);
   };
 
   const dropdownVisible = showDropdown && flatItems.length > 0;
 
   return (
     <div className="relative">
+      {showSkillPopover && (
+        <SkillCommandPopover
+          open={showSkillPopover}
+          query={skillQuery}
+          projectId={projectId}
+          onSelect={handleSkillSelect}
+          onClose={() => setShowSkillPopover(false)}
+        />
+      )}
+
       {dropdownVisible && (
         <div className="absolute bottom-full left-0 z-20 mb-1 max-h-72 w-72 overflow-auto rounded-lg border border-border/60 bg-popover p-1 shadow-lg">
           {(() => {
@@ -413,7 +461,7 @@ export function MentionInput({
         <div className="flex items-center justify-between border-t border-border/40 px-2 py-1.5">
           <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
             <AtSign className="h-3 w-3" />
-            @ 提及 Agent / 专家团触发执行 · ⌘/Ctrl+Enter 发送
+            @ 提及 Agent / 专家团 · / 调用技能 · ⌘/Ctrl+Enter 发送
           </span>
           <Button
             size="sm"

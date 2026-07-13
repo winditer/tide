@@ -756,6 +756,48 @@ def build_simple_notice_card(
     return base_card(title, elements, template)
 
 
+def build_mention_notification_card(
+    actor_name: str,
+    work_item_title: str,
+    comment_content: str,
+    work_item_url: str,
+    project_name: str = "",
+) -> dict[str, Any]:
+    """评论@提及通知卡片（MD格式）。"""
+    content_parts = [
+        f"**{actor_name}** 在工作项「{work_item_title}」中提到了您",
+    ]
+    if comment_content:
+        # 截断200字
+        truncated = comment_content[:200]
+        if len(comment_content) > 200:
+            truncated += "..."
+        content_parts.append(f"\n> {truncated}")
+    if project_name:
+        content_parts.append(f"\n📋 项目：{project_name}")
+    content_parts.append(f"\n🔗 [查看工作项]({work_item_url})")
+
+    md_content = "\n".join(content_parts)
+
+    elements: list[dict[str, Any]] = [md(md_content)]
+    # 添加"打开工作项"按钮
+    if work_item_url:
+        elements.append(
+            {
+                "tag": "action",
+                "actions": [
+                    {
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": "打开工作项"},
+                        "type": "primary",
+                        "url": work_item_url,
+                    }
+                ],
+            }
+        )
+    return base_card("💬 有人在工作项中提到了您", elements, "blue")
+
+
 # ---------- Plan 卡片 ----------
 
 

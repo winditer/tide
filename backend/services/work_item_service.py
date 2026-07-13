@@ -89,9 +89,9 @@ def _doc_naming_instruction(item_id: str, title: str = "", project_name: str = "
 
 
 def _copy_work_item_attachments(item: dict, cwd: str) -> list[str]:
-    """把工作项 metadata.attachments 中的图片附件复制到 cwd，返回相对路径列表。
+    """把工作项 metadata.attachments 中的附件复制到 cwd，返回相对路径列表。
 
-    仅复制 type == image 的附件；复制失败时记录 warning 并跳过。
+    复制所有类型附件（图片、文档、PDF等）；复制失败时记录 warning 并跳过。
     """
     metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
     attachments = metadata.get("attachments") if isinstance(metadata.get("attachments"), list) else []
@@ -104,8 +104,6 @@ def _copy_work_item_attachments(item: dict, cwd: str) -> list[str]:
 
     for att in attachments:
         if not isinstance(att, dict):
-            continue
-        if att.get("type") != "image":
             continue
         src = (att.get("path") or "").strip()
         if not src:
@@ -1550,15 +1548,36 @@ class WorkItemService:
             # 添加自动执行系统指令前缀 + 文档命名规范
             prompt = AUTO_EXEC_PREFIX + prompt + _doc_naming_instruction(item["id"], title=item.get("title", ""))
 
-            # 复制工作项图片附件到工作目录，并在 prompt 中提示 Agent 读取
+            # 复制工作项附件到工作目录，并在 prompt 中提示 Agent 读取
             attachment_paths = _copy_work_item_attachments(item, cwd)
             if attachment_paths:
                 prompt += (
-                    "\n\n## 附件图片\n"
-                    "以下图片已复制到当前工作目录，请按需读取并参考：\n"
+                    "\n\n## 工作项附件\n"
+                    "以下文件已复制到当前工作目录，请按需读取并参考：\n"
                     + "\n".join(f"- ./{p}" for p in attachment_paths)
                     + "\n"
                 )
+
+            # 注入产物链接（含Lark文档链接）
+            item_meta = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            artifacts = item_meta.get("artifacts") or []
+            if artifacts:
+                art_lines = "\n".join(
+                    f"- [{a.get('label', a.get('type', '产物'))}]({a.get('url', '')})"
+                    for a in artifacts[:10]
+                    if a.get("url")
+                )
+                if art_lines:
+                    prompt += f"\n\n## 关联产物\n\n{art_lines}\n"
+
+            # 预获取Lark文档内容（异步，失败不阻塞）
+            try:
+                from backend.runtime.lark_context import fetch_all_lark_docs
+                lark_docs_content = await fetch_all_lark_docs(prompt)
+                if lark_docs_content:
+                    prompt += "\n\n" + lark_docs_content
+            except Exception:
+                pass
 
             # 创建 task
             task = await task_service.create_task(
@@ -1846,12 +1865,19 @@ class WorkItemService:
                     f"你现在在 `{project_name}` 仓库（{project_cwd}）中工作。\n"
                 )
                 if prev_output and "参考技术方案" in base_prompt:
+                    _slug = _title_slug(item.get("title", "")) if item.get("title") else ""
+                    _prefix = f"wi-{item['id'][:8]}"
+                    if _slug:
+                        _prefix = f"{_prefix}-{_slug}"
+                    if project_name:
+                        _prefix = f"{_prefix}-{project_name}"
                     task_prompt += (
                         "\n请注意：上方「参考技术方案」已包含完整的实施方案，请严格遵循以下要求：\n"
                         "1. 直接按方案中涉及当前仓库的部分修改代码并自测\n"
-                        "2. 不要生成任何规划类文档（包括但不限于：技术方案、修改点、实施计划、变更清单等 .md 文件）\n"
-                        "3. 所有改动以代码提交（git diff）体现，无需额外的文档产物\n"
-                        "4. 如方案中未涉及当前仓库的改动，直接输出「无需修改」并结束\n"
+                        "2. 不要生成规划类文档（包括但不限于：技术方案、修改点、实施计划、变更清单等），但【必须】生成测试报告\n"
+                        "3. 代码改动以 git commit 体现\n"
+                        f"4. 完成所有代码修改后，生成测试报告文件（命名格式：`{_prefix}-测试报告.md`），内容包含：改动点摘要、自测结果、需要重点验证的场景\n"
+                        "5. 如方案中未涉及当前仓库的改动，直接输出「无需修改」并结束\n"
                     )
                 if project_knowledge:
                     task_prompt += f"\n## 项目模块结构\n{project_knowledge}\n"
@@ -2559,6 +2585,27 @@ class WorkItemService:
                     continue
 
                 source_branch = record["branch"]
+
+                # 自动提交源分支 worktree 中的未提交变更，确保所有改动被纳入合并
+                wt_path = record.get("worktree_path", "")
+                if wt_path and Path(wt_path).exists():
+                    from backend.runtime.git_utils import has_git_changes, commit_changes
+                    try:
+                        if await has_git_changes(Path(wt_path)):
+                            commit_hash = await commit_changes(
+                                Path(wt_path),
+                                "chore: auto-commit pending changes before merge",
+                            )
+                            if commit_hash:
+                                logger.info(
+                                    "[work_item] git_merge: auto-committed dirty worktree %s on branch %s (commit=%s)",
+                                    wt_path, source_branch, commit_hash,
+                                )
+                    except Exception as exc:
+                        logger.warning(
+                            "[work_item] git_merge: failed to auto-commit worktree %s: %s",
+                            wt_path, exc,
+                        )
 
                 # 检查分支是否有实际改动，跳过无变更的分支
                 try:

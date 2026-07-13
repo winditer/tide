@@ -64,6 +64,8 @@ import {
   useAuth,
   useCleanupBranches,
   useCreateBranch,
+  useCreateGroupBranch,
+  useCreateGroupVersion,
   useCreateMergeRequest,
   useDeleteBranch,
   useDeleteGroupWorkflow,
@@ -98,6 +100,7 @@ import {
   type GroupTaskItem,
   type GroupUserMember,
   type GroupVersionItem,
+  type GroupVersionCreateResult,
   type ProjectGroupMember,
   type ProjectInfo,
   getGroupCommitDiff,
@@ -1225,6 +1228,75 @@ function ProjectBranchCard({
   );
 }
 
+function GroupCreateBranchButton({ groupId }: { groupId: string }) {
+  const [open, setOpen] = useState(false);
+  const [branchName, setBranchName] = useState("");
+  const [startPoint, setStartPoint] = useState("HEAD");
+  const createGroupBranch = useCreateGroupBranch(groupId);
+  const qc = useQueryClient();
+
+  const handleCreate = () => {
+    if (!branchName.trim()) return;
+    createGroupBranch.mutateAsync({ branchName: branchName.trim(), startPoint: startPoint.trim() || undefined })
+      .then((res) => {
+        qc.invalidateQueries({ queryKey: ["project-group", groupId, "branches"] });
+        const successCount = res.results?.filter((r: { ok: boolean }) => r.ok).length ?? 0;
+        const failCount = res.results?.filter((r: { ok: boolean }) => !r.ok).length ?? 0;
+        if (failCount === 0) {
+          toast({ title: "分支创建成功", description: `已为 ${successCount} 个项目创建分支 ${branchName.trim()}` });
+        } else {
+          toast({ title: "部分项目创建失败", description: `成功 ${successCount} / 失败 ${failCount}`, variant: "destructive" });
+        }
+        setBranchName("");
+        setStartPoint("HEAD");
+        setOpen(false);
+      })
+      .catch((e) => toast({ title: "创建失败", description: getApiErrorMessage(e), variant: "destructive" }));
+  };
+
+  return (
+    <>
+      <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
+        <Plus className="mr-1 h-4 w-4" />
+        统一创建分支
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>为所有子项目创建分支</DialogTitle>
+            <DialogDescription>将在项目组内所有成员项目中创建同名分支</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div>
+              <label className="text-sm font-medium">分支名称</label>
+              <Input
+                placeholder="feature/xxx"
+                value={branchName}
+                onChange={(e) => setBranchName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") handleCreate(); }}
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium">起始点 (start point)</label>
+              <Input
+                placeholder="HEAD"
+                value={startPoint}
+                onChange={(e) => setStartPoint(e.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setOpen(false)}>取消</Button>
+            <Button onClick={handleCreate} disabled={!branchName.trim() || createGroupBranch.isPending}>
+              {createGroupBranch.isPending ? "创建中…" : "创建"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
 function BranchesPane({ groupId, members, projectIdToName }: {
   groupId: string;
   members: ProjectGroupMember[];
@@ -1284,6 +1356,7 @@ function BranchesPane({ groupId, members, projectIdToName }: {
             组内成员项目的本地分支 · 共 {data?.items?.length ?? 0} 个项目
           </p>
         </div>
+        <GroupCreateBranchButton groupId={groupId} />
       </div>
 
       {isLoading ? (
@@ -1575,6 +1648,76 @@ function AuditPane({ groupId, projectIdToName }: {
 
 // ── Versions Tab ───────────────────────────────────────────────────────────
 
+function GroupCreateVersionButton({ groupId }: { groupId: string }) {
+  const [open, setOpen] = useState(false);
+  const [versionName, setVersionName] = useState("");
+  const [description, setDescription] = useState("");
+  const createGroupVersion = useCreateGroupVersion(groupId);
+  const qc = useQueryClient();
+
+  const handleCreate = () => {
+    if (!versionName.trim()) return;
+    createGroupVersion.mutateAsync({ name: versionName.trim(), description: description.trim() || undefined })
+      .then((res) => {
+        qc.invalidateQueries({ queryKey: ["project-group", groupId, "versions"] });
+        const successCount = res.results?.filter((r: GroupVersionCreateResult) => r.ok).length ?? 0;
+        const failCount = res.results?.filter((r: GroupVersionCreateResult) => !r.ok).length ?? 0;
+        if (failCount === 0) {
+          toast({ title: "版本创建成功", description: `已为 ${successCount} 个项目创建版本「${versionName.trim()}」` });
+        } else {
+          const failedProjects = res.results?.filter((r: GroupVersionCreateResult) => !r.ok).map((r: GroupVersionCreateResult) => `${r.name}: ${r.error}`).join("; ");
+          toast({ title: "部分项目创建失败", description: `成功 ${successCount} / 失败 ${failCount}。${failedProjects}`, variant: "destructive" });
+        }
+        setVersionName("");
+        setDescription("");
+        setOpen(false);
+      })
+      .catch((e) => toast({ title: "创建失败", description: getApiErrorMessage(e), variant: "destructive" }));
+  };
+
+  return (
+    <>
+      <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
+        <Plus className="mr-1 h-4 w-4" />
+        新建版本
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>为所有子项目创建版本</DialogTitle>
+            <DialogDescription>将在项目组内所有成员项目中创建同名版本</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div>
+              <label className="text-sm font-medium">版本名称</label>
+              <Input
+                placeholder="v1.0.0"
+                value={versionName}
+                onChange={(e) => setVersionName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") handleCreate(); }}
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium">描述（可选）</label>
+              <Input
+                placeholder="版本描述…"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setOpen(false)}>取消</Button>
+            <Button onClick={handleCreate} disabled={!versionName.trim() || createGroupVersion.isPending}>
+              {createGroupVersion.isPending ? "创建中…" : "创建"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
 function VersionsPane({
   groupId,
   projectIdToName,
@@ -1597,6 +1740,7 @@ function VersionsPane({
             汇总组内全部成员项目的版本 · 共 {data?.total ?? 0} 个
           </p>
         </div>
+        <GroupCreateVersionButton groupId={groupId} />
       </div>
 
       {isLoading ? (

@@ -109,8 +109,8 @@ export function CommentThread({
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [list.length, taskOutputs]);
 
-  const handleSubmit = (content: string, mentions: MentionItem[]) => {
-    createComment.mutate({ workItemId, content, mentions });
+  const handleSubmit = (content: string, mentions: MentionItem[], skills?: {slug: string, name: string}[]) => {
+    createComment.mutate({ workItemId, content, mentions, skills });
   };
 
   const findApproval = (taskId?: string | null) => {

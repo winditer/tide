@@ -111,5 +111,81 @@ class NotificationService:
             )
             await session.commit()
 
+    async def send_lark_mention_notification(
+        self,
+        recipient_id: str,
+        work_item_id: str,
+        actor_name: str,
+        comment_content: str,
+    ):
+        """向被@用户发送Lark卡片通知（异步，失败不影响主流程）。"""
+        try:
+            import json as _json
+            import os
+
+            from backend.services.lark_bridge import lark_bridge
+            from backend.services.card_builder import build_mention_notification_card
+
+            # 1. 查询用户的 lark_open_id 和 notification_prefs
+            async with async_session_factory() as session:
+                result = await session.execute(
+                    text(
+                        "SELECT lark_open_id, notification_prefs FROM users WHERE id = :uid LIMIT 1"
+                    ),
+                    {"uid": recipient_id},
+                )
+                row = result.fetchone()
+            if not row:
+                return
+
+            lark_open_id = row[0]
+            if not lark_open_id:
+                return  # 用户未绑定Lark
+
+            # 2. 检查通知偏好（默认启用）
+            prefs_raw = row[1]
+            prefs = {}
+            if prefs_raw:
+                try:
+                    prefs = _json.loads(prefs_raw) if isinstance(prefs_raw, str) else prefs_raw
+                except (_json.JSONDecodeError, TypeError):
+                    pass
+            if not prefs.get("lark_mention_enabled", True):
+                return  # 用户已关闭Lark@提及通知
+
+            # 3. 查询工作项标题和项目名
+            async with async_session_factory() as session:
+                result = await session.execute(
+                    text(
+                        "SELECT wi.title, p.name FROM work_items wi "
+                        "LEFT JOIN projects p ON wi.project_id = p.id "
+                        "WHERE wi.id = :wid LIMIT 1"
+                    ),
+                    {"wid": work_item_id},
+                )
+                wi_row = result.fetchone()
+
+            wi_title = (wi_row[0] if wi_row else None) or work_item_id
+            project_name = (wi_row[1] if wi_row else None) or ""
+
+            # 4. 构造URL
+            base_url = os.environ.get("FRONTEND_BASE_URL", "")
+            work_item_url = f"{base_url}/work-items?detail={work_item_id}"
+
+            # 5. 构建卡片并发送
+            card = build_mention_notification_card(
+                actor_name=actor_name,
+                work_item_title=wi_title,
+                comment_content=comment_content,
+                work_item_url=work_item_url,
+                project_name=project_name,
+            )
+            await lark_bridge.send_card_to_user(lark_open_id, card)
+        except Exception:
+            import logging
+            logging.getLogger("tide.notification").debug(
+                "send_lark_mention_notification failed", exc_info=True
+            )
+
 
 notification_service = NotificationService()

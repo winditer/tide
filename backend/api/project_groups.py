@@ -4,9 +4,10 @@ import logging
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from fastapi.responses import PlainTextResponse
 from sqlalchemy import text
 
@@ -518,6 +519,138 @@ async def list_group_branches(group_id: str):
         except Exception as exc:
             logger.warning("list_group_branches: skip %s: %s", name, exc)
     return {"items": results}
+
+
+# ── 分支名合法性正则 ────────────────────────────────────────────────────────
+_BRANCH_NAME_RE = re.compile(r"^[a-zA-Z0-9._/\-]+$")
+
+
+class GroupBranchCreateRequest(BaseModel):
+    branch_name: str
+    start_point: str = "HEAD"
+    project_ids: Optional[List[str]] = None  # None表示所有子项目，指定则只为特定项目创建
+
+
+@router.post("/{group_id}/git/branches")
+async def create_group_branch(
+    group_id: str,
+    req: GroupBranchCreateRequest,
+    current_user: Optional[dict] = Depends(get_optional_user),
+):
+    """为项目组内的子项目创建分支。"""
+    await _ensure_group_exists(group_id)
+
+    # 分支名校验
+    if not _BRANCH_NAME_RE.match(req.branch_name):
+        raise HTTPException(status_code=400, detail="分支名不合法，只允许字母、数字、. _ / -")
+
+    projects = await project_group_service.get_group_projects(group_id)
+
+    # 如果指定了 project_ids，只为特定项目创建分支
+    if req.project_ids:
+        target_ids = set(req.project_ids)
+        projects = [p for p in projects if p.get("project_id") in target_ids]
+
+    results = []
+    for p in projects:
+        cwd = p.get("cwd")
+        pid = p.get("project_id")
+        name = p.get("name", pid)
+        if not cwd or not Path(cwd).is_dir():
+            results.append({"project_id": pid, "name": name, "ok": False, "error": f"项目路径不存在: {cwd}"})
+            continue
+        try:
+            code, output = await git_command(
+                Path(cwd), ["branch", req.branch_name, req.start_point], timeout=10
+            )
+            if code != 0:
+                results.append({"project_id": pid, "name": name, "ok": False, "error": output[:300]})
+            else:
+                results.append({"project_id": pid, "name": name, "ok": True, "branch": req.branch_name})
+        except Exception as exc:
+            results.append({"project_id": pid, "name": name, "ok": False, "error": str(exc)[:300]})
+
+    return {"ok": all(r["ok"] for r in results), "results": results}
+
+
+# ── 项目组版本创建 ────────────────────────────────────────────────────────
+
+class GroupVersionCreateRequest(BaseModel):
+    name: str
+    description: str = ""
+    project_ids: Optional[List[str]] = None  # None表示所有子项目
+
+
+@router.post("/{group_id}/versions")
+async def create_group_version(
+    group_id: str,
+    req: GroupVersionCreateRequest,
+    current_user: Optional[dict] = Depends(get_optional_user),
+):
+    """为项目组内的所有子项目创建同名版本。"""
+    await _ensure_group_exists(group_id)
+
+    # viewer 不可写
+    if current_user and current_user.get("role") == "viewer":
+        raise HTTPException(status_code=403, detail="Viewers cannot modify resources")
+
+    name = (req.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+
+    projects = await project_group_service.get_group_projects(group_id)
+
+    # 如果指定了 project_ids，只为特定项目创建版本
+    if req.project_ids:
+        target_ids = set(req.project_ids)
+        projects = [p for p in projects if p.get("project_id") in target_ids]
+
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    results = []
+
+    async with async_session_factory() as session:
+        for p in projects:
+            pid = p.get("project_id")
+            pname = p.get("name", pid)
+            try:
+                # 检查该项目是否已有同名版本
+                existing = await session.execute(
+                    text(
+                        "SELECT id FROM versions WHERE project_id = :pid AND name = :name LIMIT 1"
+                    ),
+                    {"pid": pid, "name": name},
+                )
+                if existing.fetchone():
+                    results.append({"project_id": pid, "name": pname, "ok": False, "error": "版本已存在"})
+                    continue
+
+                version_id = str(uuid.uuid4())
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO versions
+                            (id, project_id, name, description, status, created_at, updated_at)
+                        VALUES
+                            (:id, :project_id, :name, :description, :status, :created_at, :updated_at)
+                        """
+                    ),
+                    {
+                        "id": version_id,
+                        "project_id": pid,
+                        "name": name,
+                        "description": req.description or None,
+                        "status": "active",
+                        "created_at": now,
+                        "updated_at": now,
+                    },
+                )
+                results.append({"project_id": pid, "name": pname, "ok": True, "version_id": version_id})
+            except Exception as exc:
+                results.append({"project_id": pid, "name": pname, "ok": False, "error": str(exc)[:300]})
+
+        await session.commit()
+
+    return {"ok": all(r["ok"] for r in results), "results": results}
 
 
 @router.get("/{group_id}/git/commits")

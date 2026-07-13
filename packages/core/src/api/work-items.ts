@@ -235,6 +235,16 @@ export async function uploadWorkItemAttachments(
   );
 }
 
+/** 删除工作项附件 */
+export function deleteWorkItemAttachment(
+  itemId: string,
+  attachmentId: string,
+): Promise<{ attachments: WorkItemAttachment[] }> {
+  return apiClient.del<{ attachments: WorkItemAttachment[] }>(
+    `/api/work-items/${encodeURIComponent(itemId)}/attachments/${encodeURIComponent(attachmentId)}`,
+  );
+}
+
 // ---------- 产物 (Artifacts) ----------
 
 export function addArtifact(
@@ -439,7 +449,7 @@ export function getWorkItemComments(
 /** 创建评论；若 mentions 含专家团/小队则触发 Agent 执行 */
 export function createWorkItemComment(
   workItemId: string,
-  data: { content: string; mentions?: MentionItem[] },
+  data: { content: string; mentions?: MentionItem[]; skills?: {slug: string, name: string}[] },
 ): Promise<WorkItemComment> {
   return apiClient.post<WorkItemComment>(
     `/api/work-items/${encodeURIComponent(workItemId)}/comments`,

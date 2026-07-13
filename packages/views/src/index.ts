@@ -145,3 +145,7 @@ export {
   GitChangeSummary,
   DiffPanel,
 } from "./git-audit";
+
+// Shared / common
+export { SkillCommandPopover } from "./common/SkillCommandPopover";
+export type { SkillCommandPopoverProps, SkillItem } from "./common/SkillCommandPopover";

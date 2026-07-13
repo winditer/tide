@@ -659,6 +659,14 @@ class PlanExecutor:
         diff_summary = await git_utils.git_diff_summary(cwd) if changed else ""
         commit_message = self._build_commit_message(plan_id, task) if changed else ""
 
+        # 如果工作区干净（Agent可能已自行commit），检查分支上的已提交变更
+        commit_hash_from_branch: str | None = None
+        if not diff_summary or diff_summary in ("", "Git：工作区干净"):
+            committed_diff, committed_hash = await git_utils.git_committed_diff_summary(cwd)
+            if committed_diff:
+                diff_summary = committed_diff
+                commit_hash_from_branch = committed_hash
+
         parts: list[str] = []
         if agent_output:
             parts.append(_truncate(agent_output))
@@ -723,6 +731,9 @@ class PlanExecutor:
         )
         if new_status == "committed" and commit_hash:
             update_kwargs["commit_hash"] = commit_hash
+        # Agent 自行 commit 场景：保存从分支检测到的 commit hash
+        if commit_hash_from_branch and "commit_hash" not in update_kwargs:
+            update_kwargs["commit_hash"] = commit_hash_from_branch
         await self._update_task(task_id, **update_kwargs)
         task_after = await self._load_task(task_id) or task
         await self._emit_status(task_after, new_status)

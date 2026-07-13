@@ -311,6 +311,37 @@ export function getGroupBranches(
   );
 }
 
+export interface GroupBranchCreateResult {
+  project_id: string;
+  name: string;
+  ok: boolean;
+  branch?: string;
+  error?: string;
+}
+
+export interface GroupVersionCreateResult {
+  project_id: string;
+  name: string;
+  ok: boolean;
+  version_id?: string;
+  error?: string;
+}
+
+/**
+ * 为项目组内子项目创建分支。
+ */
+export function createGroupBranch(
+  groupId: string,
+  branchName: string,
+  startPoint?: string,
+  projectIds?: string[],
+): Promise<{ ok: boolean; results: GroupBranchCreateResult[] }> {
+  return apiClient.post<{ ok: boolean; results: GroupBranchCreateResult[] }>(
+    `/api/project-groups/${encodeURIComponent(groupId)}/git/branches`,
+    { branch_name: branchName, start_point: startPoint, project_ids: projectIds },
+  );
+}
+
 export function getGroupCommits(
   groupId: string,
   params?: { since?: string; until?: string; limit?: number },
@@ -338,6 +369,21 @@ export function getGroupCommitDiff(
 ): Promise<string> {
   return apiClient.get<string>(
     `/api/project-groups/${encodeURIComponent(groupId)}/git/diff/${encodeURIComponent(projectId)}/${encodeURIComponent(commitHash)}`,
+  );
+}
+
+/**
+ * 为项目组内子项目创建同名版本。
+ */
+export function createGroupVersion(
+  groupId: string,
+  name: string,
+  description?: string,
+  projectIds?: string[],
+): Promise<{ ok: boolean; results: GroupVersionCreateResult[] }> {
+  return apiClient.post<{ ok: boolean; results: GroupVersionCreateResult[] }>(
+    `/api/project-groups/${encodeURIComponent(groupId)}/versions`,
+    { name, description, project_ids: projectIds },
   );
 }
 

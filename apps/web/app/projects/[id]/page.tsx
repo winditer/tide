@@ -903,6 +903,8 @@ interface GitConfigForm {
   auto_push: boolean;
   ssh_key_path: string;
   access_token: string;
+  git_username: string;
+  git_password: string;
 }
 
 // ── Freeform Status List Card ───────────────────────────────────
@@ -1060,12 +1062,15 @@ const DEFAULT_GIT_CONFIG: GitConfigForm = {
   auto_push: true,
   ssh_key_path: "",
   access_token: "",
+  git_username: "",
+  git_password: "",
 };
 
 const CREDENTIAL_OPTIONS = [
   { value: "ssh_agent", label: "SSH Agent（默认）" },
   { value: "ssh_key", label: "SSH 私钥文件" },
   { value: "token", label: "HTTPS Access Token" },
+  { value: "username_password", label: "HTTPS 用户名+密码" },
 ];
 
 function GitConfigCard({ projectId }: { projectId: string }) {
@@ -1094,6 +1099,8 @@ function GitConfigCard({ projectId }: { projectId: string }) {
           auto_push: data?.auto_push ?? true,
           ssh_key_path: data?.ssh_key_path ?? "",
           access_token: data?.access_token ?? "",
+          git_username: data?.git_username ?? "",
+          git_password: data?.git_password ?? "",
         };
         setForm(merged);
         setInitial(merged);
@@ -1116,7 +1123,9 @@ function GitConfigCard({ projectId }: { projectId: string }) {
       form.default_branch !== initial.default_branch ||
       form.credential_type !== initial.credential_type ||
       form.ssh_key_path !== initial.ssh_key_path ||
-      form.access_token !== initial.access_token,
+      form.access_token !== initial.access_token ||
+      form.git_username !== initial.git_username ||
+      form.git_password !== initial.git_password,
     [form, initial],
   );
 
@@ -1133,6 +1142,9 @@ function GitConfigCard({ projectId }: { projectId: string }) {
         payload.ssh_key_path = form.ssh_key_path.trim() || null;
       } else if (form.credential_type === "token") {
         payload.access_token = form.access_token.trim() || null;
+      } else if (form.credential_type === "username_password") {
+        payload.git_username = form.git_username.trim() || null;
+        payload.git_password = form.git_password.trim() || null;
       }
       await apiClient.put(
         `/api/projects/${encodeURIComponent(projectId)}/git-config`,
@@ -1147,6 +1159,8 @@ function GitConfigCard({ projectId }: { projectId: string }) {
           form.credential_type === "ssh_key" ? form.ssh_key_path.trim() : "",
         access_token:
           form.credential_type === "token" ? form.access_token.trim() : "",
+        git_username: form.credential_type === "username_password" ? form.git_username.trim() : "",
+        git_password: form.credential_type === "username_password" ? form.git_password.trim() : "",
       };
       setForm(next);
       setInitial(next);
@@ -1257,6 +1271,8 @@ function GitConfigCard({ projectId }: { projectId: string }) {
                 "使用指定私钥文件进行 SSH 认证。请确保容器内可访问该路径。"}
               {form.credential_type === "token" &&
                 "使用 HTTPS Personal Access Token 鉴权（GitHub/GitLab/Gitea）。"}
+              {form.credential_type === "username_password" &&
+                "使用用户名和密码进行 HTTPS 认证（适配 Azure DevOps 等平台）。"}
             </span>
           </label>
 
@@ -1266,7 +1282,7 @@ function GitConfigCard({ projectId }: { projectId: string }) {
             const isSshUrl = url.startsWith("git@");
             const isHttpUrl = url.startsWith("https://") || url.startsWith("http://");
             const isSshAuth = form.credential_type === "ssh_agent" || form.credential_type === "ssh_key";
-            const isHttpAuth = form.credential_type === "token";
+            const isHttpAuth = form.credential_type === "token" || form.credential_type === "username_password";
 
             if (isSshAuth && isHttpUrl) {
               return (
@@ -1320,6 +1336,42 @@ function GitConfigCard({ projectId }: { projectId: string }) {
                 令牌以明文形式存储于项目设置 metadata 中，请将权限最小化。
               </span>
             </label>
+          )}
+
+          {form.credential_type === "username_password" && (
+            <>
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-medium text-foreground">
+                  用户名
+                </span>
+                <Input
+                  value={form.git_username}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, git_username: e.target.value }))
+                  }
+                  placeholder="user@example.com"
+                  className="rounded-lg border-border/50 font-mono text-xs"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-medium text-foreground">
+                  密码
+                </span>
+                <Input
+                  type="password"
+                  value={form.git_password}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, git_password: e.target.value }))
+                  }
+                  placeholder="输入密码"
+                  className="rounded-lg border-border/50 font-mono text-xs"
+                  autoComplete="new-password"
+                />
+                <span className="mt-1 block text-[11px] text-amber-600/80">
+                  凭据以明文形式存储于项目设置 metadata 中，请注意安全风险。
+                </span>
+              </label>
+            </>
           )}
 
           <div className="flex items-center justify-between gap-3 pt-2">

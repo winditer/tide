@@ -21,6 +21,7 @@ import asyncio
 import logging
 import os
 import re
+import shlex
 import shutil
 from pathlib import Path
 
@@ -30,12 +31,14 @@ logger = logging.getLogger("tide.git_utils")
 async def _build_git_env(git_config: dict | None) -> dict:
     """根据项目的 git_config 构造 git 子进程环境变量。
 
-    支持三种认证方式：
+    支持四种认证方式：
 
     - ``ssh_agent``（默认）：不注入额外变量，依赖宿主上的 ssh-agent。
     - ``ssh_key``：通过 ``GIT_SSH_COMMAND`` 指定私钥路径。
     - ``token``：通过 ``GIT_CONFIG_COUNT`` 注入临时
       ``credential.helper`` 返回 HTTPS 访问令牌。
+    - ``username_password``：通过 ``GIT_CONFIG_COUNT`` 注入临时
+      ``credential.helper`` 返回用户名和密码（适配 Azure DevOps 等平台）。
 
     函数本身不涉及 IO，使用 ``async`` 仅为与调用点接口保持一致。
     """
@@ -68,6 +71,23 @@ async def _build_git_env(git_config: dict | None) -> dict:
             helper = (
                 "!f() { echo username=x-access-token; "
                 f"echo password={token}; }}; f"
+            )
+            env["GIT_CONFIG_COUNT"] = "1"
+            env["GIT_CONFIG_KEY_0"] = "credential.helper"
+            env["GIT_CONFIG_VALUE_0"] = helper
+            env["GIT_ASKPASS"] = "/bin/echo"
+            env["GIT_TERMINAL_PROMPT"] = "0"
+
+    elif cred_type == "username_password":
+        username = (git_config.get("git_username") or "").strip()
+        password = (git_config.get("git_password") or "").strip()
+        if username and password:
+            # 使用 shlex.quote 防止 shell 注入
+            safe_user = shlex.quote(username)
+            safe_pass = shlex.quote(password)
+            helper = (
+                f"!f() {{ echo username={safe_user}; "
+                f"echo password={safe_pass}; }}; f"
             )
             env["GIT_CONFIG_COUNT"] = "1"
             env["GIT_CONFIG_KEY_0"] = "credential.helper"
@@ -233,6 +253,66 @@ async def git_diff_summary(cwd: Path) -> str:
     if stat:
         status_lines.extend(["", "**Diff 统计**", stat])
     return "\n".join(status_lines)
+
+
+async def git_committed_diff_summary(cwd: Path) -> tuple[str, str | None]:
+    """获取当前分支相对于主分支（main/master）merge-base 的已提交变更统计。
+
+    当 Agent 在执行过程中自行 commit 后，工作区干净但分支上有新提交。
+    此函数通过 ``git diff --stat <merge-base>..HEAD`` 获取这些已提交变更的摘要。
+
+    Returns:
+        ``(diff_summary_text, commit_hash)``。无新提交时返回 ``("", None)``。
+    """
+    # 1. 获取当前分支名
+    code, branch_name = await git_command(cwd, ["rev-parse", "--abbrev-ref", "HEAD"], timeout=5)
+    if code != 0 or not branch_name.strip():
+        return "", None
+    branch_name = branch_name.strip()
+
+    # 2. 确定基础分支：找到当前分支与主分支的 merge-base
+    base_branch: str | None = None
+    for candidate in ("main", "master"):
+        chk_code, _ = await git_command(cwd, ["rev-parse", "--verify", candidate], timeout=5)
+        if chk_code == 0:
+            base_branch = candidate
+            break
+
+    if base_branch is None:
+        # 没有 main/master 分支，无法计算 merge-base
+        return "", None
+
+    # 如果当前就在主分支上，不需要比较
+    if branch_name == base_branch:
+        return "", None
+
+    # 3. 找到 merge-base
+    code, merge_base = await git_command(
+        cwd, ["merge-base", base_branch, "HEAD"], timeout=10
+    )
+    if code != 0 or not merge_base.strip():
+        return "", None
+    merge_base = merge_base.strip()
+
+    # 4. 检查 merge-base 与 HEAD 是否相同（无新 commit）
+    code, head_hash = await git_command(cwd, ["rev-parse", "HEAD"], timeout=5)
+    if code != 0 or not head_hash.strip():
+        return "", None
+    head_hash = head_hash.strip()
+
+    if merge_base == head_hash:
+        # 没有新 commit
+        return "", None
+
+    # 5. 获取 diff --stat
+    code, diff_stat = await git_command(
+        cwd, ["diff", "--stat", f"{merge_base}..HEAD"], timeout=10
+    )
+    if code != 0 or not diff_stat.strip():
+        return "", None
+
+    # 6. 返回 diff stat 文本和 commit hash
+    return diff_stat.strip(), head_hash[:12]
 
 
 # ── .gitignore 维护 ────────────────────────────────────────────────────────
@@ -745,6 +825,10 @@ async def git_merge_branch(
         )
         lines.append(f"Auto-created branch '{branch}' from '{base_branch}'")
         return 0, lines
+
+    # 在执行任何 checkout 操作前，先清理当前工作目录的未提交变更
+    # 避免 checkout/branch 创建因脏状态被拒绝
+    await _auto_commit_dirty(repo_root, outputs)
 
     if strategy == "rebase":
         # 1. ensure source branch exists locally

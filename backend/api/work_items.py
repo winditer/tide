@@ -108,7 +108,7 @@ router = APIRouter(prefix="/api/work-items", tags=["work-items"])
 # ── Work Item Attachments ────────────────────────────────────
 
 WI_ATTACHMENTS_DIR = Path(".tide/attachments/work-items")
-WI_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024  # 10MB
+WI_ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024  # 20MB
 WI_ATTACHMENT_MAX_COUNT = 10
 
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".avif"}
@@ -122,6 +122,26 @@ _ATTACHMENT_CONTENT_TYPES = {
     ".svg": "image/svg+xml",
     ".bmp": "image/bmp",
     ".avif": "image/avif",
+    ".pdf": "application/pdf",
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".ppt": "application/vnd.ms-powerpoint",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".zip": "application/zip",
+    ".rar": "application/x-rar-compressed",
+    ".7z": "application/x-7z-compressed",
+    ".tar": "application/x-tar",
+    ".gz": "application/gzip",
+    ".txt": "text/plain",
+    ".md": "text/markdown",
+    ".csv": "text/csv",
+    ".json": "application/json",
+    ".xml": "application/xml",
+    ".mp4": "video/mp4",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
 }
 
 
@@ -1016,9 +1036,12 @@ async def remove_work_item_attachment(
 async def get_work_item_attachment_content(
     item_id: str,
     attachment_id: str,
-    current_user=Depends(get_optional_user),
 ):
-    """获取工作项附件内容，用于图片预览/下载。"""
+    """获取工作项附件内容，用于图片预览/下载。
+
+    注意：此端点不要求认证，因为附件 ID 为 UUID 不可猜测，
+    前端 <img src="..."> 无法附带 Authorization header。
+    """
     item = await work_item_service.get_work_item(item_id)
     if not item:
         raise HTTPException(status_code=404, detail="Work item not found")
@@ -1478,6 +1501,15 @@ async def create_work_item_comment(
                     notification_type="mentioned",
                     trigger_actor_id=author_id,
                     content=f"{actor_name} 在工作项「{wi_title}」中提到了您",
+                )
+                # 异步发送Lark @提及通知（不阻塞主流程）
+                asyncio.create_task(
+                    notification_service.send_lark_mention_notification(
+                        recipient_id=m.get("id"),
+                        work_item_id=item_id,
+                        actor_name=actor_name,
+                        comment_content=body.content[:200],
+                    )
                 )
     except Exception:
         logger.debug("create mention notification failed", exc_info=True)

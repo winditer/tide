@@ -559,13 +559,44 @@ class NoWorkflowService:
         async with async_session_factory() as session:
             result = await session.execute(
                 text(
-                    "SELECT id, project_id, title, description, group_id "
+                    "SELECT id, project_id, title, description, group_id, metadata "
                     "FROM work_items WHERE id = :id"
                 ),
                 {"id": work_item_id},
             )
             row = result.fetchone()
         return dict(row._mapping) if row else None
+
+    @staticmethod
+    def _build_attachments_context(work_item_id: str, metadata: dict) -> list[str]:
+        """从工作项metadata构建附件和产物的prompt片段列表。
+
+        注意：优先在 execute_from_comment 中使用 _copy_work_item_attachments
+        将附件复制到 Agent CWD，然后直接引用文件名。此方法作为
+        后备方案，使用绝对路径引用附件。
+        """
+        parts: list[str] = []
+        attachments = metadata.get("attachments") or []
+        if attachments:
+            att_lines = "\n".join(
+                f"- {a.get('name', 'file')}"
+                f" (路径: {a.get('path', '')})"
+                for a in attachments[:10]
+                if a.get("path")
+            )
+            if att_lines:
+                parts.append(f"# 工作项附件\n\n{att_lines}")
+
+        artifacts = metadata.get("artifacts") or []
+        if artifacts:
+            art_lines = "\n".join(
+                f"- [{a.get('label', a.get('type', '产物'))}]({a.get('url', '')})"
+                for a in artifacts[:10]
+                if a.get("url")
+            )
+            if art_lines:
+                parts.append(f"# 关联产物\n\n{art_lines}")
+        return parts
 
     async def _get_work_item_title(self, work_item_id: str) -> str:
         """查询工作项标题，缺失时回退为 work_item_id。"""
@@ -731,6 +762,11 @@ class NoWorkflowService:
         context_stream = await self.get_context_stream(work_item_id)
         recent = context_stream[:5]
 
+        # 提前解析 cwd（Agent 工作目录），供后续附件复制使用
+        cwd = ""
+        if item:
+            cwd = self._decode_project_path(item.get("project_id")) or ""
+
         parts: list[str] = []
         if role_prompt:
             parts.append(f"# 你的角色\n\n{role_prompt}")
@@ -742,12 +778,65 @@ class NoWorkflowService:
                 f"- [{c.get('context_type')}] {c.get('content')}" for c in recent
             )
             parts.append(f"# 共享上下文\n\n{ctx_lines}")
+
+        # 注入工作项附件列表和产物链接
+        item_meta = (item or {}).get("metadata")
+        if isinstance(item_meta, str):
+            import json as _json
+            try:
+                item_meta = _json.loads(item_meta)
+            except (ValueError, TypeError):
+                item_meta = {}
+        item_meta = item_meta if isinstance(item_meta, dict) else {}
+
+        # 复制附件到Agent工作目录（确保Agent可直接读取）
+        attachment_paths: list[str] = []
+        if cwd and item_meta.get("attachments"):
+            from backend.services.work_item_service import _copy_work_item_attachments
+            item_with_meta = dict(item) if item else {}
+            item_with_meta["metadata"] = item_meta
+            attachment_paths = _copy_work_item_attachments(item_with_meta, cwd)
+
+        if attachment_paths:
+            att_lines = "\n".join(f"- ./{p}" for p in attachment_paths)
+            parts.append(
+                f"# 工作项附件\n\n"
+                f"以下文件已复制到当前工作目录，请按需读取并参考：\n{att_lines}"
+            )
+
+        # 注入产物链接
+        artifacts = item_meta.get("artifacts") or []
+        if artifacts:
+            art_lines = "\n".join(
+                f"- [{a.get('label', a.get('type', '产物'))}]({a.get('url', '')})"
+                for a in artifacts[:10]
+                if a.get("url")
+            )
+            if art_lines:
+                parts.append(f"# 关联产物\n\n{art_lines}")
+
         parts.append(f"# 协作请求\n\n{prompt}")
         full_prompt = "\n\n".join(parts)
 
-        cwd = ""
-        if item:
-            cwd = self._decode_project_path(item.get("project_id")) or ""
+        # 解析用户 prompt 中的 /slug 标记并注入 Skills
+        import re as _re
+        _slug_pattern = r'(?:^|(?<=\s))/([a-z0-9](?:[a-z0-9\-]*[a-z0-9])?)'
+        _slug_matches = _re.findall(_slug_pattern, prompt)
+        if _slug_matches:
+            from backend.runtime.adapters import _build_prompt_with_skills
+            _project_id_val = (item or {}).get("project_id")
+            full_prompt = await _build_prompt_with_skills(
+                full_prompt, _slug_matches, "default", _project_id_val
+            )
+
+        # 预获取 prompt 中引用的 Lark 文档内容
+        try:
+            from backend.runtime.lark_context import fetch_all_lark_docs
+            lark_docs_content = await fetch_all_lark_docs(full_prompt)
+            if lark_docs_content:
+                full_prompt = full_prompt + "\n\n" + lark_docs_content
+        except Exception:
+            pass  # Lark文档获取失败不影响任务执行
 
         try:
             task = await task_service.create_task(
