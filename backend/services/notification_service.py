@@ -158,7 +158,7 @@ class NotificationService:
                 result = await session.execute(
                     text(
                         "SELECT wi.title, p.name FROM work_items wi "
-                        "LEFT JOIN projects p ON wi.project_id = p.id "
+                        "LEFT JOIN project_groups p ON wi.project_id = p.id "
                         "WHERE wi.id = :wid LIMIT 1"
                     ),
                     {"wid": work_item_id},
@@ -183,7 +183,7 @@ class NotificationService:
             await lark_bridge.send_card_to_user(lark_open_id, card)
         except Exception:
             import logging
-            logging.getLogger("tide.notification").debug(
+            logging.getLogger("tide.notification").error(
                 "send_lark_mention_notification failed", exc_info=True
             )
 
