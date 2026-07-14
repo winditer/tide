@@ -1,0 +1,57 @@
+# Tide 工作项批量创建模板
+# 使用方式: Agent 读取此文件后调用 POST /api/work-items/batch
+#
+# project_id 获取方式:
+#   调用 GET /api/projects 获取项目列表，复制目标项目的 id 字段
+
+project_id: "YOUR_PROJECT_ID"   # 必填：Base64编码的项目路径
+group_id: null                   # 可选：项目组ID
+# 注意：version_id 应在 item 级别指定，不放在顶层
+
+items:
+  - title: "用户认证模块开发"
+    description: |
+      实现完整的用户认证功能，包括：
+      - 用户名/密码登录
+      - OAuth2.0 第三方登录
+      - JWT Token 管理
+      - 密码重置流程
+    priority: 1
+    tags: ["backend", "auth", "security"]
+    source_type: "agent_skill"
+    metadata:
+      estimated_hours: 40
+      module: "auth"
+
+  - title: "数据库 Schema 设计"
+    description: |
+      设计核心数据表结构：
+      - users 表（用户基础信息）
+      - sessions 表（登录会话）
+      - permissions 表（权限矩阵）
+    priority: 2
+    tags: ["database", "design"]
+    source_type: "agent_skill"
+    metadata:
+      estimated_hours: 16
+      module: "database"
+
+  - title: "API 接口文档编写"
+    description: "编写 OpenAPI 3.0 规范的接口文档，覆盖所有 RESTful 端点"
+    priority: 3
+    tags: ["documentation", "api"]
+    source_type: "agent_skill"
+
+  - title: "单元测试框架搭建"
+    description: "搭建 pytest 测试框架，配置 CI/CD 集成，编写核心模块测试用例"
+    priority: 2
+    tags: ["testing", "devops"]
+    source_type: "agent_skill"
+    metadata:
+      coverage_target: "80%"
+
+  - title: "前端页面原型设计"
+    description: "基于需求文档设计登录页、注册页、个人设置页的 UI 原型"
+    priority: 3
+    tags: ["frontend", "design", "ui"]
+    source_type: "agent_skill"

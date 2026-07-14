@@ -89,11 +89,11 @@ export function WorkItemListView({ projectId, filters, onItemClick }: WorkItemLi
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-border/50 bg-muted/30">
-            <th className="px-4 py-3 text-left font-medium text-muted-foreground">标题</th>
+            <th className="px-4 py-3 text-left font-medium text-muted-foreground max-w-[280px]">标题</th>
             <th className="px-4 py-3 text-left font-medium text-muted-foreground w-24">状态</th>
             <th className="px-4 py-3 text-left font-medium text-muted-foreground w-24">负责人</th>
             <th className="px-4 py-3 text-left font-medium text-muted-foreground w-28">版本</th>
-            <th className="px-4 py-3 text-left font-medium text-muted-foreground w-20">优先级</th>
+            <th className="px-4 py-3 text-left font-medium text-muted-foreground w-24">优先级</th>
             <th className="px-4 py-3 text-left font-medium text-muted-foreground w-40">创建时间</th>
           </tr>
         </thead>
@@ -109,19 +109,19 @@ export function WorkItemListView({ projectId, filters, onItemClick }: WorkItemLi
                 className="border-b border-border/30 transition-colors hover:bg-muted/20 cursor-pointer last:border-b-0"
               >
                 {/* 标题 */}
-                <td className="px-4 py-3">
-                  <div className="font-medium text-foreground line-clamp-1">
+                <td className="px-4 py-3 max-w-[280px]">
+                  <div className="font-medium text-foreground truncate">
                     {item.title || "(无标题)"}
                   </div>
                   {item.description && (
-                    <div className="mt-0.5 text-xs text-muted-foreground line-clamp-1">
+                    <div className="mt-0.5 text-xs text-muted-foreground truncate">
                       {item.description}
                     </div>
                   )}
                 </td>
 
                 {/* 状态 */}
-                <td className="px-4 py-3">
+                <td className="px-4 py-3 whitespace-nowrap">
                   {statusCfg ? (
                     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${statusCfg.color}`}>
                       {statusCfg.label}
@@ -157,7 +157,7 @@ export function WorkItemListView({ projectId, filters, onItemClick }: WorkItemLi
                 </td>
 
                 {/* 优先级 */}
-                <td className="px-4 py-3">
+                <td className="px-4 py-3 whitespace-nowrap">
                   {item.priority > 0 ? (
                     <span className={`inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium ${priorityCfg.color}`}>
                       {priorityCfg.label}
