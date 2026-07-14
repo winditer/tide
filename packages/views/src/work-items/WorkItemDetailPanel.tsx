@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { Pencil, Trash2, AlertTriangle, GitMerge, GitBranch, Maximize2, Minimize2, CheckCircle2, ArrowRight, Clock, X, Link2, Check, Upload, FileText, Paperclip } from "lucide-react";
-import { Button, Badge, Input, Select } from "@tide/ui";
+import { Button, Badge, Input, Select, Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@tide/ui";
 import { AIOptimizeButton } from "./AIOptimizeButton";
 import { CommentThread } from "./CommentThread";
 import { SharedContextPanel } from "./SharedContextPanel";
@@ -20,6 +20,7 @@ import {
   useRejectApproval,
   parseApprovalDetail,
   useAddArtifact,
+  useRemoveArtifact,
   useAuth,
   useWorkItemContext,
   useAddWorkItemContext,
@@ -774,6 +775,18 @@ function getAttachmentContentUrl(itemId: string, att: WorkItemAttachment): strin
   return `/api/work-items/${encodeURIComponent(itemId)}/attachments/${encodeURIComponent(att.id)}/content`;
 }
 
+const isMarkdownAttachment = (name: string) => /\.(md|markdown)$/i.test(name);
+
+function getAttachmentUrl(itemId: string, att: WorkItemAttachment): { url: string; isMarkdown: boolean } {
+  const contentPath = `/api/work-items/${encodeURIComponent(itemId)}/attachments/${encodeURIComponent(att.id)}/content`;
+  const name = att.name || att.path || "";
+  if (isMarkdownAttachment(name)) {
+    const title = encodeURIComponent(att.name || "文件");
+    return { url: appPath(`/docs/view?url=${encodeURIComponent(contentPath)}&title=${title}`), isMarkdown: true };
+  }
+  return { url: appPath(contentPath), isMarkdown: false };
+}
+
 const LARK_DOC_RE = /https?:\/\/[^/]*\.(feishu\.cn|larkoffice\.com|larksuite\.com)\/(docx|wiki|sheets|base|slides)\/([a-zA-Z0-9]+)/;
 
 /** Generic URL regex for splitting text into plain text + URL segments */
@@ -878,7 +891,9 @@ function WorkItemArtifactsSection({ item }: WorkItemArtifactsSectionProps) {
   const isTerminal = TERMINAL_STATUSES.has(item.status || "");
   const canEdit = !isViewer && !isTerminal;
   const addMutation = useAddArtifact();
+  const removeMutation = useRemoveArtifact();
   const [showLinkForm, setShowLinkForm] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; label: string } | null>(null);
   const [linkLabel, setLinkLabel] = useState("");
   const [linkUrl, setLinkUrl] = useState("");
   const [linkStage, setLinkStage] = useState("");
@@ -969,6 +984,14 @@ function WorkItemArtifactsSection({ item }: WorkItemArtifactsSectionProps) {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
+  };
+
+  const confirmRemove = () => {
+    if (!deleteTarget) return;
+    removeMutation.mutate(
+      { workItemId: item.id, artifactId: deleteTarget.id },
+      { onSuccess: () => setDeleteTarget(null) }
+    );
   };
 
   const getArtifactIcon = (artifact: WorkItemArtifact) => {
@@ -1083,6 +1106,16 @@ function WorkItemArtifactsSection({ item }: WorkItemArtifactsSectionProps) {
                         飞书
                       </span>
                     )}
+                    {canEdit && (
+                      <button
+                        type="button"
+                        onClick={(e) => { e.preventDefault(); setDeleteTarget({ id: artifact.id, label: artifact.label }); }}
+                        className="ml-auto flex h-5 w-5 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive"
+                        title="删除产物"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1094,6 +1127,23 @@ function WorkItemArtifactsSection({ item }: WorkItemArtifactsSectionProps) {
           暂无产物
         </div>
       )}
+
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>确认删除产物</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            确定要删除产物「{deleteTarget?.label}」吗？此操作不可撤销。
+          </p>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setDeleteTarget(null)}>取消</Button>
+            <Button variant="destructive" size="sm" onClick={confirmRemove} disabled={removeMutation.isPending}>
+              {removeMutation.isPending ? "删除中…" : "确认删除"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -1191,17 +1241,23 @@ function WorkItemAttachmentsSection({ item }: WorkItemAttachmentsSectionProps) {
       {files.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-2">
           {files.map((att) => {
-            const url = getAttachmentContentUrl(item.id, att);
+            const { url, isMarkdown: isMd } = getAttachmentUrl(item.id, att);
             return (
               <div key={att.id} className="group relative inline-flex items-center gap-1.5 rounded-md border border-border/50 bg-muted/30 px-2.5 py-1.5 text-xs text-foreground transition-smooth hover:bg-muted/50">
                 <a
                   href={url}
                   target="_blank"
                   rel="noopener noreferrer"
+                  {...(!isMd ? { download: "" } : {})}
                   className="inline-flex items-center gap-1.5"
                 >
-                  <FileText className="h-3.5 w-3.5 text-muted-foreground" />
+                  <FileText className={`h-3.5 w-3.5 ${isMd ? "text-blue-500" : "text-muted-foreground"}`} />
                   <span className="max-w-[160px] truncate">{att.name}</span>
+                  {isMd && (
+                    <span className="text-[10px] rounded bg-blue-50 dark:bg-blue-900/30 px-1 py-0.5 text-blue-600 dark:text-blue-400">
+                      预览
+                    </span>
+                  )}
                 </a>
                 {canDelete && (
                   <button
