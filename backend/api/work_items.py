@@ -1058,12 +1058,38 @@ async def get_work_item_attachment_content(
     if not file_path:
         raise HTTPException(status_code=400, detail="Attachment has no path")
 
-    try:
-        target_path = Path(file_path).resolve()
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid file path")
+    # 多策略路径解析，避免依赖 cwd
+    target_path: Optional[Path] = None
+    p = Path(file_path)
+    if p.is_absolute():
+        resolved = p.resolve()
+        if resolved.exists() and resolved.is_file():
+            target_path = resolved
+    else:
+        # 策略1: 相对于 TIDE_DATA_DIR 环境变量
+        data_dir = os.environ.get("TIDE_DATA_DIR", "")
+        if data_dir:
+            candidate = Path(data_dir) / file_path
+            if candidate.exists() and candidate.is_file():
+                target_path = candidate
+        # 策略2: 相对于当前工作目录
+        if target_path is None:
+            candidate = Path(file_path).resolve()
+            if candidate.exists() and candidate.is_file():
+                target_path = candidate
+        # 策略3: 相对于 /app (Docker 容器根)
+        if target_path is None:
+            candidate = Path("/app") / file_path
+            if candidate.exists() and candidate.is_file():
+                target_path = candidate
+        # 策略4: 相对于项目根目录（backend 的上级目录）
+        if target_path is None:
+            project_root = Path(__file__).resolve().parent.parent.parent
+            candidate = project_root / file_path
+            if candidate.exists() and candidate.is_file():
+                target_path = candidate
 
-    if not target_path.exists() or not target_path.is_file():
+    if target_path is None or not target_path.exists() or not target_path.is_file():
         raise HTTPException(status_code=404, detail="Attachment file not found")
 
     content_type = _attachment_content_type(target_path.name)
