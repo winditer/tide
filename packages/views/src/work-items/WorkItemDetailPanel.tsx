@@ -968,11 +968,19 @@ function WorkItemArtifactsSection({ item }: WorkItemArtifactsSectionProps) {
       const res = await uploadWorkItemAttachments(item.id, Array.from(files));
       // Add each uploaded file as a "file" type artifact
       for (const att of res.attachments) {
-        const fileUrl = `/api/work-items/${encodeURIComponent(item.id)}/attachments/${encodeURIComponent(att.id)}/content`;
+        const contentPath = `/api/work-items/${encodeURIComponent(item.id)}/attachments/${encodeURIComponent(att.id)}/content`;
+        const fileName = att.name || att.path || "文件";
+
+        // markdown 文件使用 /docs/view 在线查看器
+        const isMarkdown = /\.(md|markdown)$/i.test(fileName);
+        const fileUrl = isMarkdown
+          ? `/docs/view?url=${encodeURIComponent(contentPath)}&title=${encodeURIComponent(fileName)}`
+          : contentPath;
+
         await addMutation.mutateAsync({
           workItemId: item.id,
           data: {
-            label: att.name || att.path || "文件",
+            label: fileName,
             url: fileUrl,
             type: "file",
           },
