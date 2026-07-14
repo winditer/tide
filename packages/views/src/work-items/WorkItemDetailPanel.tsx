@@ -772,7 +772,7 @@ function isImageAttachment(att: WorkItemAttachment): boolean {
 }
 
 function getAttachmentContentUrl(itemId: string, att: WorkItemAttachment): string {
-  return `/api/work-items/${encodeURIComponent(itemId)}/attachments/${encodeURIComponent(att.id)}/content`;
+  return appPath(`/api/work-items/${encodeURIComponent(itemId)}/attachments/${encodeURIComponent(att.id)}/content`);
 }
 
 const isMarkdownAttachment = (name: string) => /\.(md|markdown)$/i.test(name);
