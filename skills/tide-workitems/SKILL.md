@@ -376,6 +376,8 @@ curl -X POST "$TIDE_API_URL/api/work-items/batch" \
 | `metadata` | object | 否 | 自定义元数据 |
 | `version_id` | string | 否 | 关联版本 ID |
 | `group_id` | string | 否 | 分组 ID |
+| `planned_start_date` | string | 否 | 计划开始时间（ISO 8601 格式） |
+| `planned_end_date` | string | 否 | 计划结束时间（ISO 8601 格式） |
 
 ```bash
 curl -X POST "$TIDE_API_URL/api/work-items" \
@@ -391,6 +393,8 @@ curl -X POST "$TIDE_API_URL/api/work-items" \
   }'
 ```
 
+> 创建工作项时会自动记录创建人为当前认证用户（API Token 所属用户）。
+
 **响应格式**：
 
 ```json
@@ -400,6 +404,9 @@ curl -X POST "$TIDE_API_URL/api/work-items" \
   "status": "active",
   "priority": 3,
   "tags": ["bug", "iOS"],
+  "created_by": "user_456",
+  "planned_start_date": null,
+  "planned_end_date": null,
   "created_at": "2025-01-01T00:00:00Z"
 }
 ```
@@ -466,11 +473,19 @@ curl -X GET "$TIDE_API_URL/api/work-items/wi_abc123/transitions" \
     "priority": 2,
     "assignee": "dev01",
     "tags": ["注册"],
+    "created_by": "user_456",
+    "planned_start_date": "2025-01-05T00:00:00Z",
+    "planned_end_date": "2025-01-15T00:00:00Z",
     "created_at": "2025-01-01T00:00:00Z",
     "updated_at": "2025-01-02T00:00:00Z"
   }
 ]
 ```
+
+> 补充字段说明：
+> - `created_by` — 创建人 user_id（可为 null，旧数据兼容）
+> - `planned_start_date` — 计划开始时间（ISO 8601 格式，可为 null）
+> - `planned_end_date` — 计划结束时间（ISO 8601 格式，可为 null）
 
 **流转历史响应格式**：
 
@@ -480,11 +495,15 @@ curl -X GET "$TIDE_API_URL/api/work-items/wi_abc123/transitions" \
     "from_status": "active",
     "to_status": "in_progress",
     "changed_by": "dev01",
+    "operator": "user_abc123",
     "changed_at": "2025-01-02T00:00:00Z",
     "comment": "开始开发"
   }
 ]
 ```
+
+> 字段说明：
+> - `operator` — 流转操作人标识。用户手动流转记录其 user_id（UUID），系统自动流转（condition/delay/agent_complete）记录 `"Tide"`，审批节点记录审批人的 user_id
 
 #### 查看我的工作项
 
@@ -574,6 +593,28 @@ curl -X PATCH "$TIDE_API_URL/api/work-items/wi_abc123" \
 
 ---
 
+#### 设置计划时间
+
+通过 PATCH 接口更新工作项的计划时间：
+
+```bash
+curl -X PATCH "$TIDE_API_URL/api/work-items/{item_id}" \
+  -H "Authorization: Bearer $TIDE_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "planned_start_date": "2025-01-05T00:00:00Z",
+    "planned_end_date": "2025-01-15T00:00:00Z"
+  }'
+```
+
+参数说明：
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `planned_start_date` | string | 否 | 计划开始时间，ISO 8601 格式 |
+| `planned_end_date` | string | 否 | 计划结束时间，ISO 8601 格式 |
+
+---
+
 ### 操作7：更新工作项状态
 
 更新工作项的状态（仅适用于 Freeform 协作模式的工作项）。
@@ -659,6 +700,18 @@ https://storming.ebonex.io/tide/work-items?detail=wi_abc123
 ITEM_ID="wi_abc123"  # 从创建/查询 API 返回的 id
 echo "$TIDE_API_URL/work-items?detail=$ITEM_ID"
 ```
+
+---
+
+### 甘特视图
+
+Web 工作台工作项页面支持甘特视图模式，以时间轴形式展示工作项的计划时间范围。使用前需为工作项设置 `planned_start_date` 和 `planned_end_date`。
+
+甘特视图特性：
+- 按时间轴横向排列工作项
+- 支持日/周/月三种时间粒度切换
+- 按优先级颜色区分（紧急红色、高橙色、中蓝色、低灰色）
+- 点击甘特条可查看工作项详情
 
 ## 认证
 

@@ -16,9 +16,18 @@ export interface ProjectMember {
   lark_open_id?: string | null;
 }
 
+/** Lightweight user info for name resolution (may include non-members). */
+export interface BasicUser {
+  id: string;
+  username: string;
+  display_name: string | null;
+}
+
 export interface ListProjectMembersResponse {
   members: ProjectMember[];
   total: number;
+  /** All system users (basic info) for resolving created_by / operator IDs to names. */
+  all_users?: BasicUser[];
 }
 
 export interface AddMemberInput {

@@ -116,6 +116,9 @@ export interface WorkItem {
   started_at?: string;
   completed_at?: string;
   created_at: string;
+  created_by?: string;
+  planned_start_date?: string;
+  planned_end_date?: string;
   updated_at: string;
 }
 
@@ -180,6 +183,8 @@ export interface WorkItemCreate {
    * ``project_id`` 需同时设为该组的 primary 项目。
    */
   group_id?: string | null;
+  planned_start_date?: string;
+  planned_end_date?: string;
 }
 
 export interface WorkItemUpdate {
@@ -190,6 +195,8 @@ export interface WorkItemUpdate {
   tags?: string[];
   metadata?: Record<string, any>;
   version_id?: string | null;
+  planned_start_date?: string | null;
+  planned_end_date?: string | null;
 }
 
 export interface WorkItemArtifact {

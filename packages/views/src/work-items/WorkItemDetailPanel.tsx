@@ -149,6 +149,19 @@ export function WorkItemDetailPanel({
     return map;
   }, [workflow]);
 
+  /** 将 userId 解析为用户显示名。优先从项目成员匹配，其次从全量用户列表匹配，最后回退原始值。 */
+  const resolveUserName = useCallback((userId: string | null | undefined): string => {
+    if (!userId) return "—";
+    if (userId === "Tide" || userId === "system") return userId;
+    // 优先从项目成员中查找（含完整信息）
+    const member = membersData?.members?.find((m) => m.id === userId);
+    if (member) return member.display_name || member.username || userId;
+    // 回退到全量用户列表（覆盖非项目成员如全局管理员）
+    const user = membersData?.all_users?.find((u) => u.id === userId);
+    if (user) return user.display_name || user.username || userId;
+    return userId;
+  }, [membersData]);
+
   const versionOptions = useMemo(() => {
     const opts: { value: string; label: string }[] = [
       { value: "", label: "未关联" },
@@ -549,6 +562,35 @@ export function WorkItemDetailPanel({
               {formatTime(item.created_at)}
             </span>
           </MetaItem>
+          <MetaItem label="创建人">
+            <span className="text-xs text-muted-foreground">
+              {resolveUserName(item.created_by)}
+            </span>
+          </MetaItem>
+          <MetaItem label="计划开始">
+            <input
+              type="date"
+              value={item.planned_start_date ? item.planned_start_date.split("T")[0] : ""}
+              onChange={(e) => {
+                const val = e.target.value ? new Date(e.target.value).toISOString() : null;
+                handleFieldUpdate({ planned_start_date: val });
+              }}
+              disabled={fieldDisabled}
+              className="h-6 rounded-md border border-border bg-transparent px-2 text-xs text-foreground"
+            />
+          </MetaItem>
+          <MetaItem label="计划结束">
+            <input
+              type="date"
+              value={item.planned_end_date ? item.planned_end_date.split("T")[0] : ""}
+              onChange={(e) => {
+                const val = e.target.value ? new Date(e.target.value).toISOString() : null;
+                handleFieldUpdate({ planned_end_date: val });
+              }}
+              disabled={fieldDisabled}
+              className="h-6 rounded-md border border-border bg-transparent px-2 text-xs text-foreground"
+            />
+          </MetaItem>
         </div>
 
         {/* Tags */}
@@ -618,6 +660,16 @@ export function WorkItemDetailPanel({
                       >
                         {nodeNameMap[t.to_node_id] || t.to_node_id}
                       </span>
+                      {/* 操作人 */}
+                      {t.operator && t.operator !== "system" && t.operator !== "Tide" ? (
+                        <span className="rounded-md bg-blue-50 dark:bg-blue-950 px-2 py-0.5 text-[10px] text-blue-700 dark:text-blue-300">
+                          {resolveUserName(t.operator)}
+                        </span>
+                      ) : (
+                        <span className="rounded-md bg-muted/40 px-2 py-0.5 text-[10px] text-muted-foreground">
+                          Tide
+                        </span>
+                      )}
                       <span className="ml-auto text-[10px] tabular-nums text-muted-foreground">
                         {formatTime(t.created_at)}
                       </span>

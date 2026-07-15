@@ -64,6 +64,7 @@ import {
   useAuth,
   useCleanupBranches,
   useCreateBranch,
+  useCheckoutBranch,
   useCreateGroupBranch,
   useCreateGroupVersion,
   useCreateMergeRequest,
@@ -876,6 +877,7 @@ function ProjectBranchCard({
 }) {
   const createBranch = useCreateBranch(project.project_id);
   const deleteBranch = useDeleteBranch(project.project_id);
+  const checkoutBranch = useCheckoutBranch(project.project_id);
   const cleanupBranches = useCleanupBranches(project.project_id);
   const fetchRemote = useFetchRemote(project.project_id);
   const pushBranch = usePushBranch(project.project_id);
@@ -906,6 +908,7 @@ function ProjectBranchCard({
     conflicts: string[];
     cwd: string;
     deleteSource: boolean;
+    originalBranch: string;
   } | null>(null);
 
   const handleExecuteMerge = async () => {
@@ -929,6 +932,7 @@ function ProjectBranchCard({
           conflicts: result.conflicts,
           cwd: result.cwd,
           deleteSource: deleteSource ?? false,
+          originalBranch: result.original_branch ?? "",
         });
         setMergeDialogOpen(false);
       } else {
@@ -957,6 +961,15 @@ function ProjectBranchCard({
       .catch((e) => toast({ title: "Push 失败", description: getApiErrorMessage(e), variant: "destructive" }));
   };
 
+  const handleCheckout = (branch: string) => {
+    checkoutBranch.mutateAsync({ branchName: branch })
+      .then(() => {
+        qc.invalidateQueries({ queryKey: ["project-group", groupId, "branches"] });
+        toast({ title: "已切换分支", description: branch });
+      })
+      .catch((e) => toast({ title: "切换失败", description: getApiErrorMessage(e), variant: "destructive" }));
+  };
+
   const handlePull = (branch: string) => {
     pullBranch.mutateAsync({ branchName: branch })
       .then((result) => {
@@ -971,6 +984,7 @@ function ProjectBranchCard({
             conflicts: result.conflicts,
             cwd: result.cwd ?? "",
             deleteSource: false,
+            originalBranch: (result as any).original_branch ?? "",
           });
         } else {
           toast({ title: "Pull 失败", description: result.output?.slice(0, 200), variant: "destructive" });
@@ -1090,6 +1104,9 @@ function ProjectBranchCard({
                   )}
                 </div>
                 <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0" title="切换到此分支" disabled={branch === project.current} onClick={() => handleCheckout(branch)}>
+                    <GitBranch className="h-3 w-3" />
+                  </Button>
                   <Button variant="ghost" size="sm" className="h-6 w-6 p-0" title="Push" onClick={() => handlePush(branch)}>
                     <Upload className="h-3 w-3" />
                   </Button>
@@ -1208,11 +1225,12 @@ function ProjectBranchCard({
             await commitMergeMutation.mutateAsync({
               message: `Merge ${mergeConflictData.sourceBranch} into ${mergeConflictData.targetBranch} (conflicts resolved)`,
               delete_source: mergeConflictData.deleteSource ? mergeConflictData.sourceBranch : "",
+              original_branch: mergeConflictData.originalBranch || undefined,
             });
             qc.invalidateQueries({ queryKey: ["project-group", groupId, "branches"] });
           }}
           onAbortMerge={async () => {
-            await abortMergeMutation.mutateAsync();
+            await abortMergeMutation.mutateAsync({ original_branch: mergeConflictData.originalBranch || undefined });
           }}
           onResolved={() => {
             toast({ title: "合并完成", description: "冲突已解决并提交" });

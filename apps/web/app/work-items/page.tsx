@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { Button, Input, Select, type SelectOptionGroup } from "@tide/ui";
+import { Button, Input, Select, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger, type SelectOptionGroup } from "@tide/ui";
 import {
   useProjects,
   useProjectMembers,
@@ -20,11 +20,13 @@ import {
   WorkItemCreateDialog,
   WorkItemDetailPanel,
   WorkItemListView,
+  WorkItemGanttView,
   AIDecomposeDialog,
   type WorkItemGroupBy,
 } from "@tide/views";
 import type { WorkItem } from "@tide/core";
-import { ChevronDown, LayoutGrid, List, Search, Sparkles } from "lucide-react";
+import { useWorkItems } from "@tide/core";
+import { BarChart3, ChevronDown, LayoutGrid, List, Search, Sparkles } from "lucide-react";
 
 const LAST_SCOPE_STORAGE_KEY = "tide:work-items:last-scope";
 /** 兼容旧版本 localStorage 中仅存项目 id 的 key */
@@ -113,11 +115,11 @@ function WorkItemsPageContent() {
   const [didInit, setDidInit] = useState(false);
 
   // 视图模式
-  const [viewMode, setViewMode] = useState<"board" | "list">(() => {
+  const [viewMode, setViewMode] = useState<"board" | "list" | "gantt">(() => {
     if (typeof window === "undefined") return "board";
     try {
       const saved = window.localStorage.getItem(VIEW_MODE_STORAGE_KEY);
-      if (saved === "list") return "list";
+      if (saved === "list" || saved === "gantt") return saved;
     } catch {}
     return "board";
   });
@@ -257,6 +259,12 @@ function WorkItemsPageContent() {
 
   // 看板传递的 versionId：空字串表示不过滤
   const boardVersionId = versionFilter || undefined;
+
+  // 甘特视图数据源
+  const { data: ganttItems } = useWorkItems(
+    viewMode === "gantt" ? effectiveProjectId : undefined,
+    viewMode === "gantt" ? filters : undefined,
+  );
 
   // 归属下拉选项：扁平 + 两组（项目 / 项目组）
   const scopeFlatOptions = useMemo(
@@ -587,30 +595,55 @@ function WorkItemsPageContent() {
                 title="看板自动刷新间隔"
               />
             )}
-            <div className="flex items-center gap-1 rounded-lg border border-border/60 bg-muted/30 p-1">
-              <button
-                onClick={() => setViewMode("board")}
-                className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                  viewMode === "board"
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                <LayoutGrid className="h-3.5 w-3.5" />
-                看板
-              </button>
-              <button
-                onClick={() => setViewMode("list")}
-                className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                  viewMode === "list"
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                <List className="h-3.5 w-3.5" />
-                列表
-              </button>
-            </div>
+            <TooltipProvider delayDuration={300}>
+              <div className="flex shrink-0 items-center gap-1 rounded-lg border border-border/60 bg-muted/30 p-1">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={() => setViewMode("board")}
+                      className={`flex items-center justify-center rounded-md p-1.5 text-xs font-medium transition-colors ${
+                        viewMode === "board"
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      <LayoutGrid className="h-4 w-4" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>看板视图</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={() => setViewMode("list")}
+                      className={`flex items-center justify-center rounded-md p-1.5 text-xs font-medium transition-colors ${
+                        viewMode === "list"
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      <List className="h-4 w-4" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>列表视图</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={() => setViewMode("gantt")}
+                      className={`flex items-center justify-center rounded-md p-1.5 text-xs font-medium transition-colors ${
+                        viewMode === "gantt"
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      <BarChart3 className="h-4 w-4" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>甘特视图</TooltipContent>
+                </Tooltip>
+              </div>
+            </TooltipProvider>
           </div>
         </div>
       )}
@@ -642,6 +675,11 @@ function WorkItemsPageContent() {
           versionMap={versionMap}
           groupBy={groupBy}
           refetchInterval={refreshInterval}
+        />
+      ) : viewMode === "gantt" ? (
+        <WorkItemGanttView
+          items={ganttItems ?? []}
+          onItemSelect={handleCardClick}
         />
       ) : (
         <WorkItemListView

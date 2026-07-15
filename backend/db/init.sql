@@ -253,7 +253,10 @@ CREATE TABLE IF NOT EXISTS work_items (
     started_at TIMESTAMP,
     completed_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_by TEXT,
+    planned_start_date TEXT,
+    planned_end_date TEXT
 );
 -- idx_work_items_version 索引在 engine.py 迁移后创建（兼容旧表缺少 version_id 列）
 

@@ -8,6 +8,7 @@ import {
   gitCommit,
   gitDiscard,
   gitIgnore,
+  checkoutBranch,
   createBranch,
   deleteBranch,
   cleanupBranches,
@@ -160,6 +161,20 @@ export function useDeleteBranch(projectId: string | undefined) {
 }
 
 /**
+ * 切换分支 mutation。
+ */
+export function useCheckoutBranch(projectId: string | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ branchName }: { branchName: string }) =>
+      checkoutBranch(projectId!, branchName),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["git-audit", "branches", projectId] });
+    },
+  });
+}
+
+/**
  * 清理所有 tide/ 前缀残留分支 mutation。
  */
 export function useCleanupBranches(projectId: string | undefined) {
@@ -272,7 +287,7 @@ export function useMergeInteractive(projectId: string | undefined) {
 export function useCommitMerge(projectId: string | undefined) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (params: { message?: string; delete_source?: string }) =>
+    mutationFn: (params: { message?: string; delete_source?: string; original_branch?: string }) =>
       commitMerge(projectId!, params),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["git-audit", "branches", projectId] });
@@ -286,6 +301,6 @@ export function useCommitMerge(projectId: string | undefined) {
  */
 export function useAbortMerge(projectId: string | undefined) {
   return useMutation({
-    mutationFn: () => abortMerge(projectId!),
+    mutationFn: (params?: { original_branch?: string }) => abortMerge(projectId!, params),
   });
 }

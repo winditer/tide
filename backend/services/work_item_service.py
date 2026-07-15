@@ -619,7 +619,7 @@ class WorkItemService:
 
     # ── CRUD ─────────────────────────────────────────────
 
-    async def create_work_item(self, data) -> dict:
+    async def create_work_item(self, data, created_by: Optional[str] = None) -> dict:
         """
         创建工作项：
         1. 根据 project_id 查找 project_settings 获取 workflow_id
@@ -676,10 +676,10 @@ class WorkItemService:
                         INSERT INTO work_items
                             (id, project_id, workflow_id, current_node_id, title, description,
                              priority, assignee, tags, source_type, source_id, metadata,
-                             version_id, flow_mode, status, started_at, created_at, updated_at, group_id)
+                             version_id, flow_mode, status, started_at, created_at, updated_at, group_id, created_by)
                         VALUES (:id, :project_id, :workflow_id, :current_node_id, :title, :description,
                                 :priority, :assignee, :tags, :source_type, :source_id, :metadata,
-                                :version_id, :flow_mode, :status, :started_at, :created_at, :updated_at, :group_id)
+                                :version_id, :flow_mode, :status, :started_at, :created_at, :updated_at, :group_id, :created_by)
                     """),
                     {
                         "id": item_id,
@@ -701,6 +701,7 @@ class WorkItemService:
                         "created_at": now,
                         "updated_at": now,
                         "group_id": group_id,
+                        "created_by": created_by,
                     },
                 )
                 await session.commit()
@@ -711,7 +712,7 @@ class WorkItemService:
                 from_node_id=None,
                 to_node_id=first_key,
                 trigger_type="create",
-                operator="system",
+                operator=created_by or "Tide",
             )
 
             item = await self.get_work_item(item_id)
@@ -763,10 +764,10 @@ class WorkItemService:
                     INSERT INTO work_items
                         (id, project_id, workflow_id, current_node_id, title, description,
                          priority, assignee, tags, source_type, source_id, metadata,
-                         version_id, started_at, created_at, updated_at, group_id)
+                         version_id, started_at, created_at, updated_at, group_id, created_by)
                     VALUES (:id, :project_id, :workflow_id, :current_node_id, :title, :description,
                             :priority, :assignee, :tags, :source_type, :source_id, :metadata,
-                            :version_id, :started_at, :created_at, :updated_at, :group_id)
+                            :version_id, :started_at, :created_at, :updated_at, :group_id, :created_by)
                 """),
                 {
                     "id": item_id,
@@ -786,6 +787,7 @@ class WorkItemService:
                     "created_at": now,
                     "updated_at": now,
                     "group_id": group_id,
+                    "created_by": created_by,
                 },
             )
             await session.commit()
@@ -796,7 +798,7 @@ class WorkItemService:
             from_node_id=None,
             to_node_id=current_node_id,
             trigger_type="create",
-            operator="system",
+            operator=created_by or "Tide",
         )
 
         # 6. 如果初始节点需要自动化处理，按节点类型触发
@@ -823,7 +825,8 @@ class WorkItemService:
                     SELECT id, project_id, workflow_id, current_node_id, title, description,
                            priority, assignee, tags, source_type, source_id, metadata,
                            version_id, flow_mode, started_at, completed_at, created_at, updated_at,
-                           group_id, status AS stored_status
+                           group_id, status AS stored_status,
+                           created_by, planned_start_date, planned_end_date
                     FROM work_items WHERE id = :id
                 """),
                 {"id": item_id},
@@ -893,7 +896,8 @@ class WorkItemService:
                     SELECT id, project_id, workflow_id, current_node_id, title, description,
                            priority, assignee, tags, source_type, source_id, metadata,
                            version_id, flow_mode, started_at, completed_at, created_at, updated_at,
-                           group_id, status AS stored_status
+                           group_id, status AS stored_status,
+                           created_by, planned_start_date, planned_end_date
                     FROM work_items
                     {where}
                     ORDER BY created_at DESC
@@ -934,6 +938,8 @@ class WorkItemService:
         tags = data.tags if hasattr(data, "tags") else data.get("tags")
         metadata = data.metadata if hasattr(data, "metadata") else data.get("metadata")
         version_id = data.version_id if hasattr(data, "version_id") else data.get("version_id") if isinstance(data, dict) else None
+        planned_start_date = data.planned_start_date if hasattr(data, "planned_start_date") else data.get("planned_start_date") if isinstance(data, dict) else None
+        planned_end_date = data.planned_end_date if hasattr(data, "planned_end_date") else data.get("planned_end_date") if isinstance(data, dict) else None
 
         if title is not None:
             sets.append("title = :title")
@@ -964,6 +970,12 @@ class WorkItemService:
             # 传空字符串表示取消关联
             sets.append("version_id = :version_id")
             params["version_id"] = version_id or None
+        if planned_start_date is not None:
+            sets.append("planned_start_date = :planned_start_date")
+            params["planned_start_date"] = planned_start_date or None
+        if planned_end_date is not None:
+            sets.append("planned_end_date = :planned_end_date")
+            params["planned_end_date"] = planned_end_date or None
 
         if not sets:
             return existing
@@ -4442,6 +4454,7 @@ class WorkItemService:
         approval_id: str,
         approved: bool,
         comment: Optional[str] = None,
+        operator_id: Optional[str] = None,  # 新增：审批操作人 ID
     ):
         """审批完成回调：
 
@@ -4502,7 +4515,7 @@ class WorkItemService:
             await self.transition_work_item(
                 work_item_id,
                 target_node["id"],
-                operator="system",
+                operator=operator_id or "Tide",
                 trigger_type=trigger,
             )
 

@@ -266,8 +266,9 @@ async def git_fetch_remote(project_id: str):
     if not repo_root:
         raise HTTPException(status_code=400, detail="Not a git repository")
 
-    code, output = await git_command(repo_root, ["fetch", "origin", "--prune"], timeout=60)
-    if code != 0:
+    git_config = await _get_project_git_config(project_id)
+    success, output = await git_fetch(repo_root, "origin", git_config=git_config)
+    if not success:
         raise HTTPException(status_code=500, detail=f"git fetch failed: {output[:500]}")
 
     return {"ok": True, "output": output[:500]}
@@ -1117,6 +1118,10 @@ class GitIgnoreRequest(BaseModel):
     files: list[str]
 
 
+class GitCheckoutRequest(BaseModel):
+    branch_name: str
+
+
 class GitBranchCreateRequest(BaseModel):
     branch_name: str
     start_point: str = "HEAD"
@@ -1149,6 +1154,11 @@ class GitMergeInteractiveRequest(BaseModel):
 class GitCommitMergeRequest(BaseModel):
     message: str = ""
     delete_source: str = ""
+    original_branch: str = ""
+
+
+class GitAbortMergeRequest(BaseModel):
+    original_branch: str = ""
 
 
 class GitMergeRequestCreate(BaseModel):
@@ -1331,6 +1341,37 @@ _BRANCH_NAME_RE = re.compile(r"^[a-zA-Z0-9._/\-]+$")
 # ── 分支管理 API ──────────────────────────────────────────────────────────────
 
 
+@router.post("/{project_id}/git/checkout")
+async def checkout_branch(
+    project_id: str,
+    req: GitCheckoutRequest,
+    current_user: Optional[dict] = Depends(get_optional_user),
+):
+    """切换当前工作分支到指定分支。"""
+    await check_project_write_permission_with_group(project_id, current_user)
+    cwd = _decode_project_path(project_id)
+    repo_root = await git_repo_root(Path(cwd))
+    if not repo_root:
+        raise HTTPException(status_code=400, detail="Not a git repository")
+
+    # 检查本地是否存在该分支
+    code, _ = await git_command(repo_root, ["rev-parse", "--verify", f"refs/heads/{req.branch_name}"], timeout=10)
+    if code != 0:
+        # 本地不存在，尝试从远端 fetch 后再 checkout（git 会自动创建 tracking 分支）
+        git_config = await _get_project_git_config(project_id)
+        await git_fetch(repo_root, "origin", git_config=git_config)
+        # 检查远端是否存在该分支
+        code2, _ = await git_command(repo_root, ["rev-parse", "--verify", f"refs/remotes/origin/{req.branch_name}"], timeout=10)
+        if code2 != 0:
+            raise HTTPException(status_code=400, detail=f"分支不存在: {req.branch_name}")
+
+    code, output = await git_command(repo_root, ["checkout", req.branch_name], timeout=60)
+    if code != 0:
+        raise HTTPException(status_code=400, detail=f"切换失败: {output}")
+
+    return {"ok": True, "current_branch": req.branch_name}
+
+
 @router.post("/{project_id}/git/branches")
 async def create_branch(
     project_id: str,
@@ -1510,6 +1551,12 @@ async def git_merge_interactive(project_id: str, req: GitMergeInteractiveRequest
     if await _git_merge_in_progress(repo_root):
         raise HTTPException(status_code=409, detail="已有进行中的合并，请先完成或放弃")
 
+    # 记录合并前的原始分支，供冲突解决后恢复
+    code_orig, orig_raw = await git_command(
+        repo_root, ["rev-parse", "--abbrev-ref", "HEAD"], timeout=10
+    )
+    original_branch = orig_raw.strip() if code_orig == 0 else ""
+
     success, output, conflicts = await git_merge_branch(
         repo_root, req.source_branch, req.target_branch,
         req.strategy, req.delete_source, no_abort=True,
@@ -1520,6 +1567,7 @@ async def git_merge_interactive(project_id: str, req: GitMergeInteractiveRequest
         "output": output[:1000],
         "conflicts": conflicts,
         "cwd": str(repo_root),
+        "original_branch": original_branch,
     }
 
 
@@ -1552,11 +1600,21 @@ async def git_commit_merge(project_id: str, req: GitCommitMergeRequest):
     if req.delete_source:
         await git_command(repo_root, ["branch", "-D", req.delete_source], timeout=15)
 
-    return {"ok": True, "output": output[:500]}
+    # 恢复到合并前的原始分支
+    restored_branch = ""
+    if req.original_branch:
+        rc, co_out = await git_command(repo_root, ["checkout", req.original_branch], timeout=60)
+        if rc == 0:
+            restored_branch = req.original_branch
+            logger.info("[git_audit] commit-merge: restored original branch: %s", req.original_branch)
+        else:
+            logger.warning("[git_audit] commit-merge: failed to restore branch %s: %s", req.original_branch, co_out)
+
+    return {"ok": True, "output": output[:500], "restored_branch": restored_branch}
 
 
 @router.post("/{project_id}/git/abort-merge")
-async def git_abort_merge(project_id: str):
+async def git_abort_merge(project_id: str, req: GitAbortMergeRequest = GitAbortMergeRequest()):
     """放弃交互式合并，恢复仓库状态。"""
     cwd = _decode_project_path(project_id)
     repo_root = await git_repo_root(Path(cwd))
@@ -1570,7 +1628,17 @@ async def git_abort_merge(project_id: str):
     if code != 0:
         raise HTTPException(status_code=500, detail=f"abort 失败: {output[:500]}")
 
-    return {"ok": True}
+    # 恢复到合并前的原始分支
+    restored_branch = ""
+    if req.original_branch:
+        rc, co_out = await git_command(repo_root, ["checkout", req.original_branch], timeout=60)
+        if rc == 0:
+            restored_branch = req.original_branch
+            logger.info("[git_audit] abort-merge: restored original branch: %s", req.original_branch)
+        else:
+            logger.warning("[git_audit] abort-merge: failed to restore branch %s: %s", req.original_branch, co_out)
+
+    return {"ok": True, "restored_branch": restored_branch}
 
 
 @router.post("/{project_id}/git/merge-request")

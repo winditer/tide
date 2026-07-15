@@ -728,7 +728,11 @@ async def git_merge_branch(
     async def _restore_original_branch() -> None:
         """尝试恢复到 merge 前的分支。"""
         if original_branch and original_branch != target_branch:
-            await git_command(repo_root, ["checkout", original_branch], timeout=60)
+            code, output = await git_command(repo_root, ["checkout", original_branch], timeout=60)
+            if code == 0:
+                logger.info("[git_utils] restored original branch: %s", original_branch)
+            else:
+                logger.warning("[git_utils] failed to restore original branch %s: %s", original_branch, output)
 
     async def _abort_and_collect(kind: str) -> list[str]:
         """收集冲突文件并中止进行中的 merge/rebase。"""
@@ -853,16 +857,36 @@ async def git_merge_branch(
             repo_root, ["rebase", target_branch], timeout=300
         )
         outputs.append(output)
-        if code != 0:
+
+        # 无论 exit code 如何，都检查是否有未解决的冲突
+        conflicts = await git_conflict_files(repo_root)
+        if conflicts:
             if no_abort:
-                conflicts = await git_conflict_files(repo_root)
                 logger.warning(
-                    "[git_utils] rebase conflict (no_abort): source=%s target=%s conflicts=%s",
+                    "[git_utils] rebase has unresolved conflicts (no_abort): source=%s target=%s conflicts=%s",
                     source_branch,
                     target_branch,
                     conflicts,
                 )
                 return False, "\n".join(outputs), conflicts
+            await git_command(repo_root, ["rebase", "--abort"], timeout=30)
+            await _restore_original_branch()
+            logger.warning(
+                "[git_utils] rebase has unresolved conflicts (aborted): source=%s target=%s conflicts=%s",
+                source_branch,
+                target_branch,
+                conflicts,
+            )
+            return False, "\n".join(outputs), conflicts
+
+        if code != 0:
+            if no_abort:
+                logger.warning(
+                    "[git_utils] rebase conflict (no_abort): source=%s target=%s",
+                    source_branch,
+                    target_branch,
+                )
+                return False, "\n".join(outputs), []
             conflicts = await _abort_and_collect("rebase")
             logger.warning(
                 "[git_utils] rebase failed: source=%s target=%s conflicts=%s",
@@ -907,16 +931,36 @@ async def git_merge_branch(
                 repo_root, ["merge", "--squash", source_branch], timeout=300
             )
             outputs.append(output)
-            if code != 0:
+
+            # 无论 exit code 如何，都检查是否有未解决的冲突
+            conflicts = await git_conflict_files(repo_root)
+            if conflicts:
                 if no_abort:
-                    conflicts = await git_conflict_files(repo_root)
                     logger.warning(
-                        "[git_utils] squash merge conflict (no_abort): source=%s target=%s conflicts=%s",
+                        "[git_utils] squash merge has unresolved conflicts (no_abort): source=%s target=%s conflicts=%s",
                         source_branch,
                         target_branch,
                         conflicts,
                     )
                     return False, "\n".join(outputs), conflicts
+                await git_command(repo_root, ["merge", "--abort"], timeout=30)
+                await _restore_original_branch()
+                logger.warning(
+                    "[git_utils] squash merge has unresolved conflicts (aborted): source=%s target=%s conflicts=%s",
+                    source_branch,
+                    target_branch,
+                    conflicts,
+                )
+                return False, "\n".join(outputs), conflicts
+
+            if code != 0:
+                if no_abort:
+                    logger.warning(
+                        "[git_utils] squash merge conflict (no_abort): source=%s target=%s",
+                        source_branch,
+                        target_branch,
+                    )
+                    return False, "\n".join(outputs), []
                 conflicts = await _abort_and_collect("merge")
                 logger.warning(
                     "[git_utils] squash merge failed: source=%s target=%s conflicts=%s",
@@ -956,16 +1000,36 @@ async def git_merge_branch(
                 repo_root, ["merge", "--no-ff", source_branch], timeout=300
             )
             outputs.append(output)
-            if code != 0:
+
+            # 无论 exit code 如何，都检查是否有未解决的冲突
+            conflicts = await git_conflict_files(repo_root)
+            if conflicts:
                 if no_abort:
-                    conflicts = await git_conflict_files(repo_root)
                     logger.warning(
-                        "[git_utils] merge conflict (no_abort): source=%s target=%s conflicts=%s",
+                        "[git_utils] merge has unresolved conflicts (no_abort): source=%s target=%s conflicts=%s",
                         source_branch,
                         target_branch,
                         conflicts,
                     )
                     return False, "\n".join(outputs), conflicts
+                await git_command(repo_root, ["merge", "--abort"], timeout=30)
+                await _restore_original_branch()
+                logger.warning(
+                    "[git_utils] merge has unresolved conflicts (aborted): source=%s target=%s conflicts=%s",
+                    source_branch,
+                    target_branch,
+                    conflicts,
+                )
+                return False, "\n".join(outputs), conflicts
+
+            if code != 0:
+                if no_abort:
+                    logger.warning(
+                        "[git_utils] merge conflict (no_abort): source=%s target=%s",
+                        source_branch,
+                        target_branch,
+                    )
+                    return False, "\n".join(outputs), []
                 conflicts = await _abort_and_collect("merge")
                 logger.warning(
                     "[git_utils] merge failed: source=%s target=%s conflicts=%s",

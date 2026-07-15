@@ -3,6 +3,7 @@ export { WorkItemCard } from "./WorkItemCard";
 export { WorkItemCreateDialog } from "./WorkItemCreateDialog";
 export { WorkItemDetailPanel } from "./WorkItemDetailPanel";
 export { WorkItemListView } from "./WorkItemListView";
+export { WorkItemGanttView } from "./WorkItemGanttView";
 export { CrossRepoResults } from "./CrossRepoResults";
 export { AIDecomposeDialog, type AIDecomposeDialogProps } from "./AIDecomposeDialog";
 export { AIOptimizeButton } from "./AIOptimizeButton";

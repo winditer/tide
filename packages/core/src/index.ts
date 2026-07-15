@@ -562,6 +562,7 @@ export {
 } from "./api/project-members";
 export type {
   ProjectMember,
+  BasicUser,
   ListProjectMembersResponse,
   AddMemberInput,
   UpdateMemberInput,
@@ -740,6 +741,7 @@ export {
   useGitIgnoreMutation,
   useCreateBranch,
   useDeleteBranch,
+  useCheckoutBranch,
   useCleanupBranches,
   usePushBranch,
   usePullBranch,

@@ -353,6 +353,8 @@ class WorkItemUpdate(BaseModel):
     tags: Optional[List[str]] = None
     metadata: Optional[dict] = None
     version_id: Optional[str] = None
+    planned_start_date: Optional[str] = None
+    planned_end_date: Optional[str] = None
 
 
 # ── Freeform 分配 & 共享上下文 ──────────────────────────
@@ -409,6 +411,10 @@ class WorkItemResponse(BaseModel):
     completed_at: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+    group_id: Optional[str] = None
+    created_by: Optional[str] = None
+    planned_start_date: Optional[str] = None
+    planned_end_date: Optional[str] = None
 
 
 class WorkItemTransitionRequest(BaseModel):

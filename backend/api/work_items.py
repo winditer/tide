@@ -218,8 +218,9 @@ async def create_work_item(
     _ensure_not_viewer(current_user)
     # 项目级 viewer 写权限检查：与 move/transition 保持一致。
     await check_project_write_permission(body.project_id, current_user)
+    created_by = current_user.get("id") if current_user else None
     try:
-        result = await work_item_service.create_work_item(body)
+        result = await work_item_service.create_work_item(body, created_by=created_by)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     if not result:
@@ -451,11 +452,14 @@ async def transition_work_item(
         )
     if not body.target_node_id:
         raise HTTPException(status_code=400, detail="target_node_id is required")
+    # 排除无效占位值（"system"/"Tide"），确保优先使用当前登录用户
+    _raw_op = body.operator if body.operator and body.operator not in ("system", "Tide") else None
+    operator = _raw_op or (current_user.get("id") if current_user else None) or "Tide"
     try:
         transition = await work_item_service.transition_work_item(
             item_id=item_id,
             target_node_id=body.target_node_id,
-            operator=body.operator or "system",
+            operator=operator,
             trigger_type="manual",
         )
     except ValueError as exc:
@@ -1305,7 +1309,8 @@ async def batch_create_work_items(
             continue
 
         try:
-            result = await work_item_service.create_work_item(body)
+            batch_created_by = user.get("id") if user else None
+            result = await work_item_service.create_work_item(body, created_by=batch_created_by)
         except ValueError as exc:
             failed.append({"index": idx, "title": title, "error": str(exc)})
             continue

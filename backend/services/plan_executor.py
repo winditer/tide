@@ -1050,7 +1050,7 @@ class PlanExecutor:
                     "plan_task_id": task_id,
                     "workflow_id": workflow_id,
                 },
-            })
+            }, created_by="Tide")
             logger.info(
                 "[plan_executor] work_item created: item=%s project=%s workflow=%s plan=%s task=%s",
                 (item.get("id") or "")[:8] if isinstance(item, dict) else "-",

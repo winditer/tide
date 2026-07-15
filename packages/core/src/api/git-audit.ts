@@ -195,6 +195,19 @@ export function gitIgnore(
 }
 
 /**
+ * 切换当前工作分支。
+ */
+export function checkoutBranch(
+  projectId: string,
+  branchName: string,
+): Promise<{ ok: boolean; current_branch: string }> {
+  return apiClient.post<{ ok: boolean; current_branch: string }>(
+    `/api/projects/${encodeURIComponent(projectId)}/git/checkout`,
+    { branch_name: branchName },
+  );
+}
+
+/**
  * 创建分支。
  */
 export function createBranch(
@@ -329,8 +342,8 @@ export async function mergeInteractive(
     strategy?: string;
     delete_source?: boolean;
   },
-): Promise<{ ok: boolean; output: string; conflicts: string[]; cwd: string }> {
-  return apiClient.post<{ ok: boolean; output: string; conflicts: string[]; cwd: string }>(
+): Promise<{ ok: boolean; output: string; conflicts: string[]; cwd: string; original_branch?: string }> {
+  return apiClient.post<{ ok: boolean; output: string; conflicts: string[]; cwd: string; original_branch?: string }>(
     `/api/projects/${encodeURIComponent(projectId)}/git/merge-interactive`,
     params,
   );
@@ -344,6 +357,7 @@ export async function commitMerge(
   params: {
     message?: string;
     delete_source?: string;
+    original_branch?: string;
   },
 ): Promise<{ ok: boolean; output: string }> {
   return apiClient.post<{ ok: boolean; output: string }>(
@@ -357,9 +371,10 @@ export async function commitMerge(
  */
 export async function abortMerge(
   projectId: string,
+  params?: { original_branch?: string },
 ): Promise<{ ok: boolean }> {
   return apiClient.post<{ ok: boolean }>(
     `/api/projects/${encodeURIComponent(projectId)}/git/abort-merge`,
-    {},
+    params ?? {},
   );
 }

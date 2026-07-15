@@ -278,7 +278,11 @@ async def list_members(
     project_id: str,
     current_user: Optional[dict] = Depends(get_current_user),
 ) -> dict:
-    """列出项目成员（含用户信息 + 项目角色）。"""
+    """列出项目成员（含用户信息 + 项目角色）。
+
+    响应额外包含 all_users 字段，包含系统全部用户的基本信息（id/username/display_name），
+    用于前端将 created_by / operator 等 user_id 解析为可读名称（这些用户可能不是项目成员）。
+    """
     async with async_session_factory() as session:
         await _ensure_can_view(session, project_id, current_user)
 
@@ -297,7 +301,16 @@ async def list_members(
         )
         members = [dict(r._mapping) for r in result.fetchall()]
 
-    return {"members": members, "total": len(members)}
+        # 轻量级全用户列表，仅用于前端名称解析（created_by / operator 可能不是项目成员）
+        all_users_result = await session.execute(
+            text(
+                "SELECT id, username, display_name FROM users"
+                " WHERE status = 'active' ORDER BY username ASC"
+            )
+        )
+        all_users = [dict(r._mapping) for r in all_users_result.fetchall()]
+
+    return {"members": members, "total": len(members), "all_users": all_users}
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)

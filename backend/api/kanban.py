@@ -179,11 +179,15 @@ async def move_work_item(
         await check_project_write_permission(item.get("project_id"), current_user)
     if not body.target_node_id:
         raise HTTPException(status_code=400, detail="target_node_id is required")
+    # 看板拖拽始终是用户行为，优先使用当前登录用户作为 operator；
+    # 仅当 body.operator 为有效用户 ID（排除 "system"/"Tide"）时才覆盖。
+    _raw_op = body.operator if body.operator and body.operator not in ("system", "Tide") else None
+    operator = _raw_op or (current_user.get("id") if current_user else None) or "Tide"
     try:
         transition = await work_item_service.transition_work_item(
             item_id=item_id,
             target_node_id=body.target_node_id,
-            operator=body.operator or "system",
+            operator=operator,
             trigger_type="manual",
         )
     except ValueError as exc:

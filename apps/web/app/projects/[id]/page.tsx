@@ -24,6 +24,7 @@ import {
   useBindProjectWorkflow,
   useCleanupBranches,
   useCreateBranch,
+  useCheckoutBranch,
   useCreateMergeRequest,
   useCreateVersion,
   useDeleteBranch,
@@ -1427,6 +1428,7 @@ function BranchManagementCard({ projectId }: { projectId: string }) {
 
   const createBranch = useCreateBranch(projectId);
   const deleteBranch = useDeleteBranch(projectId);
+  const checkoutBranch = useCheckoutBranch(projectId);
   const cleanupBranches = useCleanupBranches(projectId);
   const fetchRemote = useFetchRemote(projectId);
   const pushBranch = usePushBranch(projectId);
@@ -1463,6 +1465,7 @@ function BranchManagementCard({ projectId }: { projectId: string }) {
     conflicts: string[];
     cwd: string;
     deleteSource: boolean;
+    originalBranch: string;
   } | null>(null);
 
   const handleExecuteMerge = async () => {
@@ -1485,6 +1488,7 @@ function BranchManagementCard({ projectId }: { projectId: string }) {
           conflicts: result.conflicts,
           cwd: result.cwd,
           deleteSource: deleteSource ?? false,
+          originalBranch: result.original_branch ?? "",
         });
         setMergeDialogOpen(false);
       } else {
@@ -1522,6 +1526,16 @@ function BranchManagementCard({ projectId }: { projectId: string }) {
     );
   };
 
+  const handleCheckout = (branch: string) => {
+    checkoutBranch.mutate(
+      { branchName: branch },
+      {
+        onSuccess: () => toast({ title: "已切换分支", description: branch }),
+        onError: (err) => toast({ title: "切换失败", description: getApiErrorMessage(err), variant: "destructive" }),
+      },
+    );
+  };
+
   const handlePull = (branch: string) => {
     pullBranch.mutate(
       { branchName: branch },
@@ -1537,6 +1551,7 @@ function BranchManagementCard({ projectId }: { projectId: string }) {
               conflicts: result.conflicts,
               cwd: result.cwd ?? "",
               deleteSource: false,
+              originalBranch: (result as any).original_branch ?? "",
             });
           } else {
             toast({ title: "Pull 失败", description: result.output?.slice(0, 200), variant: "destructive" });
@@ -1681,6 +1696,16 @@ function BranchManagementCard({ projectId }: { projectId: string }) {
                 )}
               </div>
               <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 w-7 p-0"
+                  title="切换到此分支"
+                  disabled={branch === currentBranch}
+                  onClick={() => handleCheckout(branch)}
+                >
+                  <GitBranch className="h-3.5 w-3.5" />
+                </Button>
                 <Button
                   variant="ghost"
                   size="sm"
@@ -1890,10 +1915,11 @@ function BranchManagementCard({ projectId }: { projectId: string }) {
             await commitMergeMutation.mutateAsync({
               message: `Merge ${mergeConflictData.sourceBranch} into ${mergeConflictData.targetBranch} (conflicts resolved)`,
               delete_source: mergeConflictData.deleteSource ? mergeConflictData.sourceBranch : "",
+              original_branch: mergeConflictData.originalBranch || undefined,
             });
           }}
           onAbortMerge={async () => {
-            await abortMergeMutation.mutateAsync();
+            await abortMergeMutation.mutateAsync({ original_branch: mergeConflictData.originalBranch || undefined });
           }}
           onResolved={() => {
             toast({ title: "合并完成", description: "冲突已解决并提交" });

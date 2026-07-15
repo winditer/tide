@@ -922,13 +922,15 @@ class MessageHandler:
                 from backend.services.work_item_service import work_item_service
                 from backend.models.schemas import WorkItemCreate
 
+                lark_created_by = current_user.get("id") if current_user else "Tide"
                 item = await work_item_service.create_work_item(
                     WorkItemCreate(
                         project_id=project_id,
                         title=title,
                         source_type="lark",
                         source_id=chat_id,
-                    )
+                    ),
+                    created_by=lark_created_by,
                 )
                 item_id = (item.get("id") or "")[:8]
                 node_id = (item.get("current_node_id") or "")[:8]

@@ -216,7 +216,7 @@ class ApprovalService:
                     str(detail.get("work_item_id") or task_id)[:8],
                 )
                 await work_item_service.on_work_item_approval_resolved(
-                    approval_id, True, comment=comment,
+                    approval_id, True, comment=comment, operator_id=operator_id,
                 )
             except Exception:
                 logger.exception(
@@ -320,7 +320,7 @@ class ApprovalService:
                     approval_id[:8],
                 )
                 await work_item_service.on_work_item_approval_resolved(
-                    approval_id, False, comment=comment,
+                    approval_id, False, comment=comment, operator_id=operator_id,
                 )
             except Exception:
                 logger.exception(

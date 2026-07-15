@@ -78,6 +78,7 @@ export { WorkItemCard } from "./work-items/WorkItemCard";
 export { WorkItemCreateDialog } from "./work-items/WorkItemCreateDialog";
 export { WorkItemDetailPanel } from "./work-items/WorkItemDetailPanel";
 export { WorkItemListView } from "./work-items/WorkItemListView";
+export { WorkItemGanttView } from "./work-items/WorkItemGanttView";
 export {
   AIDecomposeDialog,
   type AIDecomposeDialogProps,

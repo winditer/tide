@@ -112,6 +112,18 @@ async def init_db():
         if wi_columns and "status" not in wi_columns:
             await db.execute("ALTER TABLE work_items ADD COLUMN status TEXT DEFAULT NULL")
 
+        # work_items 补列：created_by（创建人用户 ID）
+        if wi_columns and "created_by" not in wi_columns:
+            await db.execute("ALTER TABLE work_items ADD COLUMN created_by TEXT")
+
+        # work_items 补列：planned_start_date / planned_end_date（计划时间）
+        if wi_columns and "planned_start_date" not in wi_columns:
+            await db.execute("ALTER TABLE work_items ADD COLUMN planned_start_date TEXT")
+        if wi_columns and "planned_end_date" not in wi_columns:
+            await db.execute("ALTER TABLE work_items ADD COLUMN planned_end_date TEXT")
+
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_work_items_planned_dates ON work_items(planned_start_date, planned_end_date)")
+
         # project_settings 补列 flow_mode（项目默认协作模式）
         cursor = await db.execute("PRAGMA table_info(project_settings)")
         ps_columns = {row[1] for row in await cursor.fetchall()}
