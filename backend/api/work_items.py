@@ -236,6 +236,7 @@ async def list_work_items(
     search: Optional[str] = Query(None, description="标题+描述模糊搜索"),
     assignee: Optional[str] = Query(None, description="负责人筛选"),
     version_id: Optional[str] = Query(None, description="版本筛选"),
+    include_archived: bool = Query(True, description="是否包含已归档工作项"),
     current_user=Depends(get_optional_user),
 ):
     """列出工作项。"""
@@ -247,12 +248,12 @@ async def list_work_items(
             return await work_item_service.list_work_items(
                 project_id=project_id, status=status,
                 search=search, assignee=assignee, version_id=version_id,
-                group_id=group_id,
+                group_id=group_id, include_archived=include_archived,
             )
         items = await work_item_service.list_work_items(
             project_id=None, status=status,
             search=search, assignee=assignee, version_id=version_id,
-            group_id=group_id,
+            group_id=group_id, include_archived=include_archived,
         )
         return [it for it in items if (
             (it.get("project_id") if isinstance(it, dict) else getattr(it, "project_id", None))
@@ -261,7 +262,7 @@ async def list_work_items(
     return await work_item_service.list_work_items(
         project_id=project_id, status=status,
         search=search, assignee=assignee, version_id=version_id,
-        group_id=group_id,
+        group_id=group_id, include_archived=include_archived,
     )
 
 
@@ -278,6 +279,49 @@ async def get_my_assignments(status: Optional[str] = None, user=Depends(get_opti
     if not user_id:
         raise HTTPException(status_code=401, detail="Authentication required")
     return await no_workflow_service.get_my_assignments(user_id, status)
+
+
+# ── 归档 / 取消归档 ─────────────────────────────────────────
+# 注意：PATCH /{item_id}/archive 和 /{item_id}/unarchive 路径比
+# /{item_id} 更具体，FastAPI 按注册顺序匹配不会冲突，但为安全起见
+# 放在 /{item_id} 通配路由之前。
+
+@router.patch("/{item_id}/archive")
+async def archive_work_item(
+    item_id: str,
+    current_user=Depends(get_optional_user),
+):
+    """归档工作项。仅允许终态工作项。"""
+    _ensure_not_viewer(current_user)
+    item = await work_item_service.get_work_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Work item not found")
+    await check_project_write_permission(item.get("project_id"), current_user)
+
+    try:
+        result = await work_item_service.archive_work_item(item_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return result
+
+
+@router.patch("/{item_id}/unarchive")
+async def unarchive_work_item(
+    item_id: str,
+    current_user=Depends(get_optional_user),
+):
+    """取消归档工作项。"""
+    _ensure_not_viewer(current_user)
+    item = await work_item_service.get_work_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Work item not found")
+    await check_project_write_permission(item.get("project_id"), current_user)
+
+    result = await work_item_service.unarchive_work_item(item_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Work item not found")
+    return result
 
 
 @router.get("/{item_id}", response_model=WorkItemResponse)
@@ -301,10 +345,16 @@ async def update_work_item(
     """更新工作项基本信息。"""
     _ensure_not_viewer(current_user)
     existing = await work_item_service.get_work_item(item_id)
-    if existing:
-        await check_project_write_permission(
-            existing.get("project_id"), current_user
-        )
+    if not existing:
+        raise HTTPException(status_code=404, detail="Work item not found")
+    await check_project_write_permission(
+        existing.get("project_id"), current_user
+    )
+
+    # 终态工作项不允许编辑
+    if existing.get("completed_at"):
+        raise HTTPException(status_code=400, detail="Cannot edit a completed work item")
+
     result = await work_item_service.update_work_item(item_id, body)
     if not result:
         raise HTTPException(status_code=404, detail="Work item not found")

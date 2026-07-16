@@ -85,8 +85,9 @@ const STATUS_OPTIONS = [
   { value: "pending_approval", label: "待审批" },
   { value: "completed", label: "已完成" },
   { value: "failed", label: "失败" },
-  { value: "stopped", label: "已停止" },
   { value: "waiting", label: "等待中" },
+  { value: "cancelled", label: "已取消" },
+  { value: "closed", label: "已关闭" },
 ];
 
 /** freeform 模式未自定义状态列时的默认选项（与看板默认 4 列一致） */

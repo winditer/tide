@@ -154,15 +154,18 @@ def _smart_truncate(text: str, max_chars: int) -> str:
     # 最后直接截断
     return truncated + "\n\n...(方案已截断)"
 
-async def _read_worktree_proposal_docs(worktree_path: str, max_total_chars: int = 8000) -> str:
+async def _read_worktree_proposal_docs(worktree_path: str, max_total_chars: int = 8000, work_item_id: str = "") -> str:
     """从 worktree 的 docs/ 目录中读取技术方案相关文档。
 
     查找含有"技术方案"、"design"、"changes"、"修改点"等关键词的 .md 文件，
     读取其内容作为完整的技术方案注入到下游 prompt。
 
+    当 work_item_id 非空时，过滤掉属于其他工作项的方案文档。
+
     Args:
         worktree_path: worktree 目录路径
         max_total_chars: 所有文档内容的总字符上限
+        work_item_id: 当前工作项 ID，用于归属校验过滤其他工作项残留文档
 
     Returns:
         拼接后的文档内容，为空字符串表示未找到文档
@@ -174,14 +177,26 @@ async def _read_worktree_proposal_docs(worktree_path: str, max_total_chars: int 
     # 匹配技术方案相关文档的关键词
     proposal_keywords = ["技术方案", "technical-design", "design", "修改点", "changes", "implementation"]
 
+    # 用于检测其他工作项文档的模式
+    wi_prefix = work_item_id[:8] if work_item_id else ""
+
     proposal_files = []
     try:
         for f in docs_dir.iterdir():
             if not f.suffix == ".md":
                 continue
             fname_lower = f.name.lower()
-            if any(kw in fname_lower for kw in proposal_keywords):
-                proposal_files.append(f)
+            if not any(kw in fname_lower for kw in proposal_keywords):
+                continue
+
+            # 归属校验：过滤其他工作项的文档
+            if wi_prefix and "wi-" in fname_lower:
+                # 文件名包含 wi- 前缀，检查是否属于当前工作项
+                if wi_prefix not in fname_lower:
+                    logger.debug("[work_item] Skipping doc from other work_item: %s (current=%s)", f.name, wi_prefix)
+                    continue
+
+            proposal_files.append(f)
     except OSError:
         return ""
 
@@ -292,13 +307,22 @@ class WorkItemService:
     def _derive_node_status(node_type: Optional[str], has_completed: bool) -> str:
         """根据节点类型推导工作项状态。
 
-        返回值: pending | in_progress | pending_approval | completed | waiting | failed | stopped
+        返回值: pending | in_progress | pending_approval | completed | waiting | failed | cancelled | closed
         """
+        # 终态节点类型判断优先（即使 has_completed=True）
+        if node_type in _TERMINAL_NODE_TYPES:
+            _terminal_status_map = {
+                "end": "completed",
+                "cancel": "cancelled",
+                "error": "failed",
+                "close": "closed",
+            }
+            return _terminal_status_map.get(node_type, "completed")
+
+        # 非终态节点，但 completed_at 已设置（可能是 freeform 模式手动完成）
         if has_completed:
             return "completed"
-        if node_type in _TERMINAL_NODE_TYPES:
-            _terminal_status_map = {"end": "completed", "cancel": "stopped", "error": "failed", "close": "completed"}
-            return _terminal_status_map.get(node_type, "completed")
+
         if node_type == "approval":
             return "pending_approval"
         if node_type == "agent":
@@ -826,7 +850,7 @@ class WorkItemService:
                            priority, assignee, tags, source_type, source_id, metadata,
                            version_id, flow_mode, started_at, completed_at, created_at, updated_at,
                            group_id, status AS stored_status,
-                           created_by, planned_start_date, planned_end_date
+                           created_by, planned_start_date, planned_end_date, archived
                     FROM work_items WHERE id = :id
                 """),
                 {"id": item_id},
@@ -837,6 +861,7 @@ class WorkItemService:
         item = dict(row._mapping)
         item["tags"] = _safe_json_loads(item.get("tags"), None)
         item["metadata"] = _safe_json_loads(item.get("metadata"), None)
+        item["archived"] = bool(item.get("archived", 0))
         # 推导 status
         await self._enrich_status([item])
         return item
@@ -862,10 +887,14 @@ class WorkItemService:
         assignee: Optional[str] = None,
         version_id: Optional[str] = None,
         group_id: Optional[str] = None,
+        include_archived: bool = False,
     ) -> List[dict]:
         """列出工作项，支持按项目、状态、关键词、负责人、版本和项目组筛选。"""
         conditions = []
         params: dict = {}
+
+        if not include_archived:
+            conditions.append("archived = 0")
 
         if project_id:
             conditions.append("project_id = :project_id")
@@ -897,7 +926,7 @@ class WorkItemService:
                            priority, assignee, tags, source_type, source_id, metadata,
                            version_id, flow_mode, started_at, completed_at, created_at, updated_at,
                            group_id, status AS stored_status,
-                           created_by, planned_start_date, planned_end_date
+                           created_by, planned_start_date, planned_end_date, archived
                     FROM work_items
                     {where}
                     ORDER BY created_at DESC
@@ -911,13 +940,15 @@ class WorkItemService:
             item = dict(row._mapping)
             item["tags"] = _safe_json_loads(item.get("tags"), None)
             item["metadata"] = _safe_json_loads(item.get("metadata"), None)
+            item["archived"] = bool(item.get("archived", 0))
             items.append(item)
         # 批量推导 status
         await self._enrich_status(items)
         # 状态是推导出来的，需要在 Python 侧过滤（兼容工作流与 freeform）
         if status:
             if status == "active":
-                items = [it for it in items if it.get("status") != "completed"]
+                _terminal_statuses = {"completed", "cancelled", "failed", "closed"}
+                items = [it for it in items if it.get("status") not in _terminal_statuses]
             else:
                 items = [it for it in items if it.get("status") == status]
         return items
@@ -1025,6 +1056,54 @@ class WorkItemService:
 
         logger.info("Work item deleted: %s", item_id[:8])
         return True
+
+    async def archive_work_item(self, item_id: str) -> Optional[dict]:
+        """归档工作项（仅允许终态工作项）。"""
+        item = await self.get_work_item(item_id)
+        if not item:
+            return None
+        if not item.get("completed_at"):
+            raise ValueError("Only completed/cancelled work items can be archived")
+
+        async with async_session_factory() as session:
+            await session.execute(
+                text("UPDATE work_items SET archived = 1, updated_at = :updated_at WHERE id = :id"),
+                {"updated_at": _now_iso(), "id": item_id},
+            )
+            await session.commit()
+
+        updated = await self.get_work_item(item_id)
+
+        await ws_hub.broadcast("work_items", {
+            "type": "work_item.archived",
+            "work_item_id": item_id,
+            "project_id": item["project_id"],
+        })
+
+        return updated
+
+    async def unarchive_work_item(self, item_id: str) -> Optional[dict]:
+        """取消归档工作项。"""
+        item = await self.get_work_item(item_id)
+        if not item:
+            return None
+
+        async with async_session_factory() as session:
+            await session.execute(
+                text("UPDATE work_items SET archived = 0, updated_at = :updated_at WHERE id = :id"),
+                {"updated_at": _now_iso(), "id": item_id},
+            )
+            await session.commit()
+
+        updated = await self.get_work_item(item_id)
+
+        await ws_hub.broadcast("work_items", {
+            "type": "work_item.unarchived",
+            "work_item_id": item_id,
+            "project_id": item["project_id"],
+        })
+
+        return updated
 
     # ── 流转引擎 ─────────────────────────────────────────
 
@@ -1591,6 +1670,17 @@ class WorkItemService:
             except Exception:
                 pass
 
+            # 注入项目知识图谱模块结构
+            try:
+                from backend.services.knowledge_service import knowledge_service
+                _kg_path = project_cwd or cwd
+                project_knowledge = await knowledge_service.get_project_modules_summary(_kg_path)
+                if project_knowledge:
+                    prompt += f"\n\n## 项目模块结构（知识图谱）\n\n{project_knowledge}\n"
+                    logger.info("[work_item] Injected knowledge graph modules for item=%s (len=%d)", item["id"][:8], len(project_knowledge))
+            except Exception as e:
+                logger.debug("[work_item] Failed to inject knowledge graph: %s", e)
+
             # 创建 task
             task = await task_service.create_task(
                 workspace_id="default",
@@ -1775,7 +1865,7 @@ class WorkItemService:
                 from backend.runtime.git_utils import safe_git_ref_part
                 wi_worktree = Path(primary_cwd) / ".tide" / "worktrees" / f"wi-{safe_git_ref_part(item['id'])}"
                 if wi_worktree.is_dir():
-                    worktree_proposal = await _read_worktree_proposal_docs(str(wi_worktree))
+                    worktree_proposal = await _read_worktree_proposal_docs(str(wi_worktree), work_item_id=item["id"])
             except Exception:
                 pass
 
@@ -3825,7 +3915,7 @@ class WorkItemService:
 
         try:
             if wi_worktree and os.path.isdir(wi_worktree):
-                proposal_docs = await _read_worktree_proposal_docs(wi_worktree, max_total_chars=4000)
+                proposal_docs = await _read_worktree_proposal_docs(wi_worktree, max_total_chars=4000, work_item_id=work_item_id)
         except Exception:
             pass
 
@@ -4946,6 +5036,7 @@ class WorkItemService:
             search=search,
             assignee=assignee,
             group_id=group_id,
+            include_archived=False,
         )
 
         # 按 current_node_id 分组

@@ -188,7 +188,11 @@ async def approve(
     approval = await approval_service.get_approval(approval_id)
     if approval:
         await check_cwd_write_permission(await _approval_cwd(approval), current_user)
-    op = (body.operator_id if body and body.operator_id else operator_id)
+    op = (
+        (body.operator_id if body and body.operator_id else None)
+        or (current_user.get("id") if current_user else None)
+        or operator_id
+    )
     comment = _extract_comment(body)
     ok = await approval_service.approve(
         approval_id, operator_id=op, comment=comment,
@@ -213,7 +217,11 @@ async def reject(
     approval = await approval_service.get_approval(approval_id)
     if approval:
         await check_cwd_write_permission(await _approval_cwd(approval), current_user)
-    op = (body.operator_id if body and body.operator_id else operator_id)
+    op = (
+        (body.operator_id if body and body.operator_id else None)
+        or (current_user.get("id") if current_user else None)
+        or operator_id
+    )
     comment = _extract_comment(body)
     ok = await approval_service.reject(
         approval_id, operator_id=op, comment=comment,

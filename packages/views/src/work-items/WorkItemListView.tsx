@@ -4,6 +4,8 @@ import { useMemo } from "react";
 import {
   useWorkItems,
   useVersions,
+  useArchiveWorkItem,
+  useUnarchiveWorkItem,
   type WorkItem,
   type WorkItemStatus,
   type WorkItemFilters,
@@ -15,8 +17,9 @@ const STATUS_CONFIG: Record<WorkItemStatus, { label: string; color: string }> = 
   pending_approval: { label: "待审批", color: "bg-amber-100 text-amber-700 border border-amber-200" },
   completed: { label: "已完成", color: "bg-green-100 text-green-700 border border-green-200" },
   failed: { label: "失败", color: "bg-red-100 text-red-700 border border-red-200" },
-  stopped: { label: "已停止", color: "bg-gray-200 text-gray-600 border border-gray-300" },
   waiting: { label: "等待中", color: "bg-purple-100 text-purple-700 border border-purple-200" },
+  cancelled: { label: "已取消", color: "bg-orange-100 text-orange-700 border border-orange-200" },
+  closed: { label: "已关闭", color: "bg-slate-100 text-slate-700 border border-slate-200" },
 };
 
 const PRIORITY_CONFIG: Record<number, { label: string; color: string }> = {
@@ -51,6 +54,8 @@ interface WorkItemListViewProps {
 export function WorkItemListView({ projectId, filters, onItemClick }: WorkItemListViewProps) {
   const { data: items, isLoading, isError } = useWorkItems(projectId, filters);
   const { data: versions } = useVersions(projectId);
+  const archiveMutation = useArchiveWorkItem();
+  const unarchiveMutation = useUnarchiveWorkItem();
 
   const versionNameMap = useMemo(() => {
     const map: Record<string, string> = {};
@@ -95,6 +100,7 @@ export function WorkItemListView({ projectId, filters, onItemClick }: WorkItemLi
             <th className="px-4 py-3 text-left font-medium text-muted-foreground w-28">版本</th>
             <th className="px-4 py-3 text-left font-medium text-muted-foreground w-24">优先级</th>
             <th className="px-4 py-3 text-left font-medium text-muted-foreground w-40">创建时间</th>
+            <th className="px-4 py-3 text-right font-medium text-muted-foreground w-24">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -106,12 +112,19 @@ export function WorkItemListView({ projectId, filters, onItemClick }: WorkItemLi
               <tr
                 key={item.id}
                 onClick={() => onItemClick?.(item)}
-                className="border-b border-border/30 transition-colors hover:bg-muted/20 cursor-pointer last:border-b-0"
+                className={`border-b border-border/30 transition-colors hover:bg-muted/20 cursor-pointer last:border-b-0 ${
+                  item.archived ? "opacity-60 bg-gray-50 dark:bg-gray-900/30" : ""
+                }`}
               >
                 {/* 标题 */}
                 <td className="px-4 py-3 max-w-[280px]">
                   <div className="font-medium text-foreground truncate">
                     {item.title || "(无标题)"}
+                    {item.archived && (
+                      <span className="ml-2 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300">
+                        已归档
+                      </span>
+                    )}
                   </div>
                   {item.description && (
                     <div className="mt-0.5 text-xs text-muted-foreground truncate">
@@ -170,6 +183,27 @@ export function WorkItemListView({ projectId, filters, onItemClick }: WorkItemLi
                 {/* 创建时间 */}
                 <td className="px-4 py-3 text-xs text-muted-foreground tabular-nums">
                   {formatTime(item.created_at)}
+                </td>
+
+                {/* 操作 */}
+                <td className="px-4 py-3 text-right">
+                  {item.archived ? (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); unarchiveMutation.mutate(item.id); }}
+                      disabled={unarchiveMutation.isPending}
+                      className="text-xs text-primary hover:text-primary/80 transition-colors"
+                    >
+                      取消归档
+                    </button>
+                  ) : item.completed_at ? (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); archiveMutation.mutate(item.id); }}
+                      disabled={archiveMutation.isPending}
+                      className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      归档
+                    </button>
+                  ) : null}
                 </td>
               </tr>
             );

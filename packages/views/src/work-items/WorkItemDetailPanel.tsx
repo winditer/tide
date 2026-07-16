@@ -2,7 +2,7 @@
 
 
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
-import { Pencil, Trash2, AlertTriangle, GitMerge, GitBranch, Maximize2, Minimize2, CheckCircle2, ArrowRight, Clock, X, Link2, Check, Upload, FileText, Paperclip } from "lucide-react";
+import { Pencil, Trash2, AlertTriangle, GitMerge, GitBranch, Maximize2, Minimize2, CheckCircle2, ArrowRight, Clock, X, Link2, Check, Upload, FileText, Paperclip, Archive } from "lucide-react";
 import { Button, Badge, Input, Select, Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@tide/ui";
 import { AIOptimizeButton } from "./AIOptimizeButton";
 import { CommentThread } from "./CommentThread";
@@ -12,6 +12,8 @@ import {
   useWorkItemTransitions,
   useUpdateWorkItem,
   useDeleteWorkItem,
+  useArchiveWorkItem,
+  useUnarchiveWorkItem,
   useWorkflow,
   useVersions,
   useProjectMembers,
@@ -40,7 +42,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { CrossRepoResults } from "./CrossRepoResults";
 import { MergeConflictPanel } from "../code-editor/MergeConflictPanel";
 
-const TERMINAL_STATUSES = new Set(["completed", "stopped"]);
+const TERMINAL_STATUSES = new Set(["completed", "cancelled"]);
 
 const EDIT_IMAGE_RE = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
 const MAX_EDIT_ATTACHMENTS = 10;
@@ -139,6 +141,8 @@ export function WorkItemDetailPanel({
   const isViewer = user?.role === "viewer";
   const updateMutation = useUpdateWorkItem();
   const deleteMutation = useDeleteWorkItem();
+  const archiveMutation = useArchiveWorkItem();
+  const unarchiveMutation = useUnarchiveWorkItem();
 
   const nodeNameMap = useMemo(() => {
     const map: Record<string, string> = {};
@@ -206,7 +210,7 @@ export function WorkItemDetailPanel({
   const [editUploadingImages, setEditUploadingImages] = useState(false);
   const editImageInputRef = useRef<HTMLInputElement>(null);
 
-  const isEnded = TERMINAL_STATUSES.has(item?.status ?? "");
+  const isEnded = TERMINAL_STATUSES.has(item?.status ?? "") || !!item?.completed_at;
 
   const startEditing = () => {
     if (!item || isEnded) return;
@@ -474,8 +478,39 @@ export function WorkItemDetailPanel({
             <div className="flex items-start justify-between gap-3">
               <h2 className="flex-1 text-2xl font-semibold tracking-tight text-foreground">
                 {item.title}
+                {item.archived && (
+                  <span className="ml-2 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 align-middle">
+                    已归档
+                  </span>
+                )}
               </h2>
               <div className="flex shrink-0 items-center gap-1">
+                {/* 归档/取消归档按钮：终态工作项显示 */}
+                {isEnded && !item.archived && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
+                    onClick={() => archiveMutation.mutate(item.id)}
+                    disabled={archiveMutation.isPending}
+                    aria-label="归档"
+                    title="归档"
+                  >
+                    <Archive className="h-4 w-4" />
+                  </Button>
+                )}
+                {item.archived && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 px-2 text-xs text-muted-foreground hover:text-foreground"
+                    onClick={() => unarchiveMutation.mutate(item.id)}
+                    disabled={unarchiveMutation.isPending}
+                    title="取消归档"
+                  >
+                    取消归档
+                  </Button>
+                )}
                 {!isEnded && (
                   <Button
                     variant="ghost"
@@ -1366,8 +1401,9 @@ function WorkItemAttachmentsSection({ item }: WorkItemAttachmentsSectionProps) {
 }
 
 function WorkItemApprovalSection({ item }: WorkItemApprovalSectionProps) {
+  const { user } = useAuth();
   // 1. 拉取 workflow 以识别当前节点是否为审批节点（仅作为辅助判断、
-  //    提供“节点名称”展示；workflow_id 为空时应跳过请求。
+  //    提供"节点名称"展示；workflow_id 为空时应跳过请求。
   const { data: workflow } = useWorkflow(item.workflow_id || "");
   const currentNode = workflow?.definition?.nodes?.find(
     (n) => n.id === item.current_node_id
@@ -1405,6 +1441,7 @@ function WorkItemApprovalSection({ item }: WorkItemApprovalSectionProps) {
     setRejectError(null);
     approveMutation.mutate({
       id: approval.id,
+      operatorId: user?.id,
       comment: comment.trim() || undefined,
     });
   };
@@ -1416,6 +1453,7 @@ function WorkItemApprovalSection({ item }: WorkItemApprovalSectionProps) {
     setRejectError(null);
     rejectMutation.mutate({
       id: approval.id,
+      operatorId: user?.id,
       comment: comment.trim(),
     });
   };

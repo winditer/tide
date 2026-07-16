@@ -415,6 +415,7 @@ class WorkItemResponse(BaseModel):
     created_by: Optional[str] = None
     planned_start_date: Optional[str] = None
     planned_end_date: Optional[str] = None
+    archived: bool = False
 
 
 class WorkItemTransitionRequest(BaseModel):

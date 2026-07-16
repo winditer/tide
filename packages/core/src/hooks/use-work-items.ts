@@ -28,6 +28,8 @@ import {
   batchCreateWorkItems,
   resolveMerge,
   optimizeDescription,
+  archiveWorkItem,
+  unarchiveWorkItem,
   getWorkItemAssignments,
   assignWorkItem,
   updateWorkItemAssignment,
@@ -443,6 +445,30 @@ export function useCreateWorkItemComment() {
     }) => createWorkItemComment(workItemId, { content, mentions, skills }),
     onSuccess: (_data, { workItemId }) => {
       queryClient.invalidateQueries({ queryKey: ["work-items", "comments", workItemId] });
+    },
+  });
+}
+
+// ---------- 归档 ----------
+
+/** 归档工作项 */
+export function useArchiveWorkItem() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => archiveWorkItem(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["work-items"] });
+    },
+  });
+}
+
+/** 取消归档工作项 */
+export function useUnarchiveWorkItem() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => unarchiveWorkItem(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["work-items"] });
     },
   });
 }

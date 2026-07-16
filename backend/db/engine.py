@@ -124,6 +124,16 @@ async def init_db():
 
         await db.execute("CREATE INDEX IF NOT EXISTS idx_work_items_planned_dates ON work_items(planned_start_date, planned_end_date)")
 
+        # work_items 补列 archived（归档标记）
+        if wi_columns and "archived" not in wi_columns:
+            await db.execute("ALTER TABLE work_items ADD COLUMN archived INTEGER DEFAULT 0")
+            await db.execute("UPDATE work_items SET archived = 0 WHERE archived IS NULL")
+
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_work_items_project_archived
+            ON work_items(project_id, archived, current_node_id)
+        """)
+
         # project_settings 补列 flow_mode（项目默认协作模式）
         cursor = await db.execute("PRAGMA table_info(project_settings)")
         ps_columns = {row[1] for row in await cursor.fetchall()}

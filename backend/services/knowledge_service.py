@@ -599,10 +599,16 @@ class KnowledgeService:
     # ── 模块摘要聚合 ─────────────────────────────────
 
     async def get_project_modules_summary(self, cwd: str) -> str:
-        """从 .knowledge/module/module_graph.json 提取项目模块职责摘要（纯文本，200字内）
+        """从 .knowledge/module/module_graph.json 提取项目模块职责摘要（纯文本，1500字内）
 
         返回格式示例：
-        "API层: auth, tasks, work_items, projects; 服务层: workflow_engine, plan_service, task_service; 运行时: executor, git_utils"
+        API 路由层:
+        - auth: 用户认证与JWT管理
+        - tasks: 任务CRUD与状态流转
+
+        业务服务层:
+        - workflow_engine: 工作流DAG执行与节点调度
+        - plan_service: Plan创建与子任务编排
 
         知识图谱文件不存在时返回空字符串。
         """
@@ -618,35 +624,60 @@ class KnowledgeService:
         if not isinstance(modules, list):
             return ""
 
-        # 按 layer 分组
-        layer_map: Dict[str, List[str]] = {}
+        # 按 layer 分组，保留 description
+        layer_map: Dict[str, List[tuple]] = {}
         for mod in modules:
             layer = mod.get("layer", "other")
             name = mod.get("name", "")
             if not name or name == "__init__":
                 continue
-            layer_map.setdefault(layer, []).append(name)
+            desc = mod.get("description") or mod.get("responsibility") or mod.get("summary") or ""
+            layer_map.setdefault(layer, []).append((name, desc))
 
         # 构建 layer 显示名映射
         layers_meta = data.get("layers", [])
         layer_labels: Dict[str, str] = {}
+        layer_order: List[str] = []
         for l in layers_meta:
             if isinstance(l, dict) and l.get("name"):
                 layer_labels[l["name"]] = l.get("description", l["name"])
+                layer_order.append(l["name"])
 
-        # 生成摘要
+        # 生成摘要：按 layer 分组，每模块附带职责描述
+        max_total_chars = 1500
         parts: List[str] = []
-        for layer_name, mod_names in layer_map.items():
-            if layer_name == "other":
+        # 优先按 layers_meta 顺序输出，再输出剩余 layer
+        seen_layers = set()
+        for layer_name in layer_order:
+            if layer_name not in layer_map or layer_name == "other":
+                continue
+            seen_layers.add(layer_name)
+            label = layer_labels.get(layer_name, layer_name)
+            mod_lines = []
+            for name, desc in layer_map[layer_name][:12]:
+                if desc:
+                    mod_lines.append(f"- {name}: {desc}")
+                else:
+                    mod_lines.append(f"- {name}")
+            parts.append(f"{label}:\n" + "\n".join(mod_lines))
+
+        # 输出未在 layers_meta 中定义的其他 layer
+        for layer_name, mod_list in layer_map.items():
+            if layer_name == "other" or layer_name in seen_layers:
                 continue
             label = layer_labels.get(layer_name, layer_name)
-            display_names = mod_names[:8]
-            parts.append(f"{label}: {', '.join(display_names)}")
+            mod_lines = []
+            for name, desc in mod_list[:12]:
+                if desc:
+                    mod_lines.append(f"- {name}: {desc}")
+                else:
+                    mod_lines.append(f"- {name}")
+            parts.append(f"{label}:\n" + "\n".join(mod_lines))
 
-        summary = "; ".join(parts)
-        # 截断到 200 字符
-        if len(summary) > 200:
-            summary = summary[:197] + "..."
+        summary = "\n\n".join(parts)
+        # 截断到 1500 字符
+        if len(summary) > max_total_chars:
+            summary = summary[:max_total_chars - 3] + "..."
         return summary
 
     async def get_group_modules_summaries(self, group_id: str) -> Dict[str, str]:

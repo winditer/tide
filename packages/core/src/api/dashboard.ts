@@ -258,7 +258,6 @@ export interface MyWorkItem {
     | "pending_approval"
     | "completed"
     | "failed"
-    | "stopped"
     | "waiting";
   /** 项目名称，后端通过注册表 + cwd 末段解析。 */
   project_name?: string | null;

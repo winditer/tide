@@ -377,6 +377,8 @@ export {
   addWorkItemContext,
   getWorkItemComments,
   createWorkItemComment,
+  archiveWorkItem,
+  unarchiveWorkItem,
   type WorkItemFilters,
   type AIDecomposedItem,
   type AIDecomposeResponse,
@@ -422,6 +424,8 @@ export {
   useAddWorkItemContext,
   useWorkItemComments,
   useCreateWorkItemComment,
+  useArchiveWorkItem,
+  useUnarchiveWorkItem,
 } from "./hooks/use-work-items";
 
 // Notifications

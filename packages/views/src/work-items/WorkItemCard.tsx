@@ -11,8 +11,9 @@ const STATUS_CONFIG: Record<WorkItemStatus, { label: string; color: string }> = 
   pending_approval: { label: "待审批", color: "bg-amber-100 text-amber-700 border border-amber-200" },
   completed: { label: "已完成", color: "bg-green-100 text-green-700 border border-green-200" },
   failed: { label: "失败", color: "bg-red-100 text-red-700 border border-red-200" },
-  stopped: { label: "已停止", color: "bg-gray-200 text-gray-600 border border-gray-300" },
   waiting: { label: "等待中", color: "bg-purple-100 text-purple-700 border border-purple-200" },
+  cancelled: { label: "已取消", color: "bg-orange-100 text-orange-700 border border-orange-200" },
+  closed: { label: "已关闭", color: "bg-slate-100 text-slate-700 border border-slate-200" },
 };
 
 const PRIORITY_CONFIG: Record<number, { label: string; color: string }> = {

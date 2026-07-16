@@ -35,6 +35,7 @@ export interface WorkItemFilters {
   assignee?: string;
   version_id?: string;
   group_id?: string;
+  include_archived?: string;
 }
 
 export function getWorkItems(projectId?: string, filters?: WorkItemFilters): Promise<WorkItem[]> {
@@ -45,6 +46,7 @@ export function getWorkItems(projectId?: string, filters?: WorkItemFilters): Pro
     assignee: filters?.assignee,
     version_id: filters?.version_id,
     group_id: filters?.group_id,
+    include_archived: filters?.include_archived,
   });
   return apiClient.get<WorkItem[]>(`/api/work-items${qs}`);
 }
@@ -66,6 +68,16 @@ export function updateWorkItem(
 
 export function deleteWorkItem(id: string): Promise<void> {
   return apiClient.del<void>(`/api/work-items/${id}`);
+}
+
+/** 归档工作项 */
+export function archiveWorkItem(id: string): Promise<WorkItem> {
+  return apiClient.patch<WorkItem>(`/api/work-items/${id}/archive`);
+}
+
+/** 取消归档工作项 */
+export function unarchiveWorkItem(id: string): Promise<WorkItem> {
+  return apiClient.patch<WorkItem>(`/api/work-items/${id}/unarchive`);
 }
 
 /** Freeform 模式下手动更新工作项状态（用于看板拖拽） */

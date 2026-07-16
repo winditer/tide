@@ -76,13 +76,15 @@ const PRIORITY_LANE_LABELS: Record<string, string> = {
 const PRIORITY_LANE_ORDER = ["4", "3", "2", "1", "0"];
 
 function getColumnPalette(column: WorkItemBoardColumn) {
-  const isEnd = column.node_type === "end";
-  if (isEnd) {
-    return {
-      ring: "border-emerald-300/70",
-      dot: "bg-emerald-500",
-      tint: "bg-emerald-50/60",
-    };
+  const terminalPalettes: Record<string, { ring: string; dot: string; tint: string }> = {
+    end: { ring: "border-emerald-300/70", dot: "bg-emerald-500", tint: "bg-emerald-50/60" },
+    cancel: { ring: "border-orange-300/70", dot: "bg-orange-500", tint: "bg-orange-50/60" },
+    error: { ring: "border-red-300/70", dot: "bg-red-500", tint: "bg-red-50/60" },
+    close: { ring: "border-slate-300/70", dot: "bg-slate-500", tint: "bg-slate-50/60" },
+  };
+
+  if (column.node_type && column.node_type in terminalPalettes) {
+    return terminalPalettes[column.node_type];
   }
   return (
     CATEGORY_COLORS[column.category ?? "custom"] ?? CATEGORY_COLORS.custom
@@ -120,13 +122,14 @@ export function WorkItemBoard({
       const targetNodeId = destination.droppableId;
       const sourceNodeId = source.droppableId;
 
-      // 防护：不允许从 end 列拖出（已完成状态不应该被手动重置）
+      // 防护：不允许从终态列拖出（已完成/已取消/失败/已关闭状态不应该被手动重置）
+      const TERMINAL_TYPES = ["end", "cancel", "error", "close"];
       const sourceColumn = data?.columns.find((c) => c.id === sourceNodeId);
-      if (sourceColumn?.node_type === "end") return;
+      if (sourceColumn?.node_type && TERMINAL_TYPES.includes(sourceColumn.node_type)) return;
 
-      // 防护：不允许拖拽到 end 列（已完成状态不应该手动进入）
+      // 防护：不允许拖拽到终态列（终态状态不应该手动进入）
       const destColumn = data?.columns.find((c) => c.id === targetNodeId);
-      if (destColumn?.node_type === "end") return;
+      if (destColumn?.node_type && TERMINAL_TYPES.includes(destColumn.node_type)) return;
 
       // Optimistic update
       queryClient.setQueryData(

@@ -13,7 +13,8 @@ const STATUS_COLORS: Record<string, string> = {
   waiting: "bg-amber-300 dark:bg-amber-400",
   completed: "bg-emerald-400 dark:bg-emerald-500",
   failed: "bg-red-400 dark:bg-red-500",
-  stopped: "bg-red-300 dark:bg-red-400",
+  cancelled: "bg-orange-400 dark:bg-orange-500",
+  closed: "bg-slate-400 dark:bg-slate-500",
 };
 
 const STATUS_COLORS_DEFAULT = "bg-slate-300 dark:bg-slate-500";
@@ -111,9 +112,9 @@ export function WorkItemGanttView({ items, onItemSelect }: WorkItemGanttViewProp
   const [granularity, setGranularity] = useState<Granularity>("week");
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
-  // Filter items that have planned dates
+  // Filter items that have planned dates and are not archived
   const scheduledItems = useMemo(
-    () => items.filter((it) => it.planned_start_date || it.planned_end_date),
+    () => items.filter((it) => !it.archived && (it.planned_start_date || it.planned_end_date)),
     [items],
   );
 

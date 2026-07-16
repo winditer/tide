@@ -23,8 +23,9 @@ export type WorkItemStatus =
   | "pending_approval"
   | "completed"
   | "failed"
-  | "stopped"
-  | "waiting";
+  | "waiting"
+  | "cancelled"
+  | "closed";
 
 /** 工作项流转模式：默认工作流 / 自定义工作流 / 自由协作（无工作流） */
 export type WorkItemFlowMode =
@@ -105,7 +106,7 @@ export interface WorkItem {
   version_id?: string | null;
   /** 项目组 ID（可选）：存在时表示该工作项是跨仓库任务 */
   group_id?: string | null;
-  /** 推导状态：待操作、进行中、待审批、已完成、失败、已停止、等待中 */
+  /** 推导状态：待操作、进行中、待审批、已完成、失败、已停止、等待中、已取消、已关闭 */
   status?: WorkItemStatus;
   /** 流转模式：默认工作流 / 自定义工作流 / 自由协作 */
   flow_mode?: WorkItemFlowMode;
@@ -120,6 +121,8 @@ export interface WorkItem {
   planned_start_date?: string;
   planned_end_date?: string;
   updated_at: string;
+  /** 是否已归档 */
+  archived?: boolean;
 }
 
 /** Plan 关联的子任务（后端 get_transitions 补充） */
