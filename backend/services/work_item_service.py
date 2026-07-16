@@ -1113,6 +1113,7 @@ class WorkItemService:
         target_node_id: str,
         operator: str = "system",
         trigger_type: str = "manual",
+        output: str = "",
     ) -> dict:
         """
         将工作项推进到目标节点：
@@ -1161,6 +1162,7 @@ class WorkItemService:
             to_node_id=target_node_id,
             trigger_type=trigger_type,
             operator=operator,
+            output=output or None,
         )
 
         # 5. 更新 current_node_id
@@ -2860,7 +2862,23 @@ class WorkItemService:
                 await session.commit()
 
             # 自动推进到下游节点
-            await self._advance_past_node(item, node)
+            merge_summary_lines = []
+            for repo_result in all_repo_results:
+                for mr in repo_result.get("merged_results", []):
+                    branch = mr.get("branch", "unknown")
+                    if mr.get("skipped"):
+                        reason = mr.get("reason", "")
+                        if reason == "no_changes":
+                            merge_summary_lines.append(f"{branch}: 分支无实际改动，无需合并")
+                        else:
+                            merge_summary_lines.append(f"{branch}: 已跳过 ({reason})")
+                    elif mr.get("success"):
+                        merge_summary_lines.append(f"{branch} → {target_branch}: 已合并")
+                    else:
+                        error_msg = mr.get("output", "未知错误")[:200]
+                        merge_summary_lines.append(f"{branch}: 合并失败 - {error_msg}")
+            merge_output = "\n".join(merge_summary_lines) if merge_summary_lines else ""
+            await self._advance_past_node(item, node, output=merge_output)
         else:
             # 存在合并失败的 repo
             failed_repo = next((r for r in all_repo_results if not r["success"]), None)
@@ -3087,7 +3105,7 @@ class WorkItemService:
                 item.get("id", "?")[:8], e,
             )
 
-    async def _advance_past_node(self, item: dict, node: dict):
+    async def _advance_past_node(self, item: dict, node: dict, output: str = ""):
         """自动推进工作项到指定节点的下游节点。"""
         definition = await self._load_workflow_definition(item["workflow_id"])
         if not definition:
@@ -3100,6 +3118,7 @@ class WorkItemService:
                 next_node["id"],
                 operator="system",
                 trigger_type="git_merge_completed",
+                output=output,
             )
 
     # ── 回调 ─────────────────────────────────────────────
