@@ -18,6 +18,7 @@ import {
   getRemoteBranches,
   localMergeBranches,
   fetchRemoteBranches,
+  resetBranch,
   mergeInteractive,
   commitMerge,
   abortMerge,
@@ -207,6 +208,20 @@ export function usePullBranch(projectId: string | undefined) {
       pullBranch(projectId!, branchName, remote),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["git-audit", "commits", projectId] });
+    },
+  });
+}
+
+/**
+ * 重置分支到远程最新 mutation。
+ */
+export function useResetBranch(projectId: string | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ branchName, remote }: { branchName: string; remote?: string }) =>
+      resetBranch(projectId!, branchName, remote),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["git-audit", "branches", projectId] });
     },
   });
 }

@@ -274,6 +274,20 @@ export function pullBranch(
 }
 
 /**
+ * 将本地分支重置到远程对应分支的最新提交。
+ */
+export function resetBranch(
+  projectId: string,
+  branchName: string,
+  remote: string = "origin",
+): Promise<{ ok: boolean; output: string }> {
+  return apiClient.post<{ ok: boolean; output: string }>(
+    `/api/projects/${encodeURIComponent(projectId)}/git/reset`,
+    { branch_name: branchName, remote },
+  );
+}
+
+/**
  * 创建合并请求。
  */
 export function createMergeRequest(

@@ -31,6 +31,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   ShieldCheck,
   Star,
@@ -88,6 +89,7 @@ import {
   useProjects,
   usePullBranch,
   usePushBranch,
+  useResetBranch,
   useRemoteBranches,
   useRemoveGroupMember,
   useRemoveGroupUserMember,
@@ -882,6 +884,7 @@ function ProjectBranchCard({
   const fetchRemote = useFetchRemote(project.project_id);
   const pushBranch = usePushBranch(project.project_id);
   const pullBranch = usePullBranch(project.project_id);
+  const resetBranchMutation = useResetBranch(project.project_id);
   const { data: remoteBranchesData } = useRemoteBranches(project.project_id);
   const remoteBranchSet = new Set(remoteBranchesData?.branches ?? []);
   const mergeInteractive = useMergeInteractive(project.project_id);
@@ -1112,6 +1115,24 @@ function ProjectBranchCard({
                   </Button>
                   <Button variant="ghost" size="sm" className="h-6 w-6 p-0" title="Pull" onClick={() => handlePull(branch)}>
                     <Download className="h-3 w-3" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 w-6 p-0"
+                    title="重置到远程最新"
+                    onClick={() => {
+                      if (!confirm(`确定将分支 "${branch}" 重置到远程最新提交吗？本地未推送的改动将丢失。`)) return;
+                      resetBranchMutation.mutate(
+                        { branchName: branch },
+                        {
+                          onSuccess: () => toast({ title: "重置成功", description: `分支 ${branch} 已重置到远程最新` }),
+                          onError: (err: any) => toast({ title: "重置失败", description: err?.message || "未知错误", variant: "destructive" }),
+                        },
+                      );
+                    }}
+                  >
+                    <RotateCcw className="h-3 w-3" />
                   </Button>
                   <Button variant="ghost" size="sm" className="h-6 w-6 p-0" title="本地合并" onClick={() => { setMergeSource(branch); setMergeTarget(""); setMergeDialogOpen(true); }}>
                     <GitMerge className="h-3 w-3" />

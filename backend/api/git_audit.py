@@ -1137,6 +1137,11 @@ class GitPullRequest(BaseModel):
     remote: str = "origin"
 
 
+class GitResetRequest(BaseModel):
+    branch_name: str
+    remote: str = "origin"
+
+
 class GitLocalMergeRequest(BaseModel):
     source_branch: str
     target_branch: str
@@ -1517,6 +1522,51 @@ async def git_pull_branch(
         raise HTTPException(status_code=500, detail=f"合并失败: {merge_output[:500]}")
 
     return {"ok": True, "output": merge_output[:500]}
+
+
+@router.post("/{project_id}/git/reset")
+async def reset_branch(
+    project_id: str,
+    req: GitResetRequest,
+    current_user: Optional[dict] = Depends(get_optional_user),
+):
+    """将本地分支重置到远程对应分支的最新提交。"""
+    await check_project_write_permission_with_group(project_id, current_user)
+    cwd = _decode_project_path(project_id)
+    repo_root = await git_repo_root(Path(cwd))
+    if not repo_root:
+        raise HTTPException(status_code=400, detail="Not a git repository")
+
+    # 先 fetch 远端最新
+    git_config = await _get_project_git_config(project_id)
+    fetch_ok, fetch_output = await git_fetch(repo_root, req.remote, git_config=git_config)
+    if not fetch_ok:
+        raise HTTPException(status_code=500, detail=f"fetch 失败: {fetch_output[:300]}")
+
+    # 验证远端分支是否存在
+    ref = f"refs/remotes/{req.remote}/{req.branch_name}"
+    code, _ = await git_command(repo_root, ["rev-parse", "--verify", ref], timeout=10)
+    if code != 0:
+        raise HTTPException(status_code=400, detail=f"远程分支不存在: {req.remote}/{req.branch_name}")
+
+    # 确保当前在目标分支上（否则 reset 不会移动分支指针）
+    code_cur, current_branch = await git_command(repo_root, ["rev-parse", "--abbrev-ref", "HEAD"], timeout=10)
+    if code_cur == 0 and current_branch.strip() != req.branch_name:
+        # 先 checkout 到目标分支
+        code_co, out_co = await git_command(repo_root, ["checkout", req.branch_name], timeout=30)
+        if code_co != 0:
+            raise HTTPException(status_code=400, detail=f"无法切换到分支 {req.branch_name}: {out_co[:200]}")
+
+    # 执行 reset --hard
+    code, output = await git_command(
+        repo_root,
+        ["reset", "--hard", f"{req.remote}/{req.branch_name}"],
+        timeout=60,
+    )
+    if code != 0:
+        raise HTTPException(status_code=400, detail=f"重置失败: {output[:300]}")
+
+    return {"ok": True, "output": output.strip()}
 
 
 @router.post("/{project_id}/git/merge")

@@ -45,6 +45,7 @@ import {
   useSetFreeformStatusList,
   usePullBranch,
   usePushBranch,
+  useResetBranch,
   useRemoteBranches,
   useRemoveProjectMember,
   useUnbindProjectWorkflow,
@@ -68,6 +69,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   ShieldCheck,
   Tag,
@@ -1433,6 +1435,7 @@ function BranchManagementCard({ projectId }: { projectId: string }) {
   const fetchRemote = useFetchRemote(projectId);
   const pushBranch = usePushBranch(projectId);
   const pullBranch = usePullBranch(projectId);
+  const resetBranchMutation = useResetBranch(projectId);
   const createMR = useCreateMergeRequest(projectId);
 
   const { data: remoteBranchesData } = useRemoteBranches(projectId);
@@ -1723,6 +1726,24 @@ function BranchManagementCard({ projectId }: { projectId: string }) {
                   onClick={() => handlePull(branch)}
                 >
                   <Download className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 w-7 p-0"
+                  title="重置到远程最新"
+                  onClick={() => {
+                    if (!confirm(`确定将分支 "${branch}" 重置到远程最新提交吗？本地未推送的改动将丢失。`)) return;
+                    resetBranchMutation.mutate(
+                      { branchName: branch },
+                      {
+                        onSuccess: () => toast({ title: "重置成功", description: `分支 ${branch} 已重置到远程最新` }),
+                        onError: (err: any) => toast({ title: "重置失败", description: err?.message || "未知错误", variant: "destructive" }),
+                      },
+                    );
+                  }}
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
                 </Button>
                 <Button
                   variant="ghost"

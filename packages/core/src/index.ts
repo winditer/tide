@@ -749,6 +749,7 @@ export {
   useCleanupBranches,
   usePushBranch,
   usePullBranch,
+  useResetBranch,
   useCreateMergeRequest,
   useRemoteBranches,
   useLocalMerge,

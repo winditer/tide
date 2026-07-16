@@ -478,7 +478,10 @@ class PlanExecutor:
         branch_name = ""
         run_cwd = task_cwd
 
-        if PLAN_USE_WORKTREES:
+        # 优先使用任务级 useWorktree 配置（从 plan definition 中读取），fallback 到全局配置
+        use_worktree = await self._lookup_task_use_worktree(plan, task_id)
+
+        if use_worktree:
             wt, br, _base = await git_utils.prepare_plan_worktree(
                 plan_id, task_id, task_cwd
             )
@@ -996,6 +999,57 @@ class PlanExecutor:
         except Exception:  # noqa: BLE001
             logger.debug("_lookup_task_workflow_id failed", exc_info=True)
             return None
+
+    async def _lookup_task_use_worktree(self, plan: dict, task_id: str) -> bool:
+        """从 plan definition 中读取子任务的 useWorktree 配置。
+
+        fallback 到全局 PLAN_USE_WORKTREES 配置（保持向后兼容）。
+        """
+        try:
+            raw = plan.get("definition") if isinstance(plan, dict) else None
+            if not raw:
+                return PLAN_USE_WORKTREES
+
+            if isinstance(raw, (bytes, bytearray)):
+                raw = raw.decode("utf-8", errors="replace")
+            if isinstance(raw, str):
+                try:
+                    definition = json.loads(raw)
+                except json.JSONDecodeError:
+                    return PLAN_USE_WORKTREES
+            elif isinstance(raw, dict):
+                definition = raw
+            else:
+                return PLAN_USE_WORKTREES
+
+            tasks_def = definition.get("tasks") if isinstance(definition, dict) else None
+            if not isinstance(tasks_def, list) or not tasks_def:
+                return PLAN_USE_WORKTREES
+
+            # 查 plan_tasks 获取当前 task 的 task_index
+            async with async_session_factory() as session:
+                row = (
+                    await session.execute(
+                        text(
+                            "SELECT task_index FROM plan_tasks "
+                            "WHERE task_id = :task_id LIMIT 1"
+                        ),
+                        {"task_id": task_id},
+                    )
+                ).fetchone()
+            if not row:
+                return PLAN_USE_WORKTREES
+            idx = dict(row._mapping).get("task_index")
+            if idx is None or idx < 0 or idx >= len(tasks_def):
+                return PLAN_USE_WORKTREES
+
+            task_def = tasks_def[idx] or {}
+            if isinstance(task_def, dict) and "useWorktree" in task_def:
+                return bool(task_def["useWorktree"])
+            return PLAN_USE_WORKTREES
+        except Exception:  # noqa: BLE001
+            logger.debug("_lookup_task_use_worktree failed", exc_info=True)
+            return PLAN_USE_WORKTREES
 
     async def _create_plan_work_item(
         self, plan_id: str, task_id: str, task: dict, workflow_id: str

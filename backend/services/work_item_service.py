@@ -2014,6 +2014,7 @@ class WorkItemService:
                     "depends_on": backend_indices if is_frontend and backend_indices else [],
                     "project_id": project["project_id"],
                     "cwd": project_cwd,
+                    "useWorktree": data.get("useWorktree", True),
                 }
                 plan_tasks.append(plan_task_def)
 
