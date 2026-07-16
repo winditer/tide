@@ -3808,6 +3808,44 @@ class WorkItemService:
             len(subtask_rows), work_item_id[:8], plan_id[:8],
         )
 
+        # 收集子任务执行摘要（用于汇总报告增强）
+        subtask_summaries: list = []  # [(index, title, status, commit_msg)]
+        execution_stats: dict = {"total": 0, "completed": 0, "failed": 0, "cancelled": 0}
+        try:
+            async with async_session_factory() as session:
+                summary_result = await session.execute(
+                    text("""
+                        SELECT pt.task_index, pt.title, pt.description, pt.status,
+                               t.status as task_status, t.created_at, t.completed_at
+                        FROM plan_tasks pt
+                        LEFT JOIN tasks t ON pt.task_id = t.id
+                        WHERE pt.plan_id = :plan_id
+                        ORDER BY pt.task_index
+                    """),
+                    {"plan_id": plan_id},
+                )
+                summary_rows = [dict(r._mapping) for r in summary_result.fetchall()]
+            execution_stats["total"] = len(summary_rows)
+            for sr in summary_rows:
+                st = (sr.get("task_status") or sr.get("status") or "").lower()
+                if st in ("completed", "done", "success"):
+                    execution_stats["completed"] += 1
+                elif st in ("failed", "error"):
+                    execution_stats["failed"] += 1
+                elif st in ("cancelled", "canceled"):
+                    execution_stats["cancelled"] += 1
+                # subtask_summaries 的 commit_msg 后续填充
+                subtask_summaries.append({
+                    "index": sr.get("task_index", 0),
+                    "title": sr.get("title") or sr.get("description") or f"子任务-{sr.get('task_index', '?')}",
+                    "status": st or "unknown",
+                    "created_at": sr.get("created_at") or "",
+                    "completed_at": sr.get("completed_at") or "",
+                    "commit_msg": "",
+                })
+        except Exception as exc:
+            logger.warning("[work_item] failed to collect subtask summaries: %s", exc)
+
         # 收集每个子任务的变更文件产物（排除已由主 task 收集过的）
         for sub in subtask_rows:
             sub_id = sub.get("id", "")
@@ -3823,13 +3861,20 @@ class WorkItemService:
             try:
                 from backend.runtime.git_utils import git_command
                 code, log_output = await git_command(
-                    Path(sub_wt), ["log", "-1", "--format=%H"], timeout=5
+                    Path(sub_wt), ["log", "-1", "--format=%H||%s"], timeout=5
                 )
                 if code != 0:
                     continue
-                sub_commit = log_output.strip()
+                log_parts = log_output.strip().split("||", 1)
+                sub_commit = log_parts[0].strip()
+                sub_commit_msg = log_parts[1].strip() if len(log_parts) > 1 else ""
                 if not sub_commit:
                     continue
+                # 将 commit message 填入 subtask_summaries 对应条目
+                for idx, ss in enumerate(subtask_summaries):
+                    if idx == (len(subtask_summaries) - len(subtask_rows) + subtask_rows.index(sub)):
+                        ss["commit_msg"] = sub_commit_msg
+                        break
                 changed = await self._get_commit_changed_files(sub_wt, sub_commit)
                 if changed:
                     # 确定来源项目名称（用子任务的 cwd 目录名）
@@ -3854,7 +3899,7 @@ class WorkItemService:
 
         # 收集各子任务的变更文件列表（用于汇总报告的代码改动摘要）
         project_changed_files: dict = {}  # project_name -> list of files
-        for sub in subtask_rows:
+        for sub_idx, sub in enumerate(subtask_rows):
             sub_wt = sub.get("worktree_path") or sub.get("cwd") or ""
             if not sub_wt or not os.path.isdir(sub_wt):
                 continue
@@ -3863,14 +3908,21 @@ class WorkItemService:
             try:
                 from backend.runtime.git_utils import git_command
                 code, log_output = await git_command(
-                    Path(sub_wt), ["log", "-1", "--format=%H"], timeout=5
+                    Path(sub_wt), ["log", "-1", "--format=%H||%s"], timeout=5
                 )
                 if code == 0 and log_output.strip():
-                    changed = await self._get_commit_changed_files(sub_wt, log_output.strip())
-                    if changed:
-                        existing = project_changed_files.get(project_name, [])
-                        existing.extend(changed)
-                        project_changed_files[project_name] = existing
+                    log_parts = log_output.strip().split("||", 1)
+                    commit_hash = log_parts[0].strip()
+                    commit_msg = log_parts[1].strip() if len(log_parts) > 1 else ""
+                    if commit_hash:
+                        changed = await self._get_commit_changed_files(sub_wt, commit_hash)
+                        if changed:
+                            existing = project_changed_files.get(project_name, [])
+                            existing.extend(changed)
+                            project_changed_files[project_name] = existing
+                        # 更新 subtask_summaries 中的 commit_msg
+                        if sub_idx < len(subtask_summaries) and not subtask_summaries[sub_idx].get("commit_msg"):
+                            subtask_summaries[sub_idx]["commit_msg"] = commit_msg
             except Exception:
                 pass
 
@@ -3956,6 +4008,8 @@ class WorkItemService:
                 changed_files_by_project=project_changed_files,
                 test_reports=report_sections,
                 proposal_docs=proposal_docs,
+                subtask_summaries=subtask_summaries,
+                execution_stats=execution_stats,
             )
 
             executor = AgentExecutor()
@@ -3994,6 +4048,8 @@ class WorkItemService:
                 work_item_id,
                 report_sections,
                 project_changed_files,
+                subtask_summaries=subtask_summaries,
+                execution_stats=execution_stats,
             )
             logger.info("[work_item] using static summary report for item=%s", work_item_id[:8])
 
@@ -4116,53 +4172,304 @@ class WorkItemService:
         work_item_id: str,
         report_sections: list,
         project_changed_files: dict,
+        subtask_summaries: list = None,
+        execution_stats: dict = None,
     ) -> str:
-        """纯 Python 静态生成汇总报告（作为 AI 生成失败时的 fallback）。"""
-        project_list = ", ".join(
-            sorted(set(
-                [p for p, _ in report_sections] +
-                list(project_changed_files.keys())
-            ))
-        )
-        report_lines = ["# 测试报告（汇总）\n"]
-        report_lines.append("## 概述\n")
-        report_lines.append(f"- 工作项：{wi_title or work_item_id[:8]}")
-        report_lines.append(f"- 涉及项目：{project_list}\n")
+        """生成专业的静态汇总测试报告（AI fallback）—— 9 章结构 Test Handover Report"""
+        from datetime import datetime
 
-        # 代码改动摘要
-        if project_changed_files:
-            report_lines.append("## 代码改动摘要\n")
-            for proj_name in sorted(project_changed_files.keys()):
-                files = project_changed_files[proj_name]
-                report_lines.append(f"### {proj_name}\n")
-                unique_files = sorted(set(files))
-                for f in unique_files:
-                    report_lines.append(f"- `{f}`")
-                report_lines.append("")
+        lines = []
+        lines.append("# Test Handover Report（测试交接报告）\n")
 
-        # 各项目测试报告
-        if report_sections:
-            report_lines.append("## 各项目测试报告\n")
-            for project_name, section in report_sections:
-                report_lines.append(f"### {project_name}\n")
-                report_lines.append(section.strip())
-                report_lines.append("")
+        projects = sorted(project_changed_files.keys())
+        total_files = sum(len(files) for files in project_changed_files.values())
 
-        # 测试要点与注意事项
-        notes_items = self._extract_test_notes_from_sections(report_sections)
-        report_lines.append("## 测试要点与注意事项\n")
-        if notes_items:
-            for note in notes_items:
-                report_lines.append(f"- {note}")
+        # 定义风险模式
+        high_risk_patterns = ['auth', 'security', 'payment', 'permission', 'credential', 'token', 'password']
+        mid_risk_patterns = ['api', 'controller', 'route', 'service', 'mapper', 'migration', 'schema']
+
+        # 统计高/中/低风险文件数
+        high_risk_files = []
+        mid_risk_files = []
+        for _proj, files in project_changed_files.items():
+            for f in set(files):
+                fname_lower = f.lower()
+                if any(p in fname_lower for p in high_risk_patterns):
+                    high_risk_files.append(f)
+                elif any(p in fname_lower for p in mid_risk_patterns):
+                    mid_risk_files.append(f)
+
+        # --- 1. Executive Summary ---
+        lines.append("## 1. Executive Summary（执行摘要）\n")
+        lines.append("| 项目 | 值 |")
+        lines.append("|------|-----|")
+        lines.append(f"| **工作项** | {wi_title or work_item_id[:8]} |")
+        lines.append(f"| **涉及项目** | {', '.join(projects) if projects else 'N/A'} |")
+        lines.append(f"| **改动文件数** | {total_files} |")
+        lines.append(f"| **生成时间** | {datetime.now().strftime('%Y-%m-%d %H:%M')} |")
+        lines.append("")
+
+        # 根据 execution_stats 判断整体结论
+        if execution_stats:
+            total = execution_stats.get("total", 0)
+            completed = execution_stats.get("completed", 0)
+            failed = execution_stats.get("failed", 0)
+            if total > 0 and failed == 0 and completed == total:
+                conclusion = "✅ 通过"
+                confidence = "高"
+                recommendation = "Go"
+            elif failed > 0:
+                conclusion = "❌ 未通过"
+                confidence = "低"
+                recommendation = "No-Go"
+            elif completed < total:
+                conclusion = "⚠️ 有风险"
+                confidence = "中"
+                recommendation = "Conditional Go"
+            else:
+                conclusion = "⚠️ 有风险"
+                confidence = "中"
+                recommendation = "Conditional Go"
         else:
-            if project_changed_files:
-                report_lines.append("- 基于改动范围，建议对涉及的功能模块进行回归测试")
-                if len(project_changed_files) > 1:
-                    report_lines.append("- 涉及多个项目改动，请关注跨项目联调的兼容性")
-                report_lines.append("- 建议在集成环境中验证各项目间的接口交互")
-        report_lines.append("")
+            conclusion = "⚠️ 有风险（无执行统计数据）"
+            confidence = "低"
+            recommendation = "Conditional Go"
 
-        return "\n".join(report_lines)
+        lines.append(f"**整体测试结论**: {conclusion}")
+        lines.append(f"**置信度**: {confidence}")
+        lines.append(f"**建议**: {recommendation}")
+        lines.append("")
+
+        # --- 2. 改动范围分析 ---
+        lines.append("## 2. 改动范围分析\n")
+        for project, files in sorted(project_changed_files.items()):
+            lines.append(f"### {project}\n")
+            lines.append("| 模块 | 改动文件 | 改动类型 | 风险等级 |")
+            lines.append("|------|---------|---------|---------|")
+            unique_files = sorted(set(files))
+            for f in unique_files[:30]:
+                fname_lower = f.lower()
+                # 推断模块（从路径提取第一级目录）
+                parts = f.replace("\\", "/").split("/")
+                module = parts[0] if len(parts) > 1 else "根目录"
+                # 推断改动类型
+                if f.endswith(('.yml', '.yaml', '.env', '.properties', '.json', '.toml')):
+                    change_type = "配置变更"
+                elif f.endswith('.sql'):
+                    change_type = "数据库迁移"
+                elif 'test' in fname_lower or 'spec' in fname_lower:
+                    change_type = "测试变更"
+                elif any(p in fname_lower for p in ['fix', 'bug', 'patch', 'hotfix']):
+                    change_type = "缺陷修复"
+                else:
+                    change_type = "功能变更"
+                # 风险等级
+                if any(p in fname_lower for p in high_risk_patterns):
+                    risk = "🔴 高"
+                elif any(p in fname_lower for p in mid_risk_patterns):
+                    risk = "🟡 中"
+                else:
+                    risk = "🟢 低"
+                lines.append(f"| {module} | `{f}` | {change_type} | {risk} |")
+            if len(unique_files) > 30:
+                lines.append(f"| ... | 及其他 {len(unique_files) - 30} 个文件 | - | - |")
+            lines.append("")
+
+        # --- 3. 测试执行结果 ---
+        lines.append("## 3. 测试执行结果\n")
+        if execution_stats:
+            lines.append("### 执行统计\n")
+            lines.append("| 指标 | 数量 |")
+            lines.append("|------|------|")
+            lines.append(f"| 总子任务数 | {execution_stats.get('total', 0)} |")
+            lines.append(f"| 已完成 | {execution_stats.get('completed', 0)} |")
+            lines.append(f"| 失败 | {execution_stats.get('failed', 0)} |")
+            lines.append(f"| 已取消 | {execution_stats.get('cancelled', 0)} |")
+            lines.append("")
+
+        if subtask_summaries:
+            lines.append("### 子任务执行明细\n")
+            lines.append("| 序号 | 任务名称 | 状态 | Commit Message |")
+            lines.append("|------|---------|------|---------------|")
+            for ss in subtask_summaries:
+                idx = ss.get("index", "?")
+                title = ss.get("title", "")[:50]
+                status = ss.get("status", "unknown")
+                status_emoji = "✅" if status in ("completed", "done", "success") else ("❌" if status in ("failed", "error") else "⚠️")
+                cmsg = ss.get("commit_msg", "-")[:80] or "-"
+                lines.append(f"| {idx} | {title} | {status_emoji} {status} | {cmsg} |")
+            lines.append("")
+        else:
+            lines.append("无子任务执行数据。\n")
+
+        if report_sections:
+            lines.append("### 各项目测试报告\n")
+            for project_name, section_content in report_sections:
+                lines.append(f"#### {project_name}\n")
+                lines.append(section_content.strip())
+                lines.append("")
+
+        # --- 4. 测试覆盖度分析 ---
+        lines.append("## 4. 测试覆盖度分析\n")
+        # 检测是否有测试文件变更
+        test_files = []
+        for _proj, files in project_changed_files.items():
+            for f in set(files):
+                if 'test' in f.lower() or 'spec' in f.lower():
+                    test_files.append(f)
+        has_test_reports = bool(report_sections)
+
+        lines.append("| 覆盖维度 | 状态 | 说明 |")
+        lines.append("|---------|------|------|")
+        if test_files:
+            lines.append(f"| 自动化测试 | ✅ 有 | 发现 {len(test_files)} 个测试文件变更 |")
+        else:
+            lines.append("| 自动化测试 | ⚠️ 未发现 | 未检测到测试文件变更 |")
+        if has_test_reports:
+            lines.append("| Agent 自测报告 | ✅ 有 | 子任务已生成测试报告 |")
+        else:
+            lines.append("| Agent 自测报告 | ⚠️ 无 | 子任务未生成独立测试报告 |")
+        lines.append("")
+
+        if not test_files:
+            lines.append("**测试盲区警告**: 本次改动未发现对应的测试文件变更，建议手工验证核心功能。\n")
+        lines.append("")
+
+        # --- 5. 风险评估矩阵 ---
+        lines.append("## 5. 风险评估矩阵\n")
+        lines.append("| 风险项 | 可能性 | 影响度 | 缓解措施 |")
+        lines.append("|--------|--------|--------|---------|")
+
+        if high_risk_files:
+            for f in high_risk_files[:5]:
+                lines.append(f"| `{f}` 安全/权限变更 | 高 | 🔴 高 | 需安全审计+手工验证 |")
+        if mid_risk_files:
+            for f in mid_risk_files[:5]:
+                lines.append(f"| `{f}` 接口/服务变更 | 中 | 🟡 中 | 接口回归测试 |")
+        if not high_risk_files and not mid_risk_files:
+            lines.append("| 本次改动风险较低 | 低 | 🟢 低 | 常规回归即可 |")
+        lines.append("")
+
+        overall_risk = "🔴 高" if high_risk_files else ("🟡 中" if mid_risk_files else "🟢 低")
+        lines.append(f"**整体风险等级**: {overall_risk}")
+        lines.append("")
+
+        # --- 6. 回归影响分析 ---
+        lines.append("## 6. 回归影响分析\n")
+        # 基于改动模块推断可能影响的功能
+        affected_modules = set()
+        for _proj, files in project_changed_files.items():
+            for f in set(files):
+                parts = f.replace("\\", "/").split("/")
+                if len(parts) > 1:
+                    affected_modules.add(parts[0])
+
+        if affected_modules:
+            lines.append("### 可能影响的功能模块\n")
+            for mod in sorted(affected_modules):
+                lines.append(f"- `{mod}` 相关功能")
+            lines.append("")
+            lines.append("### 建议回归范围\n")
+            lines.append("- 上述模块的核心功能流程")
+            if len(projects) > 1:
+                lines.append("- 跨项目集成点（API 调用、数据同步）")
+            lines.append("")
+        else:
+            lines.append("改动范围较小，回归影响有限。\n")
+
+        # --- 7. 验收测试用例 ---
+        lines.append("## 7. 验收测试用例\n")
+        tc_num = 1
+        if high_risk_files:
+            lines.append("### P0 必须验证（高风险）\n")
+            for f in high_risk_files[:3]:
+                lines.append(f"**TC-{tc_num:03d}**: `{f}` 相关功能验证")
+                lines.append(f"- 前置条件：系统正常运行，用户已登录")
+                lines.append(f"- 正向测试：执行正常业务流程，验证功能正确")
+                lines.append(f"- 负向测试：无权限/异常输入场景，验证安全防护")
+                lines.append("")
+                tc_num += 1
+
+        if mid_risk_files:
+            lines.append("### P1 重要验证（中风险）\n")
+            for f in mid_risk_files[:3]:
+                lines.append(f"**TC-{tc_num:03d}**: `{f}` 接口/服务验证")
+                lines.append(f"- 前置条件：服务正常启动")
+                lines.append(f"- 正向测试：API 正常调用返回预期结果")
+                lines.append(f"- 负向测试：参数缺失/类型错误时返回正确错误码")
+                lines.append("")
+                tc_num += 1
+
+        if not high_risk_files and not mid_risk_files:
+            lines.append("### P2 一般验证\n")
+            lines.append(f"**TC-{tc_num:03d}**: 基本功能验证")
+            lines.append("- 前置条件：系统正常运行")
+            lines.append("- 正向测试：验证改动文件对应功能正常")
+            lines.append("- 负向测试：边界条件处理正确")
+            lines.append("")
+
+        # --- 8. 部署与回滚 ---
+        lines.append("## 8. 部署与回滚\n")
+
+        # 检测特殊文件
+        has_sql = any(
+            any(f.endswith('.sql') for f in files)
+            for files in project_changed_files.values()
+        )
+        has_config = any(
+            any(('config' in f.lower() or f.endswith(('.yml', '.yaml', '.env', '.properties'))) for f in files)
+            for files in project_changed_files.values()
+        )
+        has_deps = any(
+            any(f.endswith(('requirements.txt', 'package.json', 'go.mod', 'pom.xml', 'Cargo.toml')) for f in files)
+            for files in project_changed_files.values()
+        )
+
+        lines.append("### 部署前置条件\n")
+        if has_sql:
+            lines.append("- ⚠️ **包含数据库迁移脚本**，需在部署前执行")
+        if has_config:
+            lines.append("- ⚠️ **包含配置文件变更**，请确认环境变量/配置已同步")
+        if has_deps:
+            lines.append("- ⚠️ **包含依赖变更**，部署时需重新安装依赖")
+        if not has_sql and not has_config and not has_deps:
+            lines.append("- 无特殊前置条件")
+        lines.append("")
+
+        if len(projects) > 1:
+            lines.append("### 部署顺序\n")
+            lines.append(f"涉及 {len(projects)} 个项目，建议部署顺序：")
+            for i, proj in enumerate(projects, 1):
+                lines.append(f"{i}. {proj}")
+            lines.append("")
+
+        lines.append("### 回滚方案\n")
+        lines.append("- **回滚触发条件**: 核心功能异常、接口报错率突增、数据不一致")
+        lines.append("- **回滚方式**: Git revert 到前一个稳定版本，重新部署")
+        if has_sql:
+            lines.append("- ⚠️ 数据库变更需确认是否可逆向回滚")
+        lines.append("")
+
+        lines.append("### 监控关注点\n")
+        lines.append("- 部署后关注接口响应时间和错误率")
+        lines.append("- 检查应用日志是否有异常栈")
+        if high_risk_files:
+            lines.append("- 重点关注安全/权限相关日志")
+        lines.append("")
+
+        # --- 9. 遗留问题与建议 ---
+        lines.append("## 9. 遗留问题与建议\n")
+        if not test_files:
+            lines.append("- 建议后续补充自动化测试用例，提升测试覆盖率")
+        if high_risk_files:
+            lines.append("- 高风险文件建议增加代码审查流程")
+        if execution_stats and execution_stats.get("failed", 0) > 0:
+            lines.append(f"- 有 {execution_stats['failed']} 个子任务执行失败，需排查原因")
+        if not test_files and not high_risk_files and not (execution_stats and execution_stats.get("failed", 0) > 0):
+            lines.append("- 本次改动无明显遗留问题")
+        lines.append("")
+
+        return "\n".join(lines)
 
     def _build_test_summary_prompt(
         self,
@@ -4171,8 +4478,10 @@ class WorkItemService:
         changed_files_by_project: dict,
         test_reports: list,
         proposal_docs: str = "",
+        subtask_summaries: list = None,
+        execution_stats: dict = None,
     ) -> str:
-        """构建 AI 汇总分析 prompt。
+        """构建 AI 汇总分析 prompt（专业 Test Handover Report）。
 
         Args:
             wi_title: 工作项标题
@@ -4180,52 +4489,148 @@ class WorkItemService:
             changed_files_by_project: 各项目变更文件 {project_name: [file_paths]}
             test_reports: 各项目测试报告 [(project_name, report_text)]
             proposal_docs: 技术方案文档内容（可选）
+            subtask_summaries: 子任务执行摘要 [{index, title, status, commit_msg, ...}]
+            execution_stats: 执行统计 {total, completed, failed, cancelled}
         """
-        parts = []
+        projects_str = ", ".join(projects)
+        total_files = sum(len(files) for files in changed_files_by_project.values())
 
-        parts.append(
-            "你是资深 QA 工程师。请基于以下多个子项目的测试报告、代码改动及技术方案，"
-            "生成一份专业的汇总测试验收报告。\n\n"
-            "报告要求：\n"
-            "1. 能让测试/产品团队快速总览全局改动范围和影响面\n"
-            "2. 明确指出需要重点验证的功能点和场景\n"
-            "3. 评估各改动的风险等级（高/中/低）\n"
-            "4. 给出具体的验收测试建议和步骤\n"
-            "5. 列出跨项目集成需要特别注意的点\n\n"
-            "输出格式：Markdown，结构化清晰，可直接作为测试验收依据。\n"
-        )
-
-        # 工作项概述
-        parts.append(f"\n---\n\n## 工作项信息\n\n- 标题：{wi_title}\n- 涉及项目：{', '.join(projects)}\n")
-
-        # 技术方案（如有）
+        # 构建技术方案段落
+        tech_proposal_section = ""
         if proposal_docs:
-            parts.append(f"\n## 技术方案\n\n{proposal_docs[:4000]}\n")
+            tech_proposal_section = f"**技术方案**:\n{proposal_docs[:4000]}\n"
 
-        # 代码改动
+        # 构建代码改动段落
+        changes_parts = []
         if changed_files_by_project:
-            parts.append("\n## 代码改动详情\n\n")
             for proj in sorted(changed_files_by_project.keys()):
                 files = sorted(set(changed_files_by_project[proj]))
-                parts.append(f"### {proj}（{len(files)} 个文件）\n\n")
-                for f in files[:30]:  # 限制数量
-                    parts.append(f"- `{f}`\n")
+                changes_parts.append(f"### {proj}（{len(files)} 个文件）\n")
+                for f in files[:30]:
+                    changes_parts.append(f"- `{f}`\n")
                 if len(files) > 30:
-                    parts.append(f"- ... 等共 {len(files)} 个文件\n")
-                parts.append("\n")
+                    changes_parts.append(f"- ... 等共 {len(files)} 个文件\n")
+                changes_parts.append("\n")
+        changes_section = "".join(changes_parts) if changes_parts else "无代码改动信息\n"
 
-        # 各项目测试报告
+        # 构建测试报告段落
+        reports_parts = []
         if test_reports:
-            parts.append("\n## 各项目独立测试报告\n\n")
             for proj_name, section in test_reports:
-                parts.append(f"### {proj_name}\n\n{section.strip()}\n\n")
+                reports_parts.append(f"### {proj_name}\n\n{section.strip()}\n\n")
+        reports_section = "".join(reports_parts) if reports_parts else "各子任务未生成独立测试报告\n"
 
-        parts.append(
-            "\n---\n\n请基于以上信息输出完整的汇总测试验收报告。"
-            "报告标题用「# 测试报告（汇总）」。\n"
-        )
+        # 构建子任务执行摘要段落
+        subtask_section = ""
+        if subtask_summaries:
+            parts = ["| 序号 | 任务名称 | 状态 | Commit Message |\n",
+                     "|------|---------|------|---------------|\n"]
+            for ss in subtask_summaries:
+                idx = ss.get("index", "?")
+                title = ss.get("title", "")[:50]
+                status = ss.get("status", "unknown")
+                cmsg = ss.get("commit_msg", "")[:80]
+                parts.append(f"| {idx} | {title} | {status} | {cmsg} |\n")
+            subtask_section = "".join(parts)
 
-        return "".join(parts)
+        # 构建执行统计段落
+        stats_section = ""
+        if execution_stats:
+            stats_section = (
+                f"- 总子任务数: {execution_stats.get('total', 0)}\n"
+                f"- 已完成: {execution_stats.get('completed', 0)}\n"
+                f"- 失败: {execution_stats.get('failed', 0)}\n"
+                f"- 已取消: {execution_stats.get('cancelled', 0)}\n"
+            )
+
+        prompt = f"""你是一位资深 QA 工程师和技术 TL，正在为以下工作项编写专业的测试交接报告（Test Handover Report）。
+这份报告将用于开发团队向 QA/测试团队或产品经理交接，确保接收方了解改动全貌、测试覆盖情况和上线风险。
+
+## 报告结构要求
+
+请严格按照以下章节生成 Markdown 报告：
+
+### 1. Executive Summary（执行摘要）
+- 用 2-3 句话概括本次改动的**业务目标**和**技术实现方式**
+- 整体测试结论：✅ 通过 / ⚠️ 有风险 / ❌ 未通过
+- 置信度评估（高/中/低）及理由
+- 建议：Go / Conditional Go / No-Go
+
+### 2. 改动范围分析
+以表格形式列出所有改动文件：
+| 项目 | 模块 | 改动文件 | 改动类型 | 风险等级 | 影响范围 |
+
+改动类型分类：新增功能 / 缺陷修复 / 重构 / 配置变更 / 依赖升级
+风险等级用 emoji：🔴高 🟡中 🟢低
+
+### 3. 测试执行结果
+- 子任务执行统计表
+- 各子任务测试通过情况汇总
+- 发现的问题/异常（如有）
+
+### 4. 测试覆盖度分析
+- 哪些改动已被自动化测试覆盖
+- 哪些改动需要手工验证
+- 测试盲区/未覆盖的风险点
+
+### 5. 风险评估矩阵
+| 风险项 | 可能性 | 影响度 | 缓解措施 |
+标注整体风险等级
+
+### 6. 回归影响分析
+- 本次改动可能影响的现有功能清单
+- 建议的回归测试范围
+- 可安全跳过的回归范围及理由
+
+### 7. 验收测试用例
+为高风险改动提供具体测试场景：
+- 测试编号（TC-XXX）
+- 前置条件 → 操作步骤 → 预期结果
+- 优先级：P0 > P1 > P2
+- 至少为每个高风险项提供正向+负向测试
+
+### 8. 部署与回滚
+- 部署前置条件（数据库迁移、配置、依赖）
+- 部署顺序（多项目时）
+- 回滚方案和回滚触发条件
+- 监控关注点（部署后需关注的指标/日志）
+
+### 9. 遗留问题与建议
+- 当前已知的技术债或待优化项
+- 后续迭代建议
+
+## 输入信息
+
+**工作项**: {wi_title}
+**涉及项目**: {projects_str}
+**改动文件总数**: {total_files}
+
+{tech_proposal_section}
+
+**子任务执行统计**:
+{stats_section}
+
+**子任务执行摘要**:
+{subtask_section}
+
+**代码改动详情**:
+{changes_section}
+
+**各项目测试报告**:
+{reports_section}
+
+## 输出要求
+- 使用 Markdown 格式
+- 报告标题用「# Test Handover Report（测试交接报告）」
+- 表格使用标准 Markdown 表格语法
+- 风险等级用 emoji 标记：🔴高 🟡中 🟢低
+- 测试用例编号格式：TC-001, TC-002...
+- 语言：中文为主，章节标题保留英文
+- 务必基于实际改动内容和测试结果分析，不要使用泛泛的模板化建议
+- 每个章节必须有实质性内容，不能只有标题
+"""
+
+        return prompt
 
     @staticmethod
     def _extract_test_notes_from_sections(report_sections: list) -> list:

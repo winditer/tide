@@ -669,6 +669,11 @@ class PlanExecutor:
             if committed_diff:
                 diff_summary = committed_diff
                 commit_hash_from_branch = committed_hash
+        # Agent 已自行 commit 时，视为有代码变更
+        if commit_hash_from_branch:
+            changed = True
+            if not commit_message:
+                commit_message = self._build_commit_message(plan_id, task)
 
         parts: list[str] = []
         if agent_output:
@@ -704,7 +709,11 @@ class PlanExecutor:
             commit_hash = None
             # 工作项 Plan 自动提交，无需人工审批（合并由后续 git merge 节点处理）
             if await self._is_work_item_plan(plan_id):
-                commit_hash = await git_utils.commit_changes(cwd, commit_message)
+                if commit_hash_from_branch:
+                    # Agent 已自行 commit，直接使用其 hash，无需再次 commit
+                    commit_hash = commit_hash_from_branch
+                else:
+                    commit_hash = await git_utils.commit_changes(cwd, commit_message)
                 if commit_hash:
                     new_status = "committed"
                     parts.append(
