@@ -243,7 +243,7 @@ async def get_current_user(
     if payload and payload.get("type") == "access":
         # ── JWT 认证路径 ──
         user_id = payload.get("sub")
-        if not user_id:
+        if not user_id or not isinstance(user_id, str):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid token payload",

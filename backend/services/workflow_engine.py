@@ -605,6 +605,19 @@ class WorkflowEngine:
         # 创建 task 记录（绑定 workflow_run_id / workflow_node_id）
         task_id = str(uuid.uuid4())
         now = _now_iso()
+
+        # 推断 DB 中记录的实际模型名：通过 adapter.normalize_model 校验后，
+        # 若为空或等于 agent_id 则回退到对应 CLI 的环境变量默认模型。
+        # 注意：仅影响 DB 存储，不改动传给 _real_agent_execution 的 model 参数。
+        db_model = model
+        if not agent_id.startswith("a2a:"):
+            _adapter = AGENT_ADAPTERS.get(agent_id)
+            if _adapter:
+                _normalized = _adapter.normalize_model(model or "")
+                db_model = _normalized
+                if not db_model or db_model == agent_id:
+                    db_model = _adapter.default_model or agent_id
+
         async with async_session_factory() as session:
             await session.execute(
                 text(
@@ -623,7 +636,7 @@ class WorkflowEngine:
                     "node_id": node_id,
                     "prompt": prompt,
                     "agent_id": agent_id,
-                    "model": model or None,
+                    "model": db_model or None,
                     "cwd": cwd,
                     "created_at": now,
                     "started_at": now,

@@ -18,6 +18,7 @@ from typing import Optional
 from sqlalchemy import text
 
 from backend.db.engine import async_session_factory
+from backend.runtime.adapters import AGENT_ADAPTERS
 from backend.services.event_emitter import event_emitter
 from backend.services.plan_executor import plan_executor
 from backend.services.task_service import task_service
@@ -134,6 +135,17 @@ class PlanService:
                     task_cwd = decoded
 
             async with async_session_factory() as session:
+                # 推断 DB 中记录的实际模型名（与 task_service.create_task 逻辑一致）：
+                # 通过 adapter.normalize_model 校验后，若为空或等于 agent_id
+                # 则回退到对应 CLI 的环境变量默认模型。
+                db_model = model
+                _adapter = AGENT_ADAPTERS.get(task_agent_id)
+                if _adapter:
+                    _normalized = _adapter.normalize_model(model or "")
+                    db_model = _normalized
+                    if not db_model or db_model == task_agent_id:
+                        db_model = _adapter.default_model or task_agent_id
+
                 # 写 tasks 表
                 await session.execute(
                     text("""
@@ -147,7 +159,7 @@ class PlanService:
                         "plan_id": plan_id,
                         "prompt": task_prompt,
                         "agent_id": task_agent_id,
-                        "model": model,
+                        "model": db_model or None,
                         "cwd": task_cwd,
                         "created_at": now,
                     },

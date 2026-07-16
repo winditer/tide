@@ -369,7 +369,7 @@ class AuthService:
             return None
 
         user_id = payload.get("sub")
-        if not user_id:
+        if not user_id or not isinstance(user_id, str):
             return None
 
         token_hash = hash_token(refresh_token)

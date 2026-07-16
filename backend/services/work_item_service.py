@@ -1767,7 +1767,7 @@ class WorkItemService:
             prev_output = ""
             # 只要不是显式禁用路由（routing_trigger=False），就提取前序方案
             if routing_trigger is not False and wf_context and definition:
-                prev_output = self._extract_prev_agent_output(wf_context, definition, node["id"])
+                prev_output = self._extract_prev_agent_output(wf_context, definition, node["id"], work_item_id=item["id"])
 
             # ===== 尝试从工作项 worktree 中读取完整技术方案文档 =====
             worktree_proposal = ""
@@ -1779,9 +1779,16 @@ class WorkItemService:
             except Exception:
                 pass
 
-            # 如果 worktree 中有完整方案文档，优先使用；否则 fallback 到 agent_final_output
+            # worktree 方案仅在 transition 中无有效前序方案时使用（作为补充而非覆盖）
             if worktree_proposal:
-                prev_output = worktree_proposal
+                if not prev_output:
+                    # transition 中无方案，使用 worktree 文档
+                    prev_output = worktree_proposal
+                    logger.info("[work_item] Using worktree proposal (no transition output) for item=%s", item["id"][:8])
+                else:
+                    # transition 中有方案，将 worktree 文档作为补充附加
+                    prev_output = prev_output + "\n\n## 补充参考文档\n\n" + worktree_proposal
+                    logger.info("[work_item] Appending worktree proposal as supplement for item=%s", item["id"][:8])
             # ===== worktree 文档读取结束 =====
 
             # 注入前序节点的技术方案到 base_prompt（如果模板已引用则不重复追加）
@@ -2098,10 +2105,9 @@ class WorkItemService:
                 ntype = (to_node.get("type") if to_node else "") or ""
                 if ntype != "approval":
                     # agent / git_merge / 其他节点：output 归属于 to_node_id
-                    # 同一节点可能有多条 transition，取最长的 output（实际产物 > 日志摘要）
+                    # 取最新的有效 output（transitions 已按 created_at ASC 排序，后面的覆盖前面的）
                     node_ctx = context.get(to_id) if isinstance(context.get(to_id), dict) else {}
-                    existing_output = node_ctx.get("output", "")
-                    if out_raw and len(out_raw) > len(existing_output):
+                    if out_raw:
                         node_ctx["output"] = out_raw
                     context[to_id] = node_ctx
 
@@ -2120,7 +2126,7 @@ class WorkItemService:
                     context[from_id] = node_ctx
         return context
 
-    def _extract_prev_agent_output(self, context: dict, definition: dict, current_node_id: str) -> str:
+    def _extract_prev_agent_output(self, context: dict, definition: dict, current_node_id: str, work_item_id: str = "") -> str:
         """向上游递归查找最近的 agent 节点输出。
 
         穿透 condition、approval、stage 等中间节点，
@@ -2162,11 +2168,20 @@ class WorkItemService:
                                 # 取最后 3000 字符作为降级方案（通常结论在末尾）
                                 final_out = full_output[-3000:] if len(full_output) > 3000 else full_output
                         if final_out:
+                            logger.info(
+                                "[work_item] _extract_prev_agent_output: found agent output at node=%s "
+                                "for work_item=%s (len=%d)",
+                                uid, work_item_id[:8] if work_item_id else "?", len(final_out),
+                            )
                             return final_out
 
                 # 否则继续向上游探索（穿透 condition、approval、stage 等节点）
                 queue.append(uid)
 
+        logger.warning(
+            "[work_item] _extract_prev_agent_output: no upstream agent output found for node=%s work_item=%s",
+            current_node_id, work_item_id[:8] if work_item_id else "?",
+        )
         return ""
 
     async def _handle_condition_node(self, item: dict, node: dict, definition: dict):
