@@ -1,11 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import { GitCommit, ChevronRight, Copy, Check } from "lucide-react";
 import { Badge } from "@tide/ui";
 import {
   useWorkItemCrossRepoResults,
+  appPath,
   type CrossRepoResultItem,
 } from "@tide/core";
 
@@ -49,12 +49,14 @@ export function CrossRepoResults({ workItemId, enabled = true }: CrossRepoResult
           </Badge>
         </div>
         {data.plan_id && (
-          <Link
-            href={`/plans/${data.plan_id}`}
+          <a
+            href={appPath(`/plans/${data.plan_id}`)}
+            target="_blank"
+            rel="noopener noreferrer"
             className="text-[11px] font-medium text-primary transition-smooth hover:text-primary/80 hover:underline"
           >
             查看 Plan ↗
-          </Link>
+          </a>
         )}
       </div>
 
@@ -134,13 +136,15 @@ function RepoResultCard({ item }: { item: CrossRepoResultItem }) {
         )}
 
         {/* 任务详情链接 */}
-        <Link
-          href={`/tasks/${item.task_id}`}
+        <a
+          href={appPath(`/tasks/${item.task_id}`)}
           onClick={(e) => e.stopPropagation()}
+          target="_blank"
+          rel="noopener noreferrer"
           className="shrink-0 text-[11px] font-medium text-primary opacity-0 transition-smooth hover:underline group-hover:opacity-100"
         >
           任务 →
-        </Link>
+        </a>
 
         {/* 展开箭头 */}
         {expandable && (

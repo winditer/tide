@@ -834,101 +834,28 @@ async def git_merge_branch(
     # 避免 checkout/branch 创建因脏状态被拒绝
     await _auto_commit_dirty(repo_root, outputs)
 
-    if strategy == "rebase":
-        # 1. ensure source branch exists locally
-        code, output = await _ensure_branch_local(source_branch)
-        outputs.append(output)
-        if code != 0:
-            return False, "\n".join(outputs), []
-
-        # checkout source branch (rebase requires being on source)
-        code, output = await git_command(
-            repo_root, ["checkout", source_branch], timeout=60
-        )
-        outputs.append(output)
-        if code != 0:
-            return False, "\n".join(outputs), []
-
-        # 清理 source 分支残留的脏工作目录，避免 rebase 失败
-        await _auto_commit_dirty(repo_root, outputs)
-
-        # 2. rebase target
-        code, output = await git_command(
-            repo_root, ["rebase", target_branch], timeout=300
-        )
-        outputs.append(output)
-
-        # 无论 exit code 如何，都检查是否有未解决的冲突
-        conflicts = await git_conflict_files(repo_root)
-        if conflicts:
-            if no_abort:
-                logger.warning(
-                    "[git_utils] rebase has unresolved conflicts (no_abort): source=%s target=%s conflicts=%s",
-                    source_branch,
-                    target_branch,
-                    conflicts,
-                )
-                return False, "\n".join(outputs), conflicts
-            await git_command(repo_root, ["rebase", "--abort"], timeout=30)
-            await _restore_original_branch()
-            logger.warning(
-                "[git_utils] rebase has unresolved conflicts (aborted): source=%s target=%s conflicts=%s",
-                source_branch,
-                target_branch,
-                conflicts,
-            )
-            return False, "\n".join(outputs), conflicts
-
-        if code != 0:
-            if no_abort:
-                logger.warning(
-                    "[git_utils] rebase conflict (no_abort): source=%s target=%s",
-                    source_branch,
-                    target_branch,
-                )
+    try:
+        if strategy == "rebase":
+            # 1. ensure source branch exists locally
+            code, output = await _ensure_branch_local(source_branch)
+            outputs.append(output)
+            if code != 0:
                 return False, "\n".join(outputs), []
-            conflicts = await _abort_and_collect("rebase")
-            logger.warning(
-                "[git_utils] rebase failed: source=%s target=%s conflicts=%s",
-                source_branch,
-                target_branch,
-                conflicts,
-            )
-            await _restore_original_branch()
-            return False, "\n".join(outputs), conflicts
 
-        # 3. checkout target (auto-create if not exists)
-        code, co_lines = await _checkout_or_create_branch(target_branch)
-        outputs.extend(co_lines)
-        if code != 0:
-            return False, "\n".join(outputs), []
-
-        # 4. ff-only merge source
-        code, output = await git_command(
-            repo_root, ["merge", "--ff-only", source_branch], timeout=120
-        )
-        outputs.append(output)
-        if code != 0:
-            return False, "\n".join(outputs), []
-    else:
-        # merge / squash 共用：先 checkout target (auto-create if not exists)
-        code, co_lines = await _checkout_or_create_branch(target_branch)
-        outputs.extend(co_lines)
-        if code != 0:
-            return False, "\n".join(outputs), []
-
-        if strategy == "squash":
-            # 先确保 source 分支在本地存在（仅验证，不 checkout）
-            src_code, src_output = await _ensure_branch_local(source_branch)
-            if src_code != 0:
-                outputs.append(src_output)
-                return False, "\n".join(outputs), []
-            # 确保当前在 target 分支上
-            await git_command(repo_root, ["checkout", target_branch], timeout=60)
-            # 清理目标分支残留的脏工作目录，避免 merge 被覆盖失败
-            await _auto_commit_dirty(repo_root, outputs)
+            # checkout source branch (rebase requires being on source)
             code, output = await git_command(
-                repo_root, ["merge", "--squash", source_branch], timeout=300
+                repo_root, ["checkout", source_branch], timeout=60
+            )
+            outputs.append(output)
+            if code != 0:
+                return False, "\n".join(outputs), []
+
+            # 清理 source 分支残留的脏工作目录，避免 rebase 失败
+            await _auto_commit_dirty(repo_root, outputs)
+
+            # 2. rebase target
+            code, output = await git_command(
+                repo_root, ["rebase", target_branch], timeout=300
             )
             outputs.append(output)
 
@@ -937,16 +864,15 @@ async def git_merge_branch(
             if conflicts:
                 if no_abort:
                     logger.warning(
-                        "[git_utils] squash merge has unresolved conflicts (no_abort): source=%s target=%s conflicts=%s",
+                        "[git_utils] rebase has unresolved conflicts (no_abort): source=%s target=%s conflicts=%s",
                         source_branch,
                         target_branch,
                         conflicts,
                     )
                     return False, "\n".join(outputs), conflicts
-                await git_command(repo_root, ["merge", "--abort"], timeout=30)
-                await _restore_original_branch()
+                await git_command(repo_root, ["rebase", "--abort"], timeout=30)
                 logger.warning(
-                    "[git_utils] squash merge has unresolved conflicts (aborted): source=%s target=%s conflicts=%s",
+                    "[git_utils] rebase has unresolved conflicts (aborted): source=%s target=%s conflicts=%s",
                     source_branch,
                     target_branch,
                     conflicts,
@@ -956,115 +882,183 @@ async def git_merge_branch(
             if code != 0:
                 if no_abort:
                     logger.warning(
-                        "[git_utils] squash merge conflict (no_abort): source=%s target=%s",
+                        "[git_utils] rebase conflict (no_abort): source=%s target=%s",
                         source_branch,
                         target_branch,
                     )
                     return False, "\n".join(outputs), []
-                conflicts = await _abort_and_collect("merge")
+                conflicts = await _abort_and_collect("rebase")
                 logger.warning(
-                    "[git_utils] squash merge failed: source=%s target=%s conflicts=%s",
+                    "[git_utils] rebase failed: source=%s target=%s conflicts=%s",
                     source_branch,
                     target_branch,
                     conflicts,
                 )
-                await _restore_original_branch()
                 return False, "\n".join(outputs), conflicts
-            # squash 后需要手动 commit
-            commit_msg = f"Merge branch '{source_branch}' (squash)"
-            code, output = await git_command(
-                repo_root, ["commit", "-m", commit_msg], timeout=60
-            )
-            outputs.append(output)
+
+            # 3. checkout target (auto-create if not exists)
+            code, co_lines = await _checkout_or_create_branch(target_branch)
+            outputs.extend(co_lines)
             if code != 0:
-                # 没有任何变更产生时 commit 会失败，视为成功（无差异）
-                if "nothing to commit" in output.lower():
-                    logger.info(
-                        "[git_utils] squash merge produced no changes: source=%s target=%s",
-                        source_branch,
-                        target_branch,
-                    )
-                else:
-                    return False, "\n".join(outputs), []
-        else:  # merge
-            # 先确保 source 分支在本地存在（仅验证，不 checkout）
-            src_code, src_output = await _ensure_branch_local(source_branch)
-            if src_code != 0:
-                outputs.append(src_output)
                 return False, "\n".join(outputs), []
-            # 确保当前在 target 分支上
-            await git_command(repo_root, ["checkout", target_branch], timeout=60)
-            # 清理目标分支残留的脏工作目录，避免 merge 被覆盖失败
-            await _auto_commit_dirty(repo_root, outputs)
+
+            # 4. ff-only merge source
             code, output = await git_command(
-                repo_root, ["merge", "--no-ff", source_branch], timeout=300
+                repo_root, ["merge", "--ff-only", source_branch], timeout=120
             )
             outputs.append(output)
-
-            # 无论 exit code 如何，都检查是否有未解决的冲突
-            conflicts = await git_conflict_files(repo_root)
-            if conflicts:
-                if no_abort:
-                    logger.warning(
-                        "[git_utils] merge has unresolved conflicts (no_abort): source=%s target=%s conflicts=%s",
-                        source_branch,
-                        target_branch,
-                        conflicts,
-                    )
-                    return False, "\n".join(outputs), conflicts
-                await git_command(repo_root, ["merge", "--abort"], timeout=30)
-                await _restore_original_branch()
-                logger.warning(
-                    "[git_utils] merge has unresolved conflicts (aborted): source=%s target=%s conflicts=%s",
-                    source_branch,
-                    target_branch,
-                    conflicts,
-                )
-                return False, "\n".join(outputs), conflicts
-
             if code != 0:
-                if no_abort:
-                    logger.warning(
-                        "[git_utils] merge conflict (no_abort): source=%s target=%s",
-                        source_branch,
-                        target_branch,
-                    )
-                    return False, "\n".join(outputs), []
-                conflicts = await _abort_and_collect("merge")
-                logger.warning(
-                    "[git_utils] merge failed: source=%s target=%s conflicts=%s",
-                    source_branch,
-                    target_branch,
-                    conflicts,
-                )
-                await _restore_original_branch()
-                return False, "\n".join(outputs), conflicts
-
-    logger.info(
-        "[git_utils] merge succeeded: strategy=%s source=%s target=%s",
-        strategy,
-        source_branch,
-        target_branch,
-    )
-
-    if delete_source:
-        code, output = await git_command(
-            repo_root, ["branch", "-D", source_branch], timeout=30
-        )
-        outputs.append(output)
-        if code != 0:
-            logger.info(
-                "[git_utils] delete source branch failed: branch=%s output=%s",
-                source_branch,
-                output,
-            )
+                return False, "\n".join(outputs), []
         else:
-            logger.info("[git_utils] source branch deleted: %s", source_branch)
+            # merge / squash 共用：先 checkout target (auto-create if not exists)
+            code, co_lines = await _checkout_or_create_branch(target_branch)
+            outputs.extend(co_lines)
+            if code != 0:
+                return False, "\n".join(outputs), []
 
-    # 恢复到 merge 前的分支
-    await _restore_original_branch()
+            if strategy == "squash":
+                # 先确保 source 分支在本地存在（仅验证，不 checkout）
+                src_code, src_output = await _ensure_branch_local(source_branch)
+                if src_code != 0:
+                    outputs.append(src_output)
+                    return False, "\n".join(outputs), []
+                # 确保当前在 target 分支上
+                await git_command(repo_root, ["checkout", target_branch], timeout=60)
+                # 清理目标分支残留的脏工作目录，避免 merge 被覆盖失败
+                await _auto_commit_dirty(repo_root, outputs)
+                code, output = await git_command(
+                    repo_root, ["merge", "--squash", source_branch], timeout=300
+                )
+                outputs.append(output)
 
-    return True, "\n".join(o for o in outputs if o), []
+                # 无论 exit code 如何，都检查是否有未解决的冲突
+                conflicts = await git_conflict_files(repo_root)
+                if conflicts:
+                    if no_abort:
+                        logger.warning(
+                            "[git_utils] squash merge has unresolved conflicts (no_abort): source=%s target=%s conflicts=%s",
+                            source_branch,
+                            target_branch,
+                            conflicts,
+                        )
+                        return False, "\n".join(outputs), conflicts
+                    await git_command(repo_root, ["merge", "--abort"], timeout=30)
+                    logger.warning(
+                        "[git_utils] squash merge has unresolved conflicts (aborted): source=%s target=%s conflicts=%s",
+                        source_branch,
+                        target_branch,
+                        conflicts,
+                    )
+                    return False, "\n".join(outputs), conflicts
+
+                if code != 0:
+                    if no_abort:
+                        logger.warning(
+                            "[git_utils] squash merge conflict (no_abort): source=%s target=%s",
+                            source_branch,
+                            target_branch,
+                        )
+                        return False, "\n".join(outputs), []
+                    conflicts = await _abort_and_collect("merge")
+                    logger.warning(
+                        "[git_utils] squash merge failed: source=%s target=%s conflicts=%s",
+                        source_branch,
+                        target_branch,
+                        conflicts,
+                    )
+                    return False, "\n".join(outputs), conflicts
+                # squash 后需要手动 commit
+                commit_msg = f"Merge branch '{source_branch}' (squash)"
+                code, output = await git_command(
+                    repo_root, ["commit", "-m", commit_msg], timeout=60
+                )
+                outputs.append(output)
+                if code != 0:
+                    # 没有任何变更产生时 commit 会失败，视为成功（无差异）
+                    if "nothing to commit" in output.lower():
+                        logger.info(
+                            "[git_utils] squash merge produced no changes: source=%s target=%s",
+                            source_branch,
+                            target_branch,
+                        )
+                    else:
+                        return False, "\n".join(outputs), []
+            else:  # merge
+                # 先确保 source 分支在本地存在（仅验证，不 checkout）
+                src_code, src_output = await _ensure_branch_local(source_branch)
+                if src_code != 0:
+                    outputs.append(src_output)
+                    return False, "\n".join(outputs), []
+                # 确保当前在 target 分支上
+                await git_command(repo_root, ["checkout", target_branch], timeout=60)
+                # 清理目标分支残留的脏工作目录，避免 merge 被覆盖失败
+                await _auto_commit_dirty(repo_root, outputs)
+                code, output = await git_command(
+                    repo_root, ["merge", "--no-ff", source_branch], timeout=300
+                )
+                outputs.append(output)
+
+                # 无论 exit code 如何，都检查是否有未解决的冲突
+                conflicts = await git_conflict_files(repo_root)
+                if conflicts:
+                    if no_abort:
+                        logger.warning(
+                            "[git_utils] merge has unresolved conflicts (no_abort): source=%s target=%s conflicts=%s",
+                            source_branch,
+                            target_branch,
+                            conflicts,
+                        )
+                        return False, "\n".join(outputs), conflicts
+                    await git_command(repo_root, ["merge", "--abort"], timeout=30)
+                    logger.warning(
+                        "[git_utils] merge has unresolved conflicts (aborted): source=%s target=%s conflicts=%s",
+                        source_branch,
+                        target_branch,
+                        conflicts,
+                    )
+                    return False, "\n".join(outputs), conflicts
+
+                if code != 0:
+                    if no_abort:
+                        logger.warning(
+                            "[git_utils] merge conflict (no_abort): source=%s target=%s",
+                            source_branch,
+                            target_branch,
+                        )
+                        return False, "\n".join(outputs), []
+                    conflicts = await _abort_and_collect("merge")
+                    logger.warning(
+                        "[git_utils] merge failed: source=%s target=%s conflicts=%s",
+                        source_branch,
+                        target_branch,
+                        conflicts,
+                    )
+                    return False, "\n".join(outputs), conflicts
+
+        logger.info(
+            "[git_utils] merge succeeded: strategy=%s source=%s target=%s",
+            strategy,
+            source_branch,
+            target_branch,
+        )
+
+        if delete_source:
+            code, output = await git_command(
+                repo_root, ["branch", "-D", source_branch], timeout=30
+            )
+            outputs.append(output)
+            if code != 0:
+                logger.info(
+                    "[git_utils] delete source branch failed: branch=%s output=%s",
+                    source_branch,
+                    output,
+                )
+            else:
+                logger.info("[git_utils] source branch deleted: %s", source_branch)
+
+        return True, "\n".join(o for o in outputs if o), []
+    finally:
+        await _restore_original_branch()
 
 
 # ── 工作项 Worktree 管理 ───────────────────────────────────────────────────

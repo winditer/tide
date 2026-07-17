@@ -1606,11 +1606,55 @@ class WorkItemService:
                         item["id"], branch_name, worktree_path_str
                     )
                 else:
-                    # worktree 创建失败：保持 cwd 为 project_cwd（或原始 cwd），不退化为相对路径
-                    logger.warning(
-                        "[work_item] worktree creation failed for item=%s, keep cwd=%s",
-                        item["id"], cwd,
+                    # worktree 创建失败：终止 Agent 执行，避免在主仓库操作导致 HEAD 残留
+                    logger.error(
+                        "[work_item] worktree creation failed for item=%s, "
+                        "aborting agent execution to prevent operating on main repo. "
+                        "project_path=%s",
+                        item["id"], base_path,
                     )
+                    # 记录错误到工作项 metadata，便于前端展示和用户感知
+                    try:
+                        existing_meta = {}
+                        if item.get("metadata"):
+                            existing_meta = json.loads(item["metadata"]) if isinstance(item["metadata"], str) else item["metadata"]
+                        existing_meta["worktree_error"] = {
+                            "message": f"Worktree creation failed for work item {item['id']}, agent execution aborted.",
+                            "project_path": base_path,
+                            "node_id": node.get("id"),
+                            "timestamp": _now_iso(),
+                        }
+                        async with async_session_factory() as session:
+                            await session.execute(
+                                text("UPDATE work_items SET metadata = :meta, updated_at = :now WHERE id = :id"),
+                                {
+                                    "meta": json.dumps(existing_meta, ensure_ascii=False),
+                                    "now": _now_iso(),
+                                    "id": item["id"],
+                                },
+                            )
+                            await session.commit()
+                    except Exception as meta_exc:
+                        logger.warning(
+                            "[work_item] Failed to record worktree error metadata for item=%s: %s",
+                            item["id"], meta_exc,
+                        )
+                    # 记录 transition output 标记节点执行失败
+                    try:
+                        await self._record_transition(
+                            item_id=item["id"],
+                            from_node_id=node.get("id"),
+                            to_node_id=node.get("id"),
+                            trigger_type="error",
+                            operator="system",
+                            output=f"Worktree creation failed, agent execution aborted. project_path={base_path}",
+                        )
+                    except Exception as tr_exc:
+                        logger.warning(
+                            "[work_item] Failed to record error transition for item=%s: %s",
+                            item["id"], tr_exc,
+                        )
+                    return
 
             # 最终兜底：确保 cwd 是绝对路径，绝不传入空串/相对路径
             if not cwd or not os.path.isabs(cwd):
@@ -1682,6 +1726,17 @@ class WorkItemService:
                     logger.info("[work_item] Injected knowledge graph modules for item=%s (len=%d)", item["id"][:8], len(project_knowledge))
             except Exception as e:
                 logger.debug("[work_item] Failed to inject knowledge graph: %s", e)
+
+            # ─── 注入项目组架构约束（方案生成阶段也需要感知） ───
+            if group_id:
+                try:
+                    from backend.services.project_group_service import project_group_service
+                    group_context = await project_group_service.get_group_context_prompt(group_id)
+                    if group_context:
+                        prompt = f"{group_context}\n\n---\n\n{prompt}"
+                        logger.info("[work_item] Injected group architecture constraints for proposal stage, item=%s", item["id"][:8])
+                except Exception as e:
+                    logger.warning("[work_item] Failed to inject group context in proposal stage: %s", e)
 
             # 创建 task
             task = await task_service.create_task(
@@ -1943,6 +1998,50 @@ class WorkItemService:
                     target_projects = group_projects
             # ─── 路由决策结束 ─────────────────────────────────────────────
 
+            # ─── 跨仓库协调 ─────────────────────────────────────────────
+            coordination_doc = None
+            from backend.runtime.config import CROSS_REPO_COORDINATION, CROSS_REPO_COORDINATION_CONFIDENCE
+
+            if CROSS_REPO_COORDINATION and len(target_projects) >= 2:
+                try:
+                    from backend.services.group_route_service import group_route_service
+                    from backend.services.knowledge_service import knowledge_service
+
+                    # 获取知识图谱摘要（如果路由阶段已获取则复用）
+                    if not locals().get('summaries'):
+                        summaries = await knowledge_service.get_group_modules_summaries(group_id)
+
+                    # 解析架构配置
+                    architecture_rules = None
+                    constraints_list = None
+                    try:
+                        import json as _json
+                        desc = (await project_group_service.get_group(group_id) or {}).get("description", "")
+                        if desc and desc.strip().startswith("{"):
+                            desc_obj = _json.loads(desc)
+                            architecture_rules = desc_obj.get("architecture_rules")
+                            constraints_list = desc_obj.get("constraints")
+                    except Exception:
+                        pass
+
+                    coordination_doc = await group_route_service.generate_coordination(
+                        work_item={"title": item["title"], "description": item.get("description", "")},
+                        projects=target_projects,
+                        knowledge_summaries=summaries if locals().get('summaries') else {},
+                        architecture_rules=architecture_rules,
+                        constraints=constraints_list,
+                    )
+                    if coordination_doc:
+                        logger.info(
+                            "[WorkItem.Coordination] Generated coordination doc: %d tasks, confidence=%.2f",
+                            len(coordination_doc.get("tasks", [])),
+                            coordination_doc.get("confidence", 0),
+                        )
+                except Exception as e:
+                    logger.warning("[WorkItem.Coordination] Failed: %s, proceeding without coordination", e)
+                    coordination_doc = None
+            # ─── 跨仓库协调结束 ─────────────────────────────────────────────
+
             # 3. 构建跨仓库 Plan definition
             # 后端项目可并行（phase 0），前端项目依赖后端（phase 1）
             plan_tasks = []
@@ -1975,6 +2074,21 @@ class WorkItemService:
                     f"## 当前目标仓库\n"
                     f"你现在在 `{project_name}` 仓库（{project_cwd}）中工作。\n"
                 )
+                # 注入跨仓库协调指令
+                if coordination_doc and coordination_doc.get("tasks"):
+                    repo_task = next(
+                        (t for t in coordination_doc["tasks"] if t.get("project") == project_name),
+                        None,
+                    )
+                    if repo_task:
+                        task_prompt += f"\n## 本仓库职责（跨仓库协调结果，必须遵循）\n"
+                        task_prompt += f"**负责实现**: {repo_task.get('responsibility', '')}\n"
+                        if repo_task.get("avoids"):
+                            task_prompt += "**严禁执行以下操作**（由其他仓库负责）:\n"
+                            for avoid in repo_task["avoids"]:
+                                task_prompt += f"- ❌ {avoid}\n"
+                    if coordination_doc.get("shared_resources"):
+                        task_prompt += f"\n**共享资源注意**: {', '.join(coordination_doc['shared_resources'])}\n"
                 if prev_output and "参考技术方案" in base_prompt:
                     _slug = _title_slug(item.get("title", "")) if item.get("title") else ""
                     _prefix = f"wi-{item['id'][:8]}"
@@ -2030,6 +2144,8 @@ class WorkItemService:
                 "tasks": plan_tasks,
                 "max_parallel": min(len(plan_tasks), 3),
             }
+            if coordination_doc:
+                plan_definition["coordination"] = coordination_doc
 
             plan = await plan_service.create_plan(
                 workspace_id="default",
@@ -3815,8 +3931,12 @@ class WorkItemService:
             async with async_session_factory() as session:
                 summary_result = await session.execute(
                     text("""
-                        SELECT pt.task_index, pt.title, pt.description, pt.status,
-                               t.status as task_status, t.created_at, t.completed_at
+                        SELECT pt.task_index,
+                               t.status as task_status,
+                               t.commit_message,
+                               t.created_at,
+                               t.completed_at,
+                               t.cwd
                         FROM plan_tasks pt
                         LEFT JOIN tasks t ON pt.task_id = t.id
                         WHERE pt.plan_id = :plan_id
@@ -3827,59 +3947,75 @@ class WorkItemService:
                 summary_rows = [dict(r._mapping) for r in summary_result.fetchall()]
             execution_stats["total"] = len(summary_rows)
             for sr in summary_rows:
-                st = (sr.get("task_status") or sr.get("status") or "").lower()
+                st = (sr.get("task_status") or "").lower()
                 if st in ("completed", "done", "success"):
                     execution_stats["completed"] += 1
                 elif st in ("failed", "error"):
                     execution_stats["failed"] += 1
                 elif st in ("cancelled", "canceled"):
                     execution_stats["cancelled"] += 1
-                # subtask_summaries 的 commit_msg 后续填充
+                # 从 cwd 提取项目名，或从 commit_message 提取标题
+                sr_cwd = sr.get("cwd") or ""
+                sr_commit_msg = sr.get("commit_message") or ""
+                if sr_cwd:
+                    sr_title = Path(sr_cwd).name
+                elif sr_commit_msg:
+                    sr_title = sr_commit_msg[:50]
+                else:
+                    sr_title = f"子任务-{sr.get('task_index', '?')}"
                 subtask_summaries.append({
                     "index": sr.get("task_index", 0),
-                    "title": sr.get("title") or sr.get("description") or f"子任务-{sr.get('task_index', '?')}",
+                    "title": sr_title,
                     "status": st or "unknown",
                     "created_at": sr.get("created_at") or "",
                     "completed_at": sr.get("completed_at") or "",
                     "commit_msg": "",
                 })
         except Exception as exc:
-            logger.warning("[work_item] failed to collect subtask summaries: %s", exc)
+            logger.warning(
+                "[work_item] failed to collect subtask summaries: %s (type=%s)",
+                str(exc)[:300], type(exc).__name__,
+            )
+            if "no such column" in str(exc).lower():
+                logger.error("[work_item] SCHEMA MISMATCH: plan_tasks query references non-existent columns, fix SQL")
 
-        # 收集每个子任务的变更文件产物（排除已由主 task 收集过的）
-        for sub in subtask_rows:
+        # 收集每个子任务的变更文件产物 + 变更文件列表（合并为单次循环）
+        project_changed_files: dict = {}  # project_name -> list of files
+        for sub_idx, sub in enumerate(subtask_rows):
             sub_id = sub.get("id", "")
-            # 不再硬性跳过主 task —— 交由 _extract_and_save_artifacts 内的
-            # task_id 级去重保证幂等；这样即使主 task 在上层因 commit_hash 为空
-            # 而未成功收集产物，此处仍可补充收集。
             sub_wt = sub.get("worktree_path") or sub.get("cwd") or ""
             sub_branch = sub.get("branch_name") or ""
             if not sub_wt or not os.path.isdir(sub_wt):
                 continue
 
-            # 获取该子任务最近的 commit 变更文件
+            sub_cwd = sub.get("cwd") or ""
+            project_name = Path(sub_cwd).name if sub_cwd else f"task-{sub_id[:8]}"
+
             try:
                 from backend.runtime.git_utils import git_command
                 code, log_output = await git_command(
                     Path(sub_wt), ["log", "-1", "--format=%H||%s"], timeout=5
                 )
-                if code != 0:
+                if code != 0 or not log_output.strip():
                     continue
                 log_parts = log_output.strip().split("||", 1)
                 sub_commit = log_parts[0].strip()
                 sub_commit_msg = log_parts[1].strip() if len(log_parts) > 1 else ""
                 if not sub_commit:
                     continue
-                # 将 commit message 填入 subtask_summaries 对应条目
-                for idx, ss in enumerate(subtask_summaries):
-                    if idx == (len(subtask_summaries) - len(subtask_rows) + subtask_rows.index(sub)):
-                        ss["commit_msg"] = sub_commit_msg
-                        break
+
+                # 更新 subtask_summaries commit_msg
+                if sub_idx < len(subtask_summaries):
+                    subtask_summaries[sub_idx]["commit_msg"] = sub_commit_msg
+
+                # 获取变更文件
                 changed = await self._get_commit_changed_files(sub_wt, sub_commit)
                 if changed:
-                    # 确定来源项目名称（用子任务的 cwd 目录名）
-                    sub_cwd = sub.get("cwd") or ""
-                    source_project = Path(sub_cwd).name if sub_cwd else ""
+                    existing = project_changed_files.get(project_name, [])
+                    existing = list(set(existing + changed))
+                    project_changed_files[project_name] = existing
+
+                    # 产物收集
                     await self._extract_and_save_artifacts(
                         work_item_id,
                         sub_id,
@@ -3889,57 +4025,40 @@ class WorkItemService:
                         project_id=None,
                         changed_files=changed,
                         worktree_path=sub_wt,
-                        source_project=source_project,
+                        source_project=project_name,
                     )
             except Exception as exc:
-                logger.warning(
-                    "[work_item] failed to collect artifacts from subtask %s: %s",
-                    sub_id[:8], exc,
-                )
+                logger.warning("[work_item] failed to process subtask %s: %s", sub_id[:8], exc)
 
-        # 收集各子任务的变更文件列表（用于汇总报告的代码改动摘要）
-        project_changed_files: dict = {}  # project_name -> list of files
-        for sub_idx, sub in enumerate(subtask_rows):
-            sub_wt = sub.get("worktree_path") or sub.get("cwd") or ""
-            if not sub_wt or not os.path.isdir(sub_wt):
-                continue
-            sub_cwd = sub.get("cwd") or ""
-            project_name = Path(sub_cwd).name if sub_cwd else f"task-{sub.get('id', '?')[:8]}"
-            try:
-                from backend.runtime.git_utils import git_command
-                code, log_output = await git_command(
-                    Path(sub_wt), ["log", "-1", "--format=%H||%s"], timeout=5
-                )
-                if code == 0 and log_output.strip():
-                    log_parts = log_output.strip().split("||", 1)
-                    commit_hash = log_parts[0].strip()
-                    commit_msg = log_parts[1].strip() if len(log_parts) > 1 else ""
-                    if commit_hash:
-                        changed = await self._get_commit_changed_files(sub_wt, commit_hash)
-                        if changed:
-                            existing = project_changed_files.get(project_name, [])
-                            existing.extend(changed)
-                            project_changed_files[project_name] = existing
-                        # 更新 subtask_summaries 中的 commit_msg
-                        if sub_idx < len(subtask_summaries) and not subtask_summaries[sub_idx].get("commit_msg"):
-                            subtask_summaries[sub_idx]["commit_msg"] = commit_msg
-            except Exception:
-                pass
-
-        # 从各子任务 agent_final_output 中提取测试报告
+        # 从各子任务提取测试报告（优先从 worktree docs/ 读取实际报告文件）
         report_sections: list = []
         for sub in subtask_rows:
-            agent_output = sub.get("agent_final_output") or ""
-            if not agent_output:
-                continue
-            # 推断项目名称
+            sub_wt = sub.get("worktree_path") or sub.get("cwd") or ""
             sub_cwd = sub.get("cwd") or ""
             project_name = Path(sub_cwd).name if sub_cwd else f"task-{sub.get('id', '?')[:8]}"
-
-            # 提取测试报告段落（匹配 "测试报告" 标记之后的内容）
-            test_section = self._extract_test_report_section(agent_output)
-            if test_section:
-                report_sections.append((project_name, test_section))
+        
+            report_content = ""
+        
+            # 优先级 1：从 worktree docs/ 读取测试报告文件
+            if sub_wt and os.path.isdir(sub_wt):
+                docs_dir = Path(sub_wt) / "docs"
+                if docs_dir.is_dir():
+                    for f in docs_dir.iterdir():
+                        if f.is_file() and "测试报告" in f.name and f.suffix == ".md" and "(汇总)" not in f.name:
+                            try:
+                                report_content = f.read_text(encoding="utf-8")[:8000]
+                                break
+                            except Exception:
+                                pass
+        
+            # 优先级 2：从 agent_final_output 提取
+            if not report_content:
+                agent_output = sub.get("agent_final_output") or ""
+                if agent_output:
+                    report_content = self._extract_test_report_section(agent_output)
+        
+            if report_content:
+                report_sections.append((project_name, report_content))
 
         if not report_sections and not project_changed_files:
             return
@@ -4135,6 +4254,24 @@ class WorkItemService:
             "[work_item] test report artifact saved for item=%s",
             work_item_id[:8],
         )
+
+        # 清除 generating_summary 标记
+        try:
+            async with async_session_factory() as session:
+                row = (await session.execute(
+                    text("SELECT metadata FROM work_items WHERE id = :id"),
+                    {"id": work_item_id},
+                )).fetchone()
+                if row:
+                    metadata = _safe_json_loads(dict(row._mapping).get("metadata"), {}) or {}
+                    metadata.pop("generating_summary", None)
+                    await session.execute(
+                        text("UPDATE work_items SET metadata = :meta WHERE id = :id"),
+                        {"id": work_item_id, "meta": json.dumps(metadata, ensure_ascii=False)},
+                    )
+                    await session.commit()
+        except Exception:
+            pass
 
     @staticmethod
     def _extract_test_report_section(text_output: str) -> str:
@@ -4356,18 +4493,32 @@ class WorkItemService:
 
         # --- 6. 回归影响分析 ---
         lines.append("## 6. 回归影响分析\n")
-        # 基于改动模块推断可能影响的功能
+        # 基于改动模块推断可能影响的功能（提取前两级目录）
         affected_modules = set()
         for _proj, files in project_changed_files.items():
             for f in set(files):
                 parts = f.replace("\\", "/").split("/")
-                if len(parts) > 1:
+                if len(parts) > 2:
+                    affected_modules.add(f"{parts[0]}/{parts[1]}")
+                elif len(parts) > 1:
                     affected_modules.add(parts[0])
 
-        if affected_modules:
+        # 从子任务报告中搜索模块关键词
+        module_descriptions = {}
+        for proj_name, section in report_sections:
+            impact_match = re.search(r'(?:影响范围|改动模块|功能模块)[：:]\s*([^\n]+(?:\n[-*].*)*)', section)
+            if impact_match:
+                module_descriptions[proj_name] = impact_match.group(1).strip()[:200]
+
+        if affected_modules or module_descriptions:
             lines.append("### 可能影响的功能模块\n")
             for mod in sorted(affected_modules):
                 lines.append(f"- `{mod}` 相关功能")
+            if module_descriptions:
+                lines.append("")
+                lines.append("### 子任务报告中的影响范围\n")
+                for proj_name, desc in module_descriptions.items():
+                    lines.append(f"- **{proj_name}**: {desc}")
             lines.append("")
             lines.append("### 建议回归范围\n")
             lines.append("- 上述模块的核心功能流程")
@@ -4379,34 +4530,49 @@ class WorkItemService:
 
         # --- 7. 验收测试用例 ---
         lines.append("## 7. 验收测试用例\n")
-        tc_num = 1
-        if high_risk_files:
-            lines.append("### P0 必须验证（高风险）\n")
-            for f in high_risk_files[:3]:
-                lines.append(f"**TC-{tc_num:03d}**: `{f}` 相关功能验证")
-                lines.append(f"- 前置条件：系统正常运行，用户已登录")
-                lines.append(f"- 正向测试：执行正常业务流程，验证功能正确")
-                lines.append(f"- 负向测试：无权限/异常输入场景，验证安全防护")
-                lines.append("")
-                tc_num += 1
 
-        if mid_risk_files:
-            lines.append("### P1 重要验证（中风险）\n")
-            for f in mid_risk_files[:3]:
-                lines.append(f"**TC-{tc_num:03d}**: `{f}` 接口/服务验证")
-                lines.append(f"- 前置条件：服务正常启动")
-                lines.append(f"- 正向测试：API 正常调用返回预期结果")
-                lines.append(f"- 负向测试：参数缺失/类型错误时返回正确错误码")
-                lines.append("")
-                tc_num += 1
+        # 优先从子任务报告中提取实际测试结果
+        actual_test_cases = []
+        for proj_name, section in report_sections:
+            tc_matches = re.finditer(r'(?:TC-\d+|测试用例\s*\d+)[：:\s]+([^\n]+)', section)
+            for m in tc_matches:
+                actual_test_cases.append(f"**{proj_name}**: {m.group(0).strip()}")
 
-        if not high_risk_files and not mid_risk_files:
-            lines.append("### P2 一般验证\n")
-            lines.append(f"**TC-{tc_num:03d}**: 基本功能验证")
-            lines.append("- 前置条件：系统正常运行")
-            lines.append("- 正向测试：验证改动文件对应功能正常")
-            lines.append("- 负向测试：边界条件处理正确")
+        if actual_test_cases:
+            lines.append("### 来自子项目的实际测试验证\n")
+            for tc in actual_test_cases[:10]:
+                lines.append(f"- {tc}")
             lines.append("")
+        else:
+            # fallback 到当前模板化逻辑
+            tc_num = 1
+            if high_risk_files:
+                lines.append("### P0 必须验证（高风险）\n")
+                for f in high_risk_files[:3]:
+                    lines.append(f"**TC-{tc_num:03d}**: `{f}` 相关功能验证")
+                    lines.append(f"- 前置条件：系统正常运行，用户已登录")
+                    lines.append(f"- 正向测试：执行正常业务流程，验证功能正确")
+                    lines.append(f"- 负向测试：无权限/异常输入场景，验证安全防护")
+                    lines.append("")
+                    tc_num += 1
+
+            if mid_risk_files:
+                lines.append("### P1 重要验证（中风险）\n")
+                for f in mid_risk_files[:3]:
+                    lines.append(f"**TC-{tc_num:03d}**: `{f}` 接口/服务验证")
+                    lines.append(f"- 前置条件：服务正常启动")
+                    lines.append(f"- 正向测试：API 正常调用返回预期结果")
+                    lines.append(f"- 负向测试：参数缺失/类型错误时返回正确错误码")
+                    lines.append("")
+                    tc_num += 1
+
+            if not high_risk_files and not mid_risk_files:
+                lines.append("### P2 一般验证\n")
+                lines.append(f"**TC-{tc_num:03d}**: 基本功能验证")
+                lines.append("- 前置条件：系统正常运行")
+                lines.append("- 正向测试：验证改动文件对应功能正常")
+                lines.append("- 负向测试：边界条件处理正确")
+                lines.append("")
 
         # --- 8. 部署与回滚 ---
         lines.append("## 8. 部署与回滚\n")
@@ -4432,7 +4598,24 @@ class WorkItemService:
             lines.append("- ⚠️ **包含配置文件变更**，请确认环境变量/配置已同步")
         if has_deps:
             lines.append("- ⚠️ **包含依赖变更**，部署时需重新安装依赖")
-        if not has_sql and not has_config and not has_deps:
+
+        # 从子任务报告中提取数据库变更等部署前置信息
+        deployment_notes: list = []
+        for proj_name, section in report_sections:
+            if re.search(r'(?:SQL|DDL|CREATE TABLE|ALTER TABLE|INSERT INTO|数据库迁移|建表)', section, re.I):
+                sql_match = re.search(r'```sql\s*([\s\S]*?)```', section)
+                if sql_match:
+                    deployment_notes.append(f"- ⚠️ **{proj_name}** 包含数据库变更:\n  ```sql\n  {sql_match.group(1).strip()[:500]}\n  ```")
+                else:
+                    for line in section.split('\n'):
+                        if re.search(r'(?:SQL|DDL|建表|执行|migration|权限表)', line, re.I) and len(line.strip()) > 10:
+                            deployment_notes.append(f"- ⚠️ **{proj_name}**: {line.strip()}")
+                            break
+        if deployment_notes:
+            for note in deployment_notes:
+                lines.append(note)
+
+        if not has_sql and not has_config and not has_deps and not deployment_notes:
             lines.append("- 无特殊前置条件")
         lines.append("")
 
@@ -4891,6 +5074,29 @@ class WorkItemService:
             return
 
         # Plan 完成时：收集所有子任务的产物文件 + 生成汇总测试报告
+        # 标记正在生成汇总报告
+        try:
+            async with async_session_factory() as session:
+                row = (await session.execute(
+                    text("SELECT metadata FROM work_items WHERE id = :id"),
+                    {"id": item_id},
+                )).fetchone()
+                if row:
+                    metadata = _safe_json_loads(dict(row._mapping).get("metadata"), {}) or {}
+                    metadata["generating_summary"] = True
+                    await session.execute(
+                        text("UPDATE work_items SET metadata = :meta WHERE id = :id"),
+                        {"id": item_id, "meta": json.dumps(metadata, ensure_ascii=False)},
+                    )
+                    await session.commit()
+            await ws_hub.broadcast("work_items", {
+                "type": "work_item.updated",
+                "work_item_id": item_id,
+                "project_id": (item or {}).get("project_id"),
+            })
+        except Exception:
+            pass
+
         try:
             await self._collect_plan_subtask_artifacts(item_id, task_id)
         except Exception as exc:
@@ -4898,6 +5104,24 @@ class WorkItemService:
                 "[work_item] plan subtask artifact collection failed for item=%s task=%s: %s",
                 item_id[:8], task_id[:8], exc,
             )
+        finally:
+            # 清除 generating_summary 标记（无论成功或失败）
+            try:
+                async with async_session_factory() as session:
+                    row = (await session.execute(
+                        text("SELECT metadata FROM work_items WHERE id = :id"),
+                        {"id": item_id},
+                    )).fetchone()
+                    if row:
+                        metadata = _safe_json_loads(dict(row._mapping).get("metadata"), {}) or {}
+                        metadata.pop("generating_summary", None)
+                        await session.execute(
+                            text("UPDATE work_items SET metadata = :meta WHERE id = :id"),
+                            {"id": item_id, "meta": json.dumps(metadata, ensure_ascii=False)},
+                        )
+                        await session.commit()
+            except Exception:
+                pass
 
         # 如果工作项不存在，提前返回
         if not item:

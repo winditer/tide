@@ -144,6 +144,11 @@ WORKITEM_SMART_ROUTING = os.getenv("WORKITEM_SMART_ROUTING", "false").lower() ==
 WORKITEM_SMART_ROUTING_TIMEOUT = int(os.getenv("WORKITEM_SMART_ROUTING_TIMEOUT", "30"))
 WORKITEM_SMART_ROUTING_CONFIDENCE = float(os.getenv("WORKITEM_SMART_ROUTING_CONFIDENCE", "0.6"))
 ROUTING_PROPOSAL_MAX_CHARS = int(os.getenv("ROUTING_PROPOSAL_MAX_CHARS", "5000"))
+
+# ─── Cross-Repo Coordination ─────────────────────────────────────────
+CROSS_REPO_COORDINATION = os.getenv("CROSS_REPO_COORDINATION", "false").lower() == "true"
+CROSS_REPO_COORDINATION_TIMEOUT = int(os.getenv("CROSS_REPO_COORDINATION_TIMEOUT", "30"))
+CROSS_REPO_COORDINATION_CONFIDENCE = float(os.getenv("CROSS_REPO_COORDINATION_CONFIDENCE", "0.7"))
 # =================================================
 
 

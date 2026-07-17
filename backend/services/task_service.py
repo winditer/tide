@@ -713,6 +713,36 @@ class TaskService:
             with LOCK:
                 TASKS.pop(task_id, None)
 
+            # ─── 尝试恢复主仓库分支（非 worktree 模式） ───
+            try:
+                if cwd and ".tide/worktrees" not in str(cwd):
+                    from backend.runtime.git_utils import git_command
+                    _cwd_path = Path(cwd)
+                    # 先检查当前 HEAD 是否已经在默认分支上
+                    rc_head, current_ref = await git_command(
+                        _cwd_path, ["symbolic-ref", "--short", "HEAD"], timeout=10
+                    )
+                    # 获取远程默认分支
+                    rc_default, default_ref = await git_command(
+                        _cwd_path, ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"], timeout=10
+                    )
+                    if rc_default == 0:
+                        default_branch = default_ref.strip().replace("origin/", "")
+                    else:
+                        default_branch = "main"  # fallback
+                    # 如果当前分支已经是默认分支，无需操作
+                    if rc_head != 0 or current_ref.strip() != default_branch:
+                        await git_command(_cwd_path, ["checkout", default_branch], timeout=30)
+                        logger.info(
+                            "[task_service] Restored branch to %s after task cleanup (task=%s)",
+                            default_branch, task_id[:8],
+                        )
+            except Exception as e:
+                logger.warning(
+                    "[task_service] Failed to restore branch after task cleanup: %s (task=%s)",
+                    e, task_id[:8],
+                )
+
     # ── list ─────────────────────────────────────────────
 
     async def list_tasks(

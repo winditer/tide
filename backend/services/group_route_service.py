@@ -37,6 +37,28 @@ ROUTING_SYSTEM_PROMPT = """你是项目架构师。根据需求描述和各项�
 
 仅返回确实需要修改代码的项目。如果无法判断，confidence 设为 0。"""
 
+COORDINATION_SYSTEM_PROMPT = """你是架构协调师。根据需求和各仓库的职责，为跨仓库实施生成分工方案。
+
+## 输出要求
+返回 JSON（无额外文本）：
+{
+  "tasks": [
+    {
+      "project": "项目名",
+      "responsibility": "该仓库应实现的内容",
+      "avoids": ["该仓库不应做的事"]
+    }
+  ],
+  "shared_resources": ["涉及的共享表/队列/接口"],
+  "confidence": 0.0-1.0
+}
+
+关键原则：
+- 同一定时任务(相同cron)只能出现在一个仓库
+- 写入同一张表只能有一个仓库负责
+- API接口和数据采集应分离到不同服务
+"""
+
 
 class GroupRouteService:
     """工作项智能路由服务"""
@@ -201,7 +223,7 @@ class GroupRouteService:
             reasoning=reasoning,
         )
 
-    async def _call_agent_cli(self, prompt: str) -> str:
+    async def _call_agent_cli(self, prompt: str, timeout: Optional[int] = None) -> str:
         """直接通过 subprocess 调用 Agent CLI 获取 LLM 响应。
 
         使用临时会话目录隔离 CLI 产生的 session 文件，避免被 session_discovery
@@ -267,9 +289,10 @@ class GroupRouteService:
                 limit=4 * 1024 * 1024,
             )
 
+            effective_timeout = timeout if timeout is not None else SMART_ROUTING_TIMEOUT
             try:
                 stdout_bytes, _ = await asyncio.wait_for(
-                    proc.communicate(), timeout=SMART_ROUTING_TIMEOUT
+                    proc.communicate(), timeout=effective_timeout
                 )
             except asyncio.TimeoutError:
                 try:
@@ -281,7 +304,7 @@ class GroupRouteService:
                     except ProcessLookupError:
                         pass
                 raise RuntimeError(
-                    f"智能路由 Agent CLI 执行超时（{SMART_ROUTING_TIMEOUT}s）"
+                    f"智能路由 Agent CLI 执行超时（{effective_timeout}s）"
                 )
 
             raw_output = stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
@@ -348,6 +371,188 @@ class GroupRouteService:
                             if text:
                                 parts.append(text)
         return "\n".join(p for p in parts if p)
+
+
+    async def generate_coordination(
+        self,
+        work_item: dict,  # {title, description}
+        projects: List[dict],  # [{project_id, name, cwd, role}]
+        knowledge_summaries: Dict[str, str],  # {project_id: summary_text}
+        architecture_rules: Optional[Dict[str, str]] = None,  # {project_name: responsibility}
+        constraints: Optional[List[str]] = None,  # 架构约束列表
+    ) -> Optional[dict]:
+        """
+        生成跨仓库协调文档。
+
+        返回结构化 JSON dict 或 None（触发 fallback）。
+        所有异常内部捕获，不向外抛出。
+        """
+        from backend.runtime.config import (
+            CROSS_REPO_COORDINATION_TIMEOUT,
+            CROSS_REPO_COORDINATION_CONFIDENCE,
+        )
+
+        if not projects:
+            return None
+
+        # --- 构建 user_prompt ---
+        parts: List[str] = []
+
+        # 工作项信息
+        title = work_item.get("title", "").strip()
+        description = work_item.get("description", "").strip()
+        parts.append(f"## 工作项需求\n标题：{title}\n描述：{description or '（无详细描述）'}")
+
+        # 各项目的角色和知识图谱摘要
+        project_sections: List[str] = []
+        for p in projects:
+            pid = p.get("project_id", "")
+            name = p.get("name", "")
+            role = p.get("role", "")
+            summary = knowledge_summaries.get(pid, "").strip()
+
+            section = f"### 项目: {name} (id: {pid})"
+            if role:
+                section += f"\n职责: {role}"
+            if summary:
+                if len(summary) > 2000:
+                    summary = summary[:2000] + "...(truncated)"
+                section += f"\n模块摘要:\n{summary}"
+            else:
+                section += "\n模块摘要: （无可用知识图谱摘要）"
+            project_sections.append(section)
+
+        parts.append("## 项目组内子项目\n" + "\n\n".join(project_sections))
+
+        # 注入架构分工规范
+        if architecture_rules:
+            rules_lines = [f"- {name}: {resp}" for name, resp in architecture_rules.items()]
+            parts.append("## 架构分工规范\n" + "\n".join(rules_lines))
+
+        # 注入架构约束
+        if constraints:
+            constraint_lines = [f"- {c}" for c in constraints]
+            parts.append("## 架构约束\n" + "\n".join(constraint_lines))
+
+        parts.append(
+            "## 任务\n请根据上述信息，为跨仓库实施生成分工方案，返回 JSON 结果。"
+        )
+
+        user_prompt = "\n\n".join(parts)
+        full_prompt = f"{COORDINATION_SYSTEM_PROMPT}\n\n---\n\n{user_prompt}"
+
+        logger.info(
+            "[group_route] generate_coordination prompt_chars=%d projects=%d",
+            len(full_prompt),
+            len(projects),
+        )
+
+        # --- 调用 LLM ---
+        try:
+            raw_response = await self._call_agent_cli(
+                full_prompt, timeout=CROSS_REPO_COORDINATION_TIMEOUT
+            )
+        except Exception as exc:
+            logger.warning("[group_route] coordination Agent CLI 调用失败: %s", exc)
+            return None
+
+        if not raw_response:
+            logger.warning("[group_route] coordination Agent CLI 未返回内容")
+            return None
+
+        # --- 解析 JSON 响应 ---
+        try:
+            parsed = self._parse_coordination_json(raw_response)
+        except Exception as exc:
+            logger.warning(
+                "[group_route] coordination JSON 解析失败: %s, raw前200字符=%r",
+                exc,
+                raw_response[:200],
+            )
+            return None
+
+        if not parsed:
+            logger.warning(
+                "[group_route] coordination 解析结果为空, raw前200字符=%r",
+                raw_response[:200],
+            )
+            return None
+
+        # --- 检查 confidence 阈值 ---
+        confidence = parsed.get("confidence", 0.0)
+        if isinstance(confidence, (int, float)) and confidence < CROSS_REPO_COORDINATION_CONFIDENCE:
+            logger.info(
+                "[group_route] coordination confidence=%.2f 低于阈值 %.2f，返回 None",
+                confidence,
+                CROSS_REPO_COORDINATION_CONFIDENCE,
+            )
+            return None
+
+        logger.info(
+            "[group_route] coordination result: tasks=%d shared_resources=%d confidence=%.2f",
+            len(parsed.get("tasks", [])),
+            len(parsed.get("shared_resources", [])),
+            confidence,
+        )
+        return parsed
+
+    def _parse_coordination_json(self, output: str) -> Optional[dict]:
+        """从 LLM 输出中解析协调文档 JSON"""
+        if not output:
+            return None
+
+        # 去除常见 CLI 噪声前缀
+        text = re.sub(
+            r"^Reading additional input from stdin\.{0,3}\n?", "", output.strip()
+        ).strip()
+
+        # 尝试多种方式提取 JSON 对象
+        candidates: List[str] = []
+        candidates.append(text)
+
+        # ```json ... ``` 代码块
+        m = re.search(r"```(?:json)?\s*([\s\S]*?)```", text, re.IGNORECASE)
+        if m:
+            candidates.append(m.group(1).strip())
+
+        # 首个 JSON 对象
+        obj_match = re.search(r"\{[\s\S]*\}", text)
+        if obj_match:
+            candidates.append(obj_match.group(0))
+
+        parsed: Optional[dict] = None
+        for raw in candidates:
+            try:
+                result = json.loads(raw)
+                if isinstance(result, dict):
+                    parsed = result
+                    break
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+        if not parsed:
+            return None
+
+        # 提取并规范化字段
+        tasks = parsed.get("tasks", [])
+        if not isinstance(tasks, list):
+            tasks = []
+
+        shared_resources = parsed.get("shared_resources", [])
+        if not isinstance(shared_resources, list):
+            shared_resources = []
+
+        try:
+            confidence = float(parsed.get("confidence", 0))
+        except (TypeError, ValueError):
+            confidence = 0.0
+        confidence = max(0.0, min(1.0, confidence))
+
+        return {
+            "tasks": tasks,
+            "shared_resources": shared_resources,
+            "confidence": confidence,
+        }
 
 
 # 单例

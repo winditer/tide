@@ -1,6 +1,7 @@
 """项目组服务 — 管理跨仓库项目分组。"""
 
 import base64
+import json
 import logging
 import os
 import uuid
@@ -301,6 +302,25 @@ class ProjectGroupService:
             lines.append(f"{idx}. {role_tag} {p['name']} ({p['cwd']})")
 
         lines.append("")
+
+        # 尝试从 description 解析架构配置
+        try:
+            desc_obj = json.loads(group.get("description", "") or "")
+            arch_rules = desc_obj.get("architecture_rules")
+            if isinstance(arch_rules, dict) and arch_rules:
+                lines.append("## 架构分工规范")
+                for repo, rule in arch_rules.items():
+                    lines.append(f"- {repo}: {rule}")
+                lines.append("")
+            constraints = desc_obj.get("constraints")
+            if isinstance(constraints, list) and constraints:
+                lines.append("## 架构约束")
+                for c in constraints:
+                    lines.append(f"- {c}")
+                lines.append("")
+        except Exception:
+            pass
+
         lines.append(
             "请分析需求，决定哪些仓库需要修改，并为每个需要修改的仓库生成独立的子任务。"
             "每个子任务应明确指定目标仓库路径作为工作目录。"

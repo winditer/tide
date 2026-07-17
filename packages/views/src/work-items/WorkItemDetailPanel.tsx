@@ -549,6 +549,18 @@ export function WorkItemDetailPanel({
           </div>
         )}
 
+        {/* 汇总报告生成中提示 */}
+        {(item.metadata as Record<string, any> | undefined)?.generating_summary && (
+          <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-2.5 dark:border-amber-800 dark:bg-amber-950/30">
+            <div className="flex items-center gap-2">
+              <div className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+              <span className="text-xs text-amber-700 dark:text-amber-400">
+                正在生成汇总测试报告，请稍候...
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* Metadata */}
         <div className="grid grid-cols-2 gap-x-4 gap-y-3 rounded-xl border border-border/50 bg-muted/30 p-4">
           <MetaItem label="优先级">
