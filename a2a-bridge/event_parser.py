@@ -47,8 +47,17 @@ _APPROVAL_KEYWORDS = (
 )
 
 
+# 真实审批提示均为简短问句；超过该长度的文本视为正常回复正文。
+_APPROVAL_MAX_LEN = 400
+
+
 def _looks_like_approval(text: str) -> bool:
     if not text:
+        return False
+    # 长文本（如"实施指南"类最终回复）中偶然出现"需要审批"等词不应
+    # 触发审批误判——否则最终回复会被当作 EVENT_APPROVAL，不生成
+    # artifact，任务表现为"已完成但无输出"。
+    if len(text) > _APPROVAL_MAX_LEN:
         return False
     low = text.lower()
     return any(k in low for k in _APPROVAL_KEYWORDS)

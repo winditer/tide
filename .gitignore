@@ -17,3 +17,5 @@ node_modules/
 *.db-journal
 *.sqlite
 *.sqlite3
+.qoder/
+
