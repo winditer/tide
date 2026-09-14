@@ -64,6 +64,62 @@ Tide 由两个一体化部分组成：
 - **Git 审计** — 四维审计视图（按提交/按文件/按工作项/按会话），支持分支、工作项、时间筛选；未提交变更管理；Diff 左右分栏 + Inline/Side-by-side 切换。
 - **合并冲突解决** — 冲突文件列表、三方 diff、规则化解决、AI 智能解决，与工作流 git_merge 节点集成。
 
+## 界面预览
+
+### 工作台
+
+![工作台](docs/images/dashboard.png)
+
+### 看板
+
+![看板](docs/images/kanban.png)
+
+### 项目
+
+![项目](docs/images/projects.png)
+
+### 任务管理
+
+![任务管理](docs/images/tasks.png)
+
+### 工作项
+
+![工作项](docs/images/work-items.png)
+
+### Plan 管理
+
+![Plan 管理](docs/images/plans.png)
+
+### 工作流
+
+![工作流列表](docs/images/workflows.png)
+
+![工作流编辑器](docs/images/workflow-editor.png)
+
+### 定时调度
+
+![定时调度](docs/images/schedules.png)
+
+### 会话
+
+![会话](docs/images/sessions.png)
+
+### 设置
+
+![设置](docs/images/settings.png)
+
+### 浮动聊天
+
+![浮动聊天](docs/images/chat-widget.png)
+
+### 工作项 AI 分解
+
+![AI 分解需求](docs/images/ai-decompose.png)
+
+### 工作项详情
+
+![工作项详情](docs/images/work-item-detail.png)
+
 ## 快速开始
 
 ### 1. 安装依赖
@@ -1067,3 +1123,9 @@ cd apps/web && yarn lint
 
 - 确认当前 `cwd` 是 Git 仓库且工作区干净。
 - `PLAN_USE_WORKTREES=0` 可临时关闭 worktree 隔离回退到原目录执行。
+
+---
+
+## License
+
+本项目基于 [MIT License](LICENSE) 开源。
